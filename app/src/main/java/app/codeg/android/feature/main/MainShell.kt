@@ -9,6 +9,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bolt
@@ -400,6 +401,7 @@ private fun CodegBottomBar(
             // what actually makes the tabs continuous with the content above them.
             containerColor = Color.Transparent,
             tonalElevation = 0.dp,
+            modifier = Modifier.navigationBarsPadding(),
         ) {
             HomeTab.entries.forEach { tab ->
                 val selected = currentRoute == tab.route

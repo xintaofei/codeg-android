@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -222,7 +223,10 @@ fun SessionDetailScreen(
             )
         },
         bottomBar = {
-            Column(Modifier.imePadding()) {
+            // The activity draws edge-to-edge. Consume both the IME and the
+            // three-button/navigation gesture inset so the composer never sits
+            // underneath system navigation controls.
+            Column(Modifier.imePadding().navigationBarsPadding()) {
                 ui.pendingPermission?.let { p ->
                     PermissionRequestCard(
                         parsed = p.parsed,
