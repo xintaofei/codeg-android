@@ -115,7 +115,7 @@ fun AgentDetailContent(
     // — like Hermes' raw editor, they hide the host "Save" and the generic
     // native-config editor.
     val selfContained = agentType == AgentType.KIMI_CODE || agentType == AgentType.PI
-    Column(Modifier.fillMaxSize().imePadding()) {
+    Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 12.dp),
