@@ -34,7 +34,9 @@ android {
 
     defaultConfig {
         applicationId = "app.codeg.android"
-        minSdk = 31
+        // Lowered to Android 11 support while keeping the project otherwise unchanged.
+        // This is the primary fix for the Motorola G Fast / Android 11 installation failure.
+        minSdk = 30
         targetSdk = 36
         versionCode = 2
         versionName = "1.0.1"
