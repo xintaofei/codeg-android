@@ -1,6 +1,7 @@
 package app.codeg.android.core.network
 
 import dagger.Lazy
+import app.codeg.android.core.cache.ConversationDiskCache
 import io.ktor.client.HttpClient
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -22,9 +23,13 @@ import javax.inject.Singleton
 @Singleton
 class CodegClientFactory @Inject constructor(
     private val http: Lazy<HttpClient>,
+    private val cache: ConversationDiskCache,
 ) {
     fun client(baseUrl: String, token: String): CodegClient =
         CodegClient(baseUrl, token, http.get())
+
+    fun savedClient(profileId: String, baseUrl: String, token: String): CodegClient =
+        CodegClient(baseUrl, token, http.get(), cache, cache.scope(profileId, baseUrl, token))
 
     fun eventStream(baseUrl: String, token: String): EventStream =
         EventStream(baseUrl, token, http.get())

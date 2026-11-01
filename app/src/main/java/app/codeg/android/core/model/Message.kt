@@ -88,6 +88,7 @@ sealed interface ContentBlock {
         val name: String,
         val inputPreview: String?,
         val meta: JsonObject? = null,
+        val status: String? = null,
     ) : ContentBlock
     data class ToolResult(val id: String?, val outputPreview: String?, val isError: Boolean) : ContentBlock
     data class Unknown(val type: String) : ContentBlock
@@ -119,6 +120,7 @@ sealed interface ContentBlock {
                     name = obj.nonEmptyString("tool_name") ?: "tool",
                     inputPreview = obj.stringOrNull("input_preview"),
                     meta = obj.objectOrNull("meta"),
+                    status = obj.stringOrNull("status"),
                 )
                 "tool_result" -> ToolResult(
                     id = obj.stringOrNull("tool_use_id"),

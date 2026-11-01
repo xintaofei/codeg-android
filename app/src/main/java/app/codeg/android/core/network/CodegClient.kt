@@ -1,8 +1,17 @@
 package app.codeg.android.core.network
 
+import app.codeg.android.core.common.logTranscriptTiming
+import app.codeg.android.core.cache.ConversationDiskCache
+import app.codeg.android.core.cache.transcriptCachePages
+
 import app.codeg.android.core.model.AgentType
+import app.codeg.android.core.model.WorkspaceDownloadRequest
+import app.codeg.android.core.model.WorkspaceDownloadTicket
 import app.codeg.android.core.model.ConversationConnectionInfo
 import app.codeg.android.core.model.ConversationDetail
+import app.codeg.android.core.model.ConversationDetailBody
+import app.codeg.android.core.model.ConversationTurnsBody
+import app.codeg.android.core.model.ConversationTurnsPage
 import app.codeg.android.core.model.ConversationIdBody
 import app.codeg.android.core.model.ConnectBody
 import app.codeg.android.core.model.ConnectionIdBody
@@ -122,6 +131,10 @@ import app.codeg.android.core.model.SetModeBody
 import app.codeg.android.core.model.SetConfigOptionBody
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.utils.io.readAvailable
+import java.io.ByteArrayOutputStream
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -129,6 +142,11 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import kotlinx.serialization.DeserializationStrategy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.encodeToString
@@ -156,9 +174,66 @@ class CodegClient(
     rawBaseUrl: String,
     private val token: String,
     private val http: HttpClient,
+    private val cache: ConversationDiskCache? = null,
+    private val cacheScope: ConversationDiskCache.Scope? = null,
 ) {
     /** Base URL with any trailing slash trimmed; `/api/<name>` is appended. */
     val baseUrl: String = normalizeBaseUrl(rawBaseUrl)
+    val cacheIdentity: String? = cacheScope?.let { "${it.profile}/${it.endpoint}/${it.epoch}" }
+    private var transcriptIsLive = false
+
+    suspend fun cachedSessionList(): CachedResponse<SessionListSnapshot>? =
+        cached("list", "list", SessionListSnapshot.serializer())
+
+    suspend fun cachedConversation(id: Int): CachedResponse<ConversationDetail>? =
+        cached("session-$id", "detail", ConversationDetail.serializer())
+
+    suspend fun cachedConversationTurns(id: Int, beforeIndex: Int, snapshot: String): ConversationTurnsPage? =
+        cached("session-$id", "before-$beforeIndex", ConversationTurnsPage.serializer(), snapshot)?.value
+
+    private suspend fun <T> cached(
+        group: String, page: String, serializer: DeserializationStrategy<T>, snapshot: String? = null,
+    ): CachedResponse<T>? {
+        val disk = cache ?: return null
+        val scope = cacheScope ?: return null
+        val entry = disk.read(scope, group, page, snapshot) ?: return null
+        return try {
+            withContext(Dispatchers.Default) {
+                CachedResponse(decode(entry.text, serializer), entry.savedAt, entry.snapshot)
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) {
+            disk.remove(scope, group, snapshot = entry.snapshot)
+            null
+        }
+    }
+
+    /** Publish the list and its grouping context together, only after every request succeeds. */
+    suspend fun sessionList(): SessionListSnapshot {
+        val ticket = cacheScope?.let { cache?.ticket(it, "list") }
+        val responses = coroutineScope {
+            val folders = async { send("list_all_folder_details", encode(EmptyBody)) }
+            val conversations = async { send("list_all_conversations", encode(ListConversationsBody())) }
+            val openFolders = async { listOpenFolders() }
+            Triple(folders.await(), conversations.await(), openFolders.await().map { it.id }.toSet())
+        }
+        return withContext(Dispatchers.Default) {
+            val raw = buildJsonObject {
+                put("folders", CodegJson.response.parseToJsonElement(responses.first))
+                put("conversations", CodegJson.response.parseToJsonElement(responses.second))
+                put("open_folder_ids", JsonArray(responses.third.map { JsonPrimitive(it) }))
+            }.toString()
+            decode(raw, SessionListSnapshot.serializer()).also {
+                if (ticket != null) cache?.replace(ticket, mapOf("list" to raw))
+            }
+        }
+    }
+
+    private suspend fun invalidateConversationCache(id: Int) {
+        val scope = cacheScope ?: return
+        cache?.remove(scope, "session-$id")
+        cache?.remove(scope, "list")
+    }
 
     // region Endpoints
 
@@ -196,19 +271,57 @@ class CodegClient(
             ListSerializer(ConversationSummary.serializer()),
         )
 
-    /** Full session detail incl. message history. */
-    suspend fun conversationDetail(id: Int): ConversationDetail =
-        decode(
-            send("get_folder_conversation", encode(ConversationIdBody(id))),
-            ConversationDetail.serializer(),
-        )
+    /** Recent rounds on entry, or refresh the exact already-loaded window. */
+    suspend fun conversationDetail(id: Int, fromIndex: Int? = null): ConversationDetail {
+        val ticket = cacheScope?.let { cache?.ticket(it, "session-$id") }
+        val started = System.nanoTime()
+        val text = send("get_folder_conversation", encode(ConversationDetailBody(
+            conversationId = id,
+            tailRounds = if (fromIndex == null) 5 else null,
+            fromIndex = fromIndex,
+        )))
+        return withContext(Dispatchers.Default) {
+            logTranscriptTiming("detail-download", started, payload = text)
+            val parsing = System.nanoTime()
+            decode(text, ConversationDetail.serializer()).also {
+                logTranscriptTiming("detail-decode", parsing, records = it.turns.size)
+                transcriptIsLive = it.inFlightUserTurnId != null || it.summary.status.isLive
+                if (ticket != null) {
+                    // Disk/format failures must not turn a successful response into a load failure.
+                    try {
+                        if (transcriptIsLive) cache?.expire(ticket)
+                        else cache?.replace(ticket, transcriptCachePages(text, it))
+                    }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { /* A later fetch can rebuild this disposable cache. */ }
+                }
+            }
+        }
+    }
+
+    suspend fun conversationTurns(id: Int, beforeIndex: Int): ConversationTurnsPage {
+        val ticket = cacheScope?.let { cache?.ticket(it, "session-$id") }
+        val started = System.nanoTime()
+        val text = send("get_folder_conversation_turns", encode(ConversationTurnsBody(id, beforeIndex)))
+        return withContext(Dispatchers.Default) {
+            logTranscriptTiming("history-download", started, payload = text)
+            val parsing = System.nanoTime()
+            decode(text, ConversationTurnsPage.serializer()).also {
+                logTranscriptTiming("history-decode", parsing, records = it.turns.size)
+                if (ticket != null && !transcriptIsLive) cache?.append(ticket, "before-$beforeIndex", text)
+            }
+        }
+    }
 
     /** Create a conversation row up front and return its id (a bare JSON int). */
-    suspend fun createConversation(folderId: Int, agentType: AgentType, title: String?): Int =
-        decode(
+    suspend fun createConversation(folderId: Int, agentType: AgentType, title: String?): Int {
+        val id = decode(
             send("create_conversation", encode(CreateConversationBody(folderId, agentType, title))),
             Int.serializer(),
         )
+        cacheScope?.let { cache?.remove(it, "list") }
+        return id
+    }
 
     /**
      * Spawn (or resume, when [sessionId] is set) an agent process. Returns the
@@ -251,6 +364,11 @@ class CodegClient(
         clientMessageId: String?,
     ) {
         send("acp_prompt", encode(PromptBody(connectionId, blocks, folderId, conversationId, clientMessageId)))
+        transcriptIsLive = true
+        cacheScope?.let {
+            cache?.remove(it, "list")
+            if (conversationId != null) cache?.expire(it, "session-$conversationId")
+        }
     }
 
     /** Cancel the in-flight turn on a connection. */
@@ -288,21 +406,25 @@ class CodegClient(
     /** Pin or unpin a conversation (server `update_conversation_pinned`). */
     suspend fun setPinned(conversationId: Int, pinned: Boolean) {
         send("update_conversation_pinned", encode(UpdateConversationPinnedBody(conversationId, pinned)))
+        invalidateConversationCache(conversationId)
     }
 
     /** Rename a conversation (server `update_conversation_title`). */
     suspend fun renameConversation(conversationId: Int, title: String) {
         send("update_conversation_title", encode(UpdateConversationTitleBody(conversationId, title)))
+        invalidateConversationCache(conversationId)
     }
 
     /** Set a conversation's lifecycle status (server `update_conversation_status`). */
     suspend fun setStatus(conversationId: Int, status: String) {
         send("update_conversation_status", encode(UpdateConversationStatusBody(conversationId, status)))
+        invalidateConversationCache(conversationId)
     }
 
     /** Permanently delete a conversation (server `delete_conversation`). */
     suspend fun deleteConversation(conversationId: Int) {
         send("delete_conversation", encode(ConversationIdBody(conversationId)))
+        invalidateConversationCache(conversationId)
     }
 
     // endregion
@@ -328,6 +450,69 @@ class CodegClient(
     /** Read a file's text (path is relative to [rootPath]). */
     suspend fun readFilePreview(rootPath: String, path: String): FilePreviewContent =
         decode(send("read_file_preview", encode(ReadFilePreviewBody(rootPath, path))), FilePreviewContent.serializer())
+
+    /** A short-lived, one-use URL: the system downloader never receives the server token. */
+    suspend fun cachedConversationFiles(id: Int): List<app.codeg.android.core.model.SessionFile>? =
+        cached("files-$id", "files", ListSerializer(app.codeg.android.core.model.SessionFile.serializer()))?.value
+
+    suspend fun conversationFiles(id: Int): List<app.codeg.android.core.model.SessionFile> {
+        val ticket = cacheScope?.let { cache?.ticket(it, "files-$id") }
+        val serializer = ListSerializer(app.codeg.android.core.model.SessionFile.serializer())
+        val files = try {
+            val raw = send("get_conversation_files", encode(ConversationIdBody(id)))
+            withContext(Dispatchers.Default) { decode(raw, serializer) }
+        } catch (e: ApiError.Server) {
+            if (!(e.status == 501 && e.code == "not_implemented") && !(e.status == 404 && e.code == null)) throw e
+            legacyConversationFiles(id)
+        }
+        if (ticket != null) withContext(Dispatchers.Default) {
+            cache?.replace(ticket, mapOf("files" to CodegJson.response.encodeToString(serializer, files)))
+        }
+        return files
+    }
+
+    private suspend fun legacyConversationFiles(id: Int): List<app.codeg.android.core.model.SessionFile> {
+        // Only the file manager requests full history. Never replace the paged conversation cache.
+        val raw = send("get_folder_conversation", encode(ConversationDetailBody(id, fromIndex = 0)))
+        val detail = withContext(Dispatchers.Default) { decode(raw, ConversationDetail.serializer()) }
+        if ((detail.turnsOffset ?: 0) != 0 || (detail.turnsTotal != null && detail.turnsTotal != detail.turns.size)) {
+            throw ApiError.Decoding("Server did not return complete conversation history")
+        }
+        val root = detail.summary.originCwd?.takeIf { it.isNotBlank() }
+            ?: listFolders().firstOrNull { it.id == detail.summary.folderId }?.path
+            ?: throw ApiError.Decoding("Conversation folder not found")
+        return withContext(Dispatchers.Default) {
+            app.codeg.android.core.model.collectSessionFiles(detail.turns, root)
+        }
+    }
+
+    /** A bounded preview read; closing the response cancels the unused remainder. */
+    suspend fun workspacePreviewBytes(rootPath: String, path: String, limit: Int): ByteArray {
+        val ticket = workspaceDownloadTicket(rootPath, path)
+        return http.prepareGet(ticket.url).execute { response ->
+            check(response.status.value in 200..299) { "File unavailable (${response.status.value})" }
+            val channel = response.bodyAsChannel()
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (output.size() < limit) {
+                val count = channel.readAvailable(buffer, 0, minOf(buffer.size, limit - output.size()))
+                if (count < 0) break
+                if (count > 0) output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+    }
+
+    suspend fun workspaceDownloadTicket(rootPath: String, path: String): WorkspaceDownloadTicket {
+        val ticket = decodeCamel(
+            send("workspace_download_ticket", encode(WorkspaceDownloadRequest(rootPath, path))),
+            WorkspaceDownloadTicket.serializer(),
+        )
+        if (!Regex("^/api/workspace_download/[A-Za-z0-9_-]+$").matches(ticket.url)) {
+            throw ApiError.Decoding("Invalid workspace download URL")
+        }
+        return ticket.copy(url = baseUrl + ticket.url)
+    }
 
     /** Working-tree changes. Throws [ApiError.Server] with code `not_a_git_repository` if not a repo. */
     suspend fun gitStatus(path: String, showAllUntracked: Boolean = true): List<GitStatusEntry> =

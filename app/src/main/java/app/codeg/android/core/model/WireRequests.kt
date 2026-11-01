@@ -44,6 +44,22 @@ data class ListConversationsBody(
 data class ConversationIdBody(val conversationId: Int)
 
 @Serializable
+data class ConversationDetailBody(
+    val conversationId: Int,
+    val tailRounds: Int? = null,
+    val fromIndex: Int? = null,
+)
+
+@Serializable
+data class ConversationTurnsBody(
+    val conversationId: Int,
+    val beforeIndex: Int,
+    val roundLimit: Int = 5,
+    // Older servers require limit and ignore roundLimit.
+    val limit: Int = 30,
+)
+
+@Serializable
 data class CreateConversationBody(
     val folderId: Int,
     val agentType: AgentType,

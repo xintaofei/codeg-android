@@ -25,4 +25,8 @@ data class FolderDetail(
     val color: String = "",
     val parentId: Int? = null,
     val isChat: Boolean = false,
-)
+    val kind: String? = null,
+) {
+    /** New servers send kind; older servers send is_chat. Never infer this from the name. */
+    val isChatFolder: Boolean get() = kind?.let { it == "chat" } ?: isChat
+}

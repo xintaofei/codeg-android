@@ -153,6 +153,7 @@ object TranscriptTimeline {
         pending: List<MessageTurn>,
         agent: AgentType,
         hideTrailingAssistantReply: Boolean = false,
+        chunkStarts: Set<String> = emptySet(),
     ): List<TimelineNode> {
         val source = if (hideTrailingAssistantReply) turns.dropTrailingAssistantRun() else turns
         val nodes = mutableListOf<TimelineNode>()
@@ -174,7 +175,7 @@ object TranscriptTimeline {
                 }
                 TurnRole.ASSISTANT -> {
                     var j = i + 1
-                    while (j < source.size && source[j].role == TurnRole.ASSISTANT) j++
+                    while (j < source.size && source[j].role == TurnRole.ASSISTANT && source[j].id !in chunkStarts) j++
                     val merged = merge(source.subList(i, j))
                     nodes.addAll(assistantNodes(merged, lastUserId, agent))
                     i = j

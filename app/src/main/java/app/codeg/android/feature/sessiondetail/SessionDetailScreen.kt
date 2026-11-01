@@ -1,5 +1,8 @@
 package app.codeg.android.feature.sessiondetail
 
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,6 +16,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -36,12 +41,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -51,9 +59,11 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,11 +79,14 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.codeg.android.R
+import app.codeg.android.core.common.logTranscriptTiming
 import app.codeg.android.core.designsystem.component.AgentAvatar
+import app.codeg.android.core.designsystem.component.CacheStatus
 import app.codeg.android.core.designsystem.component.EmptyState
 import app.codeg.android.core.designsystem.component.InlineError
 import app.codeg.android.core.designsystem.component.LoadingView
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.core.designsystem.markdown.LocalMarkdownLinkHandler
 import app.codeg.android.feature.sessiondetail.interactive.AskQuestionCard
 import app.codeg.android.feature.sessiondetail.interactive.PermissionRequestCard
 import app.codeg.android.feature.sessiondetail.interactive.PlanApprovalCard
@@ -82,7 +95,14 @@ import app.codeg.android.feature.sessiondetail.timeline.NodeBody
 import app.codeg.android.feature.sessiondetail.timeline.NodeContent
 import app.codeg.android.feature.sessiondetail.timeline.TimelineRow
 import app.codeg.android.feature.sessiondetail.timeline.TranscriptTimeline
+import app.codeg.android.feature.sessiondetail.timeline.TimelineNode
+import app.codeg.android.core.model.TurnRole
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.drop
+
+private data class PersistedTimeline(val source: SessionDetailUiState, val nodes: List<TimelineNode>)
 
 /**
  * The session detail screen: the transcript rendered as a vertical **timeline**
@@ -95,16 +115,35 @@ import kotlinx.coroutines.launch
 fun SessionDetailScreen(
     onBack: () -> Unit,
     onOpenSession: (Int) -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
+    onViewRemote: (Int, String) -> Unit = { _, _ -> },
+    onOpenFile: (String) -> Unit = {},
     viewModel: SessionDetailViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
+    val fileDownload by viewModel.fileDownload.collectAsStateWithLifecycle()
     val colors = CodegTheme.colors
-    var draft by remember { mutableStateOf("") }
+    var draft by rememberSaveable { mutableStateOf("") }
     var showInsert by remember { mutableStateOf(false) }
     var showOptions by remember { mutableStateOf(false) }
+    var scrollTarget by rememberSaveable { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val onMarkdownLink: (String) -> Unit = remember(context, viewModel, onOpenFile, onViewRemote) {
+        { link ->
+            val web = messageWebUrl(link)
+            if (web != null && !isApkLink(link)) {
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(web.toASCIIString()))) }
+                    .onFailure { Toast.makeText(context, R.string.download_open_failed, Toast.LENGTH_LONG).show() }
+            } else {
+                val id = viewModel.ui.value.summary?.id
+                val path = if (web == null) viewModel.previewFilePath(link) else null
+                if (id != null && path != null) onViewRemote(id, path)
+                else viewModel.downloadFile(link)?.let(onOpenFile)
+            }
+        }
+    }
 
     // A failed send returns the user's typed text to the composer so it isn't lost — but only
     // when the composer is empty, so it never clobbers a fresh draft typed during the send.
@@ -137,9 +176,23 @@ fun SessionDetailScreen(
     // On reattach the live turn (rebuilt from the snapshot) owns the in-flight reply, so
     // hide the partial copy the server persists into `turns` to avoid a doubled reply.
     val hideReattachDup = ui.liveFromReattach && ui.live != null
-    val persistedNodes = remember(ui.turns, ui.pendingUserTurns, ui.agent, hideReattachDup) {
-        TranscriptTimeline.buildPersisted(ui.turns, ui.pendingUserTurns, ui.agent, hideReattachDup)
+    val timelineState = remember(ui.turns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.historyChunkStarts) { ui }
+    val persistedTimeline by produceState<PersistedTimeline?>(
+        initialValue = null,
+        key1 = timelineState,
+    ) {
+        value = withContext(Dispatchers.Default) {
+            val started = System.nanoTime()
+            val adapted = TranscriptTimeline.buildPersisted(
+                timelineState.turns, timelineState.pendingUserTurns, timelineState.agent,
+                hideReattachDup, timelineState.historyChunkStarts,
+            )
+            logTranscriptTiming("timeline-build", started, records = timelineState.turns.size)
+            PersistedTimeline(timelineState, adapted)
+        }
     }
+    val persistedNodes = persistedTimeline?.nodes.orEmpty()
+    val historyRendered = persistedTimeline?.source === timelineState
     val nodes = remember(persistedNodes, ui.live, ui.agent) {
         TranscriptTimeline.withLive(persistedNodes, ui.live, ui.agent)
     }
@@ -153,31 +206,65 @@ fun SessionDetailScreen(
             last.index >= info.totalItemsCount - 1
         }
     }
-    var stick by remember { mutableStateOf(true) }
-    // Re-evaluate "follow" only when a *user* scroll settles — programmatic scrolls
-    // and streamed growth must not flip it (that would race the auto-follow off).
+    var stick by rememberSaveable { mutableStateOf(true) }
+    var initiallyPositioned by rememberSaveable { mutableStateOf(false) }
+    // Unpin immediately on a drag, including when a short window fits on screen.
+    // Streamed growth alone must not turn auto-follow off.
     LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }.collect { inProgress ->
-            if (!inProgress) stick = isAtBottom
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) stick = false
+        }
+    }
+    LaunchedEffect(listState, initiallyPositioned) {
+        snapshotFlow { listState.isScrollInProgress }.drop(1).collect { inProgress ->
+            if (initiallyPositioned && !inProgress) stick = isAtBottom
+        }
+    }
+    LaunchedEffect(nodes.isNotEmpty()) {
+        if (!initiallyPositioned && nodes.isNotEmpty()) {
+            listState.scrollToItem(nodes.size + 1)
+            initiallyPositioned = true
+        }
+    }
+    LaunchedEffect(listState, ui.historyWindow?.offset, ui.loadingOlder, ui.olderError, initiallyPositioned, historyRendered, nodes.size) {
+        snapshotFlow {
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                !stick && historyRendered && listState.layoutInfo.totalItemsCount == nodes.size + 2,
+            )
+        }.collect { (scrolling, index, ready) ->
+            if (initiallyPositioned && scrolling && ready && index <= 4 &&
+                (ui.historyWindow?.offset ?: 0) > 0 && !ui.loadingOlder && ui.olderError == null
+            ) viewModel.loadOlderTurns()
         }
     }
     // A freshly sent message always re-pins to the bottom.
+    var followedPendingId by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(ui.pendingUserTurns.lastOrNull()?.id) {
-        if (ui.pendingUserTurns.isNotEmpty()) stick = true
+        val pendingId = ui.pendingUserTurns.lastOrNull()?.id
+        if (pendingId != null && pendingId != followedPendingId) stick = true
+        followedPendingId = pendingId
     }
     // Follow new / streamed content while pinned.
     LaunchedEffect(nodes.size, ui.live, stick) {
-        if (stick && nodes.isNotEmpty()) listState.scrollToItem(nodes.size)
+        if (stick && nodes.isNotEmpty()) listState.scrollToItem(nodes.size + 1)
     }
-    val scrollToId: (String) -> Unit = remember(nodes) {
-        { id ->
-            val idx = nodes.indexOfFirst { it.id == id }
-            if (idx >= 0) {
-                stick = false // unpin so the stream doesn't immediately yank us back down
-                scope.launch { listState.animateScrollToItem(idx) }
-            }
+    LaunchedEffect(scrollTarget) {
+        scrollTarget?.let { id ->
+            if (!viewModel.loadThroughTurn(id) && scrollTarget == id) scrollTarget = null
         }
     }
+    LaunchedEffect(persistedNodes, scrollTarget) {
+        val target = scrollTarget ?: return@LaunchedEffect
+        val index = persistedNodes.indexOfFirst { it.id == target }
+        if (index >= 0) {
+            stick = false
+            listState.animateScrollToItem(index + 1)
+            scrollTarget = null
+        }
+    }
+    val scrollToId: (String) -> Unit = { id -> stick = false; scrollTarget = id }
 
     val title = when {
         ui.isNew -> stringResource(R.string.session_new_task)
@@ -188,6 +275,7 @@ fun SessionDetailScreen(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
+            Column {
             TopAppBar(
                 title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
@@ -200,6 +288,9 @@ fun SessionDetailScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenDownloads) {
+                        Icon(Icons.Rounded.FolderOpen, stringResource(R.string.session_files_title), tint = colors.textSecondary)
+                    }
                     // The agent avatar is the options button (mode / config / folder / branch).
                     Box(
                         Modifier
@@ -220,9 +311,27 @@ fun SessionDetailScreen(
                     titleContentColor = colors.textPrimary,
                 ),
             )
+                if (!ui.isNew) CacheStatus(
+                    refreshing = ui.refreshing,
+                    showingCached = ui.showingCached,
+                    lastUpdatedAt = ui.lastUpdatedAt,
+                    modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 4.dp),
+                )
+                fileDownload?.let { download ->
+                    FileDownloadBanner(download, viewModel::retryFileDownload, { onOpenFile(download.key) }, viewModel::dismissFileDownload)
+                }
+                if (hasContent) ui.error?.let { error ->
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(error, color = colors.danger, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        TextButton(onClick = viewModel::refresh, enabled = !ui.refreshing) {
+                            Text(stringResource(R.string.common_retry))
+                        }
+                    }
+                }
+            }
         },
         bottomBar = {
-            Column(Modifier.imePadding()) {
+            Column(Modifier.imePadding().navigationBarsPadding()) {
                 ui.pendingPermission?.let { p ->
                     PermissionRequestCard(
                         parsed = p.parsed,
@@ -282,7 +391,7 @@ fun SessionDetailScreen(
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when {
-                ui.loading && !hasContent ->
+                (ui.loading || (persistedTimeline == null && ui.turns.isNotEmpty())) && !hasContent ->
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         LoadingView(message = stringResource(R.string.common_loading))
                     }
@@ -293,7 +402,7 @@ fun SessionDetailScreen(
                             icon = Icons.Rounded.Forum,
                             title = stringResource(R.string.session_load_failed),
                             message = ui.error!!,
-                            onRetry = viewModel::load,
+                            onRetry = viewModel::refresh,
                             retryLabel = stringResource(R.string.common_retry),
                         )
                     }
@@ -311,12 +420,29 @@ fun SessionDetailScreen(
                         )
                     }
 
-                else -> CompositionLocalProvider(LocalTimelineScroll provides scrollToId) {
+                else -> CompositionLocalProvider(LocalTimelineScroll provides scrollToId, LocalMarkdownLinkHandler provides onMarkdownLink) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 12.dp),
                     ) {
+                        item(key = "__timeline_history__") {
+                            if ((ui.historyWindow?.offset ?: 0) > 0) {
+                                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    if (ui.turns.firstOrNull()?.role == TurnRole.ASSISTANT) {
+                                        Text(stringResource(R.string.session_round_continues), color = colors.textSecondary)
+                                    }
+                                    if (ui.loadingOlder) {
+                                        CircularProgressIndicator(Modifier.padding(12.dp).size(20.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        ui.olderError?.let { Text(it, color = colors.textSecondary) }
+                                        TextButton(onClick = { stick = false; viewModel.loadOlderTurns() }) {
+                                            Text(stringResource(if (ui.olderError != null) R.string.common_retry else R.string.session_load_older))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         items(nodes, key = { it.id }, contentType = { it.contentTypeKey }) { node ->
                             TimelineRow(
                                 marker = node.marker,
@@ -347,7 +473,7 @@ fun SessionDetailScreen(
             ) {
                 JumpToLatestButton {
                     stick = true
-                    scope.launch { listState.animateScrollToItem(nodes.size) }
+                    scope.launch { listState.animateScrollToItem(nodes.size + 1) }
                 }
             }
         }

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.Difference
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
@@ -35,6 +36,8 @@ import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +73,7 @@ import app.codeg.android.core.designsystem.theme.AccentPalette
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.datastore.ThemeMode
 import app.codeg.android.core.model.AgentType
+import android.text.format.Formatter
 
 private enum class SettingsLeaf(@StringRes val titleRes: Int, val icon: ImageVector, @StringRes val groupRes: Int, val implemented: Boolean) {
     APPEARANCE(R.string.settings_leaf_appearance, Icons.Rounded.Brush, R.string.settings_group_personalization, true),
@@ -83,13 +88,15 @@ private enum class SettingsLeaf(@StringRes val titleRes: Int, val icon: ImageVec
     VERSION_CONTROL(R.string.settings_leaf_version_control, Icons.Rounded.Difference, R.string.settings_group_integrations, true),
     CHAT_CHANNELS(R.string.settings_leaf_chat_channels, Icons.AutoMirrored.Rounded.Chat, R.string.settings_group_integrations, true),
     SYSTEM(R.string.settings_leaf_system, Icons.Rounded.Settings, R.string.settings_group_system, true),
+    LOCAL_CACHE(R.string.settings_local_cache, Icons.Rounded.Memory, R.string.settings_group_system, true),
+    DOWNLOADS(R.string.session_files_title, Icons.Rounded.FolderOpen, R.string.settings_group_system, true),
     OPEN_SOURCE_LICENSES(R.string.settings_leaf_open_source_licenses, Icons.Rounded.Policy, R.string.settings_group_system, true),
     ABOUT(R.string.settings_leaf_about, Icons.Rounded.Info, R.string.settings_group_system, true),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel(), onOpenDownloads: () -> Unit = {}) {
     val colors = CodegTheme.colors
     var leaf by remember { mutableStateOf<SettingsLeaf?>(null) }
     // A second level beneath the Agents leaf: the per-agent config editor.
@@ -121,7 +128,7 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (leaf) {
-                null -> SettingsRoot(onSelect = { leaf = it; agentDetail = null })
+                null -> SettingsRoot(onSelect = { if (it == SettingsLeaf.DOWNLOADS) onOpenDownloads() else { leaf = it; agentDetail = null } })
                 SettingsLeaf.APPEARANCE -> AppearanceSettings(viewModel)
                 SettingsLeaf.LANGUAGE -> LanguageContent()
                 SettingsLeaf.ABOUT -> AboutScreen(viewModel)
@@ -129,6 +136,7 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                 SettingsLeaf.GENERAL -> GeneralContent()
                 SettingsLeaf.MODEL_PROVIDERS -> ModelProvidersContent()
                 SettingsLeaf.SYSTEM -> SystemContent()
+                SettingsLeaf.LOCAL_CACHE -> LocalCacheSettings(viewModel)
                 SettingsLeaf.OPEN_SOURCE_LICENSES -> OpenSourceLicensesScreen()
                 SettingsLeaf.MCP -> McpContent()
                 SettingsLeaf.AGENTS ->
@@ -177,6 +185,37 @@ private fun SettingsRoot(onSelect: (SettingsLeaf) -> Unit) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun LocalCacheSettings(viewModel: SettingsViewModel) {
+    val colors = CodegTheme.colors
+    val cache by viewModel.cache.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    LaunchedEffect(viewModel) { viewModel.refreshCacheSize() }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(stringResource(R.string.settings_cache_description), color = colors.textSecondary)
+        Text(
+            stringResource(R.string.settings_cache_size, cache.sizeBytes?.let { Formatter.formatFileSize(context, it) } ?: "—"),
+            color = colors.textPrimary,
+        )
+        Button(onClick = viewModel::clearCache, enabled = !cache.clearing) {
+            if (cache.clearing) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            }
+            Text(
+                stringResource(if (cache.clearing) R.string.settings_cache_clearing else R.string.settings_cache_clear),
+                modifier = Modifier.padding(start = if (cache.clearing) 8.dp else 0.dp),
+            )
+        }
+        if (cache.cleared) Text(stringResource(R.string.settings_cache_cleared), color = colors.textSecondary)
+        cache.error?.let {
+            Text(stringResource(R.string.settings_cache_failed, it), color = colors.danger)
         }
     }
 }

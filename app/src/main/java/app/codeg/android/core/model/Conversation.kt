@@ -28,6 +28,9 @@ data class ConversationSummary(
      * `updated_at` — the "Pinned" group sorts by this instead. */
     @Serializable(with = InstantSerializer::class)
     val pinnedAt: Instant? = null,
+    val kind: String? = null,
+    val source: String? = null,
+    val originCwd: String? = null,
 ) {
     /** Non-empty, trimmed user title, or null for an unnamed session. Render
      * verbatim (user data); fall back to a localized "Untitled session" only
@@ -60,6 +63,18 @@ data class ConversationDetail(
     val turns: List<MessageTurn> = emptyList(),
     val sessionStats: SessionStats? = null,
     val inFlightUserTurnId: String? = null,
+    val turnsOffset: Int? = null,
+    val turnsTotal: Int? = null,
+    val prefixHash: String? = null,
+)
+
+@Serializable
+data class ConversationTurnsPage(
+    val turns: List<MessageTurn>,
+    val turnsOffset: Int,
+    val turnsTotal: Int,
+    val prefixHash: String,
+    val prefixHashBeforeIndex: String,
 )
 
 /** Returned by `acp_find_connection_for_conversation` when a live ACP

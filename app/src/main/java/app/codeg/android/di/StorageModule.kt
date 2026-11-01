@@ -7,6 +7,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
 import app.codeg.android.core.common.DefaultDispatcherProvider
 import app.codeg.android.core.common.DispatcherProvider
+import app.codeg.android.core.cache.ConversationDiskCache
+import java.io.File
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -17,6 +19,11 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object StorageModule {
+
+    @Provides
+    @Singleton
+    fun provideConversationCache(@ApplicationContext context: Context): ConversationDiskCache =
+        ConversationDiskCache(File(context.cacheDir, "conversation-snapshots"))
 
     /** Single Preferences DataStore backing both the server list and app settings. */
     @Provides

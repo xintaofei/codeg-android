@@ -4,6 +4,7 @@ import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.ConversationStatus
 import app.codeg.android.core.model.ConversationSummary
 import app.codeg.android.core.model.FolderDetail
+import app.codeg.android.core.datastore.SessionListPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -16,6 +17,21 @@ import java.time.Instant
  * (pinned excluded from folder groups), and the pre-resolved cross-folder tag.
  */
 class SessionSectionsTest {
+
+    @Test
+    fun `manual folder order changes project headers and keeps worktrees merged with all history`() {
+        val folders = listOf(folder(1, "A"), folder(2, "B"), folder(3, "Branch").copy(parentId = 1))
+        val conversations = listOf(conv(1, 1, 10), conv(2, 2, 20), conv(3, 3, 30))
+        val sections = buildSessionSections(
+            folders, conversations, SessionListPreferences(showRecent = false), folderOrder = listOf(2, 1, 3),
+        )
+        assertEquals(listOf("folder-2", "folder-1"), sections.map { it.id })
+        assertEquals(listOf(3, 1), sections.last().rows.map { it.conversation.id })
+        assertEquals(listOf(1, 2, 3), sections.flatMap { it.rows }.map { it.conversation.id }.sorted())
+    }
+
+    private fun buildWithoutRecent(folders: List<FolderDetail>, conversations: List<ConversationSummary>) =
+        buildSessionSections(folders, conversations, SessionListPreferences(showRecent = false))
 
     private fun conv(
         id: Int,
@@ -37,6 +53,32 @@ class SessionSectionsTest {
         FolderDetail(id = id, name = name, path = "/p/$id", sortOrder = sortOrder, color = color)
 
     @Test
+    fun `hiding a root hides worktree and recent rows but preserves pinned and full source data`() {
+        val folders = listOf(folder(1, "Root"), folder(2, "Branch").copy(parentId = 1), folder(3, "Visible"))
+        val conversations = listOf(conv(1, 1, 10), conv(2, 2, 20), conv(3, 2, 30, pinnedAt = 40), conv(4, 3, 40))
+        val sections = buildSessionSections(
+            folders, conversations, SessionListPreferences(recentShowCompleted = true), hiddenFolderIds = setOf(1),
+        )
+        assertEquals(listOf("pinned", "folder-3", "recent"), sections.map { it.id })
+        assertEquals(listOf(3), sections.first().rows.map { it.conversation.id })
+        assertEquals("Root", sections.first().rows.single().folderName)
+        assertEquals(listOf(4), sections.last().rows.map { it.conversation.id })
+        assertEquals(4, conversations.size)
+        assertEquals(listOf(2, 1), buildWithoutRecent(folders, conversations).first { it.id == "folder-1" }.rows.map { it.conversation.id })
+    }
+
+    @Test
+    fun `hidden missing folder does not leak into Other and hiding one worktree keeps its siblings`() {
+        val folders = listOf(folder(1, "Root"), folder(2, "Hidden branch").copy(parentId = 1), folder(3, "Branch").copy(parentId = 1))
+        val conversations = listOf(conv(1, 1, 10), conv(2, 2, 20), conv(3, 3, 30), conv(4, 99, 40))
+        val sections = buildSessionSections(
+            folders, conversations, SessionListPreferences(showRecent = false), hiddenFolderIds = setOf(2, 99),
+        )
+        assertEquals(listOf("folder-1"), sections.map { it.id })
+        assertEquals(listOf(3, 1), sections.single().rows.map { it.conversation.id })
+    }
+
+    @Test
     fun `sections are ordered pinned then folders then other`() {
         val folders = listOf(
             folder(1, "Beta", sortOrder = 1),
@@ -51,7 +93,7 @@ class SessionSectionsTest {
             conv(40, folderId = 99, updated = 300), // orphan → Other
         )
 
-        val sections = buildSessionSections(folders, convs)
+        val sections = buildWithoutRecent(folders, convs)
 
         // sortedFolders orders by sortOrder then name → Alpha(0) before Beta(1).
         assertEquals(listOf("pinned", "folder-2", "folder-1", "other"), sections.map { it.id })
@@ -66,7 +108,7 @@ class SessionSectionsTest {
             conv(30, folderId = 2, updated = 120),
         )
 
-        val pinned = buildSessionSections(folders, convs).first { it.id == "pinned" }
+        val pinned = buildWithoutRecent(folders, convs).first { it.id == "pinned" }
 
         assertTrue(pinned.kind is SectionKind.Pinned)
         // pinnedAt 70 (conv 11) is more recent than 50 (conv 10).
@@ -85,7 +127,7 @@ class SessionSectionsTest {
             conv(30, folderId = 2, updated = 120),
         )
 
-        val sections = buildSessionSections(folders, convs)
+        val sections = buildWithoutRecent(folders, convs)
         val beta = sections.first { it.id == "folder-1" }
         val alpha = sections.first { it.id == "folder-2" }
 
@@ -97,16 +139,15 @@ class SessionSectionsTest {
     }
 
     @Test
-    fun `empty folders keep a header so the section still shows`() {
-        val sections = buildSessionSections(listOf(folder(1, "Solo")), emptyList())
+    fun `empty folders do not fill the conversation list with headers`() {
+        val sections = buildWithoutRecent(listOf(folder(1, "Solo")), emptyList())
 
-        assertEquals(listOf("folder-1"), sections.map { it.id })
-        assertEquals(0, sections.single().count)
+        assertTrue(sections.isEmpty())
     }
 
     @Test
     fun `no pinned or other section when there are none`() {
-        val sections = buildSessionSections(
+        val sections = buildWithoutRecent(
             listOf(folder(1, "A")),
             listOf(conv(1, folderId = 1, updated = 10)),
         )
@@ -116,7 +157,7 @@ class SessionSectionsTest {
 
     @Test
     fun `orphan conversations fall into Other and resolve no folder tag`() {
-        val sections = buildSessionSections(
+        val sections = buildWithoutRecent(
             listOf(folder(1, "A")),
             listOf(conv(40, folderId = 99, updated = 300)),
         )
@@ -125,5 +166,74 @@ class SessionSectionsTest {
         assertTrue(other.kind is SectionKind.Other)
         assertEquals(listOf(40), other.rows.map { it.conversation.id })
         assertNull(other.rows.single().folderName) // unknown folder → no tag
+    }
+
+    @Test
+    fun `per-chat scratch folders become one newest-first chat section`() {
+        val folders = listOf(
+            folder(1, "Chat").copy(kind = "chat"),
+            folder(2, "Chat").copy(isChat = true), // older server
+            folder(3, "Chat").copy(kind = "regular"), // a real project named Chat
+        )
+        val conversations = listOf(
+            conv(1, 1, 10), conv(2, 2, 30), conv(3, 3, 20),
+            conv(4, 99, 40).copy(kind = "chat"), // folder missing from the response
+        )
+
+        val sections = buildWithoutRecent(folders, conversations)
+
+        assertEquals(listOf("chats", "folder-3"), sections.map { it.id })
+        assertEquals(listOf(4, 2, 1), sections.first().rows.map { it.conversation.id })
+        assertTrue(sections.first().rows.all { it.folderName == null })
+        assertEquals(listOf(3), sections.last().rows.map { it.conversation.id })
+    }
+
+    @Test
+    fun `pinned chats appear once and do not expose a scratch folder tag`() {
+        val sections = buildWithoutRecent(
+            listOf(folder(1, "Chat").copy(kind = "chat")),
+            listOf(conv(1, 1, 10, pinnedAt = 20).copy(kind = "chat"), conv(2, 1, 30)),
+        )
+
+        assertEquals(listOf("pinned", "chats"), sections.map { it.id })
+        assertEquals(listOf(1, 2), sections.flatMap { it.rows }.map { it.conversation.id })
+        assertNull(sections.first().rows.single().folderName)
+    }
+
+    @Test
+    fun `worktrees merge into their root while a missing root keeps its sessions reachable`() {
+        val sections = buildWithoutRecent(
+            listOf(
+                folder(1, "Repo"),
+                folder(2, "task-a").copy(parentId = 1),
+                folder(3, "task-b").copy(parentId = 1),
+                folder(4, "detached").copy(parentId = 999),
+            ),
+            listOf(conv(1, 1, 10), conv(2, 2, 30), conv(3, 3, 20), conv(4, 4, 40)),
+        )
+
+        assertEquals(listOf("folder-4", "folder-1"), sections.map { it.id })
+        assertEquals(listOf(2, 3, 1), sections.last().rows.map { it.conversation.id })
+        assertEquals(listOf(4), sections.first().rows.map { it.conversation.id })
+    }
+
+    @Test
+    fun `all history remains available exactly once before display pagination`() {
+        val folders = listOf(
+            folder(1, "Chat").copy(kind = "chat"), folder(2, "Project"),
+            folder(3, "branch").copy(parentId = 2), folder(4, "Empty"),
+        )
+        val conversations = (1..95).map { id ->
+            conv(id, if (id % 4 == 0) 99 else id % 3 + 1, id.toLong(),
+                pinnedAt = if (id % 10 == 0) id.toLong() else null)
+        }
+
+        val sections = buildWithoutRecent(folders, conversations)
+        val rows = sections.flatMap { it.rows }.map { it.conversation.id }
+
+        assertEquals(conversations.map { it.id }.sorted(), rows.sorted())
+        assertEquals(rows.size, rows.distinct().size)
+        assertTrue(sections.none { it.id == "folder-4" || it.id == "folder-3" || it.id == "folder-1" })
+        assertTrue(sections.first { it.id == "chats" }.count > 20)
     }
 }

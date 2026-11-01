@@ -2,8 +2,13 @@ package app.codeg.android.core.designsystem.markdown
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -21,6 +26,7 @@ import app.codeg.android.core.designsystem.theme.CodegTheme
  * literal. Link URLs are attached as a string annotation under tag `URL`.
  */
 const val URL_TAG = "URL"
+val LocalMarkdownLinkHandler = staticCompositionLocalOf<((String) -> Unit)?> { null }
 
 /** Cached inline-markdown for the current theme colors (recomputed if colors change).
  *  Slot-scoped `remember` only — deliberately NOT a shared cache, so the growing tail of
@@ -28,13 +34,27 @@ const val URL_TAG = "URL"
 @Composable
 fun rememberInlineMarkdown(raw: String): AnnotatedString {
     val colors = CodegTheme.colors
+    val handler by rememberUpdatedState(LocalMarkdownLinkHandler.current)
+    val uriHandler by rememberUpdatedState(LocalUriHandler.current)
     return remember(raw, colors.accent, colors.codeSurface, colors.textPrimary) {
-        inlineMarkdown(
+        val parsed = inlineMarkdown(
             raw = raw,
             linkColor = colors.accent,
             codeBg = colors.codeSurface,
             codeColor = colors.textPrimary,
         )
+        buildAnnotatedString {
+            append(parsed)
+            parsed.getStringAnnotations(URL_TAG, 0, parsed.length).forEach { annotation ->
+                addLink(LinkAnnotation.Clickable(annotation.item) {
+                    val onLink = handler
+                    if (onLink != null) onLink(annotation.item)
+                    else if (annotation.item.startsWith("https://") || annotation.item.startsWith("http://")) {
+                        runCatching { uriHandler.openUri(annotation.item) }
+                    }
+                }, annotation.start, annotation.end)
+            }
+        }
     }
 }
 
@@ -129,10 +149,10 @@ private fun parseInline(
             c == '[' -> {
                 val close = raw.indexOf(']', i + 1)
                 if (close > i && close + 1 < n && raw[close + 1] == '(') {
-                    val urlEnd = raw.indexOf(')', close + 2)
+                    val urlEnd = linkDestinationEnd(raw, close + 2)
                     if (urlEnd > close) {
                         val text = raw.substring(i + 1, close)
-                        val url = raw.substring(close + 2, urlEnd)
+                        val url = raw.substring(close + 2, urlEnd).trim().removeSurrounding("<", ">")
                         flushPlain()
                         builder.pushStringAnnotation(URL_TAG, url)
                         builder.withStyle(SpanStyle(color = linkColor)) {
@@ -154,4 +174,23 @@ private fun parseInline(
         }
     }
     flushPlain()
+}
+
+/** Parentheses in paths are common in build outputs; angle brackets allow spaces. */
+private fun linkDestinationEnd(raw: String, start: Int): Int {
+    if (raw.getOrNull(start) == '<') {
+        val end = raw.indexOf('>', start + 1)
+        return if (end >= 0 && raw.getOrNull(end + 1) == ')') end + 1 else -1
+    }
+    var depth = 1
+    var escaped = false
+    for (i in start until raw.length) {
+        if (escaped) { escaped = false; continue }
+        when (raw[i]) {
+            '\\' -> escaped = true
+            '(' -> depth++
+            ')' -> if (--depth == 0) return i
+        }
+    }
+    return -1
 }

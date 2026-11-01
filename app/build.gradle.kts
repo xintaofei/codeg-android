@@ -64,6 +64,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug.${providers.gradleProperty("debugBuildTag").getOrElse("local")}"
             isDebuggable = true
         }
         release {

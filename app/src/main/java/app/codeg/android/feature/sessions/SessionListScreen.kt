@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -26,6 +27,12 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Inbox
 import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.UnfoldLess
+import androidx.compose.material.icons.rounded.UnfoldMore
+import androidx.compose.material.icons.automirrored.rounded.Sort
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -60,17 +67,23 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.codeg.android.R
 import app.codeg.android.core.datastore.ServerProfile
+import app.codeg.android.core.datastore.RecentSessionFilter
+import app.codeg.android.core.datastore.SessionListPreferences
+import app.codeg.android.core.datastore.SessionSortMode
 import app.codeg.android.core.designsystem.component.EmptyState
+import app.codeg.android.core.designsystem.component.CacheStatus
 import app.codeg.android.core.designsystem.component.InlineError
 import app.codeg.android.core.designsystem.component.LoadingView
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.designsystem.theme.colorFromHex
 import app.codeg.android.core.model.ConversationSummary
+import app.codeg.android.core.model.FolderOrdering
 import app.codeg.android.feature.main.LocalBarsVisible
+import app.codeg.android.feature.projects.FolderManagementSheet
 
 /**
- * The Chats tab: the grouped session list for the selected server (Pinned /
- * per-folder / Other), a server switcher in the title, and a "New Task" action.
+ * The Chats tab: Pinned / Chats / projects / Other / Recent, with per-section previews
+ * and access to global search. Source data is never truncated by the preview.
  *
  * The iOS card-zoom interaction is adapted to native **collapsible sections**: tap a
  * section header to fold/unfold its rows. The grouping itself is computed off the main
@@ -86,22 +99,28 @@ fun SessionListScreen(
     onManageServers: () -> Unit,
     onOpenConversation: (Int) -> Unit,
     onNewTask: () -> Unit,
+    onSearch: () -> Unit,
     viewModel: SessionListViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val sections by viewModel.sections.collectAsStateWithLifecycle()
-    // Collapsed section ids. In the composable (not the VM) so collapsing never
-    // re-runs the grouping flow; rememberSaveable keeps the fold state across
-    // rotation / process death.
-    var collapsed by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    val storedLayout by viewModel.collapseLayout.collectAsStateWithLifecycle()
+    // Wait for this server's saved layout instead of briefly expanding every group.
+    val layout = storedLayout?.takeIf { it.serverId == selectedId }
+    val collapseState = layout?.state ?: SessionListCollapseState()
     val colors = CodegTheme.colors
     val selectedName = servers.firstOrNull { it.id == selectedId }?.name
         ?: stringResource(R.string.app_name)
+    var showOrder by remember(selectedId, ui.hiddenScope) { mutableStateOf(false) }
+    val orderedFolders = remember(ui.folders, ui.folderOrder) {
+        FolderOrdering.sorted(ui.folders.filterNot { it.isChatFolder }, ui.folderOrder)
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
+            Column {
             TopAppBar(
                 title = {
                     ServerSwitcher(
@@ -113,6 +132,21 @@ fun SessionListScreen(
                     )
                 },
                 actions = {
+                    IconButton(onClick = viewModel::refresh, enabled = selectedId != null && !ui.isRefreshing) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = stringResource(R.string.common_refresh), tint = colors.textSecondary)
+                    }
+                    IconButton(onClick = onSearch) {
+                        Icon(Icons.Rounded.Search, contentDescription = stringResource(R.string.tab_search), tint = colors.textPrimary)
+                    }
+                    SessionListOptions(
+                        preferences = ui.preferences,
+                        onSort = viewModel::setSortMode,
+                        onShowRecent = viewModel::setShowRecent,
+                        onRecentFilter = viewModel::setRecentFilter,
+                        onRecentShowCompleted = viewModel::setRecentShowCompleted,
+                        canOrderFolders = ui.hiddenScope != null && orderedFolders.isNotEmpty(),
+                        onOrderFolders = { showOrder = true },
+                    )
                     IconButton(onClick = onManageServers) {
                         Icon(
                             Icons.Rounded.Dns,
@@ -126,6 +160,33 @@ fun SessionListScreen(
                     titleContentColor = colors.textPrimary,
                 ),
             )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        CacheStatus(
+                            refreshing = ui.isRefreshing,
+                            showingCached = ui.showingCached,
+                            lastUpdatedAt = ui.lastUpdatedAt,
+                        )
+                    }
+                    TextButton(
+                        onClick = { layout?.let { viewModel.toggleCompact(it.serverId) } },
+                        enabled = layout != null && sections.isNotEmpty() && !ui.isEmpty,
+                    ) {
+                        Icon(
+                            if (collapseState.compact) Icons.Rounded.UnfoldMore else Icons.Rounded.UnfoldLess,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            stringResource(if (collapseState.compact) R.string.sessions_restore_layout else R.string.sessions_collapse_groups),
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                }
+            }
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -161,7 +222,20 @@ fun SessionListScreen(
                 }
 
                 ui.hasLoaded && ui.isEmpty -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(Modifier.fillMaxSize()) {
+                        ui.error?.let { error ->
+                            RefreshErrorBanner(
+                                message = error,
+                                onRetry = viewModel::refresh,
+                                onDismiss = viewModel::dismissError,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            )
+                        }
+                        Column(
+                            Modifier.weight(1f).fillMaxWidth(),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
                         EmptyState(
                             icon = Icons.Rounded.Forum,
                             title = stringResource(R.string.sessions_empty_title),
@@ -169,6 +243,16 @@ fun SessionListScreen(
                             actionLabel = stringResource(R.string.session_new_task),
                             onAction = onNewTask,
                         )
+                            TextButton(onClick = viewModel::refresh, enabled = !ui.isRefreshing) {
+                                Text(stringResource(R.string.common_refresh))
+                            }
+                        }
+                    }
+                }
+
+                layout == null && selectedId != null -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        LoadingView(message = stringResource(R.string.common_loading))
                     }
                 }
 
@@ -179,13 +263,15 @@ fun SessionListScreen(
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         SessionList(
+                            serverId = selectedId,
                             sections = sections,
-                            collapsed = collapsed,
-                            onToggleSection = { id ->
-                                collapsed = if (id in collapsed) collapsed - id else collapsed + id
-                            },
+                            preferences = ui.preferences,
+                            collapseState = collapseState,
+                            onToggleSection = { id -> layout?.let { viewModel.toggleSection(it.serverId, id) } },
                             onOpenConversation = onOpenConversation,
                             onTogglePin = { conv -> viewModel.setPinned(conv, !conv.isPinned) },
+                            hasHiddenFolders = ui.hiddenFolderIds.isNotEmpty(),
+                            onManageFolders = { showOrder = true },
                             // A refresh that failed over a still-populated list: surface
                             // it inline above the rows rather than swallowing it.
                             refreshError = ui.error,
@@ -197,19 +283,36 @@ fun SessionListScreen(
             }
         }
     }
+    if (showOrder) {
+        FolderManagementSheet(
+            folders = orderedFolders,
+            hiddenIds = ui.hiddenFolderIds,
+            onSetHidden = viewModel::setFolderHidden,
+            onMove = viewModel::moveFolder,
+            onReorder = viewModel::reorderFolders,
+            onReset = viewModel::resetFolderOrder,
+            onDismiss = { showOrder = false },
+            error = ui.error,
+        )
+    }
 }
 
 @Composable
 private fun SessionList(
+    serverId: String?,
     sections: List<SessionSection>,
-    collapsed: Set<String>,
+    preferences: SessionListPreferences,
+    collapseState: SessionListCollapseState,
     onToggleSection: (String) -> Unit,
     onOpenConversation: (Int) -> Unit,
     onTogglePin: (ConversationSummary) -> Unit,
+    hasHiddenFolders: Boolean,
+    onManageFolders: () -> Unit,
     refreshError: String?,
     onRetry: () -> Unit,
     onDismissError: () -> Unit,
 ) {
+    var rowLimits by rememberSaveable(serverId, preferences) { mutableStateOf(mapOf<String, Int>()) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
@@ -230,14 +333,24 @@ private fun SessionList(
             }
         }
 
+        if (hasHiddenFolders && sections.none { it.count > 0 }) {
+            item(key = "hidden-folders-empty", contentType = "empty") {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text(stringResource(R.string.folders_hidden_hint), color = CodegTheme.colors.textSecondary)
+                    TextButton(onClick = onManageFolders) { Text(stringResource(R.string.folders_manage)) }
+                }
+            }
+        }
         sections.forEach { section ->
-            val isCollapsed = section.id in collapsed
+            val isCollapsed = collapseState.isCollapsed(section.id)
             item(key = "h-${section.id}", contentType = "header") {
                 val style = sectionStyle(section.kind)
                 CollapsibleSectionHeader(
                     icon = style.icon,
                     tint = style.tint,
-                    label = style.label,
+                    label = if (section.kind == SectionKind.Recent && preferences.recentFilter != RecentSessionFilter.ALL) {
+                        "${style.label} · ${stringResource(recentFilterLabel(preferences.recentFilter))}"
+                    } else style.label,
                     count = section.count,
                     collapsed = isCollapsed,
                     onToggle = { onToggleSection(section.id) },
@@ -246,9 +359,11 @@ private fun SessionList(
                 )
             }
             if (!isCollapsed) {
+                val limit = rowLimits[section.id] ?: section.pageSize
+                val visibleRows = section.rows.take(limit)
                 items(
-                    items = section.rows,
-                    key = { "row-${it.conversation.id}" },
+                    items = visibleRows,
+                    key = { "row-${section.id}-${it.conversation.id}" },
                     contentType = { "row" },
                 ) { row ->
                     SessionRow(
@@ -257,7 +372,38 @@ private fun SessionList(
                         modifier = Modifier.animateItem(),
                         folderName = row.folderName,
                         onTogglePin = { onTogglePin(row.conversation) },
+                        timestamp = row.timestamp,
                     )
+                }
+                if (section.kind == SectionKind.Recent && section.count == 0) {
+                    item(key = "recent-empty", contentType = "empty") {
+                        Text(
+                            stringResource(R.string.sessions_recent_empty),
+                            color = CodegTheme.colors.textSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+                if (visibleRows.size < section.count) {
+                    item(key = "more-${section.id}", contentType = "more") {
+                        TextButton(
+                            onClick = { rowLimits = rowLimits + (section.id to (limit + section.pageSize)) },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        ) {
+                            Text(stringResource(R.string.sessions_load_more, section.count - visibleRows.size))
+                        }
+                    }
+                }
+                if (limit > section.pageSize) {
+                    item(key = "reset-${section.id}", contentType = "more") {
+                        TextButton(
+                            onClick = { rowLimits = rowLimits - section.id },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        ) {
+                            Text(stringResource(R.string.sessions_reset_preview, section.pageSize))
+                        }
+                    }
                 }
             }
         }
@@ -276,6 +422,16 @@ private fun sectionStyle(kind: SectionKind): SectionStyle {
             tint = colors.accent,
             label = stringResource(R.string.sessions_pinned),
         )
+        SectionKind.Chats -> SectionStyle(
+            icon = Icons.Rounded.Forum,
+            tint = colors.accent,
+            label = stringResource(R.string.sessions_chats),
+        )
+        SectionKind.Recent -> SectionStyle(
+            icon = Icons.Rounded.History,
+            tint = colors.accent,
+            label = stringResource(R.string.sessions_recent),
+        )
         is SectionKind.Folder -> SectionStyle(
             icon = Icons.Rounded.Folder,
             tint = colorFromHex(kind.colorHex) ?: colors.accent,
@@ -286,6 +442,75 @@ private fun sectionStyle(kind: SectionKind): SectionStyle {
             tint = colors.textSecondary,
             label = stringResource(R.string.sessions_other),
         )
+    }
+}
+
+private fun recentFilterLabel(filter: RecentSessionFilter): Int = when (filter) {
+    RecentSessionFilter.ALL -> R.string.sessions_recent_all
+    RecentSessionFilter.CHATS -> R.string.sessions_chats
+    RecentSessionFilter.FOLDERS -> R.string.sessions_recent_folders
+    RecentSessionFilter.CLI -> R.string.sessions_recent_cli
+}
+
+@Composable
+private fun SessionListOptions(
+    preferences: SessionListPreferences,
+    onSort: (SessionSortMode) -> Unit,
+    onShowRecent: (Boolean) -> Unit,
+    onRecentFilter: (RecentSessionFilter) -> Unit,
+    onRecentShowCompleted: (Boolean) -> Unit,
+    canOrderFolders: Boolean,
+    onOrderFolders: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(
+                Icons.AutoMirrored.Rounded.Sort,
+                contentDescription = stringResource(R.string.sessions_list_options),
+                tint = CodegTheme.colors.textPrimary,
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.folders_manage)) },
+                enabled = canOrderFolders,
+                onClick = { open = false; onOrderFolders() },
+            )
+            HorizontalDivider()
+            SessionSortMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(if (mode == SessionSortMode.CREATED) R.string.sessions_sort_created else R.string.sessions_sort_updated)) },
+                    trailingIcon = { if (mode == preferences.sortMode) Icon(Icons.Rounded.Check, contentDescription = null) },
+                    onClick = { onSort(mode); open = false },
+                )
+            }
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.sessions_show_recent)) },
+                trailingIcon = { if (preferences.showRecent) Icon(Icons.Rounded.Check, contentDescription = null) },
+                onClick = { onShowRecent(!preferences.showRecent); open = false },
+            )
+            if (preferences.showRecent) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.sessions_recent_filter)) },
+                    enabled = false,
+                    onClick = {},
+                )
+                RecentSessionFilter.entries.forEach { filter ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(recentFilterLabel(filter))) },
+                        trailingIcon = { if (filter == preferences.recentFilter) Icon(Icons.Rounded.Check, contentDescription = null) },
+                        onClick = { onRecentFilter(filter); open = false },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.sessions_recent_completed)) },
+                    trailingIcon = { if (preferences.recentShowCompleted) Icon(Icons.Rounded.Check, contentDescription = null) },
+                    onClick = { onRecentShowCompleted(!preferences.recentShowCompleted); open = false },
+                )
+            }
+        }
     }
 }
 

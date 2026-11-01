@@ -46,6 +46,30 @@ class CodegJsonTest {
         assertEquals(AgentType.CODEX, folder.defaultAgentType)
         assertEquals(3, folder.sortOrder)
         assertTrue(folder.isChat)
+        assertTrue(folder.isChatFolder)
+    }
+
+    @Test
+    fun `current chat kind is decoded for folders and conversations`() {
+        val folder = CodegJson.response.decodeFromString<FolderDetail>(
+            """{"id":1,"name":"Chat","path":"/data/chat-sessions/one","kind":"chat"}""",
+        )
+        val conversation = CodegJson.response.decodeFromString<ConversationSummary>(
+            """{"id":7,"folder_id":1,"kind":"chat","source":"cli","agent_type":"codex","status":"completed",
+               "created_at":"2024-01-02T03:04:05Z","updated_at":"2024-01-02T03:04:06Z"}""",
+        )
+        assertTrue(folder.isChatFolder)
+        assertEquals("chat", conversation.kind)
+        assertEquals("cli", conversation.source)
+    }
+
+    @Test
+    fun `explicit folder kind takes precedence over legacy flag and name`() {
+        val folder = CodegJson.response.decodeFromString<FolderDetail>(
+            """{"id":1,"name":"Chat","path":"/projects/Chat","kind":"regular","is_chat":true}""",
+        )
+        assertFalse(folder.isChatFolder)
+        assertFalse(folder.copy(kind = "future_kind").isChatFolder)
     }
 
     @Test
@@ -60,6 +84,7 @@ class CodegJsonTest {
         assertEquals(ConversationStatus.IN_PROGRESS, c.status)
         assertEquals(5, c.messageCount)
         assertEquals("Fix auth", c.trimmedTitle)
+        assertEquals(null, c.source) // Older servers need not send a source.
     }
 
     @Test

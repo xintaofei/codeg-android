@@ -11,6 +11,10 @@ package app.codeg.android.core.model
  */
 object FolderVisibility {
 
+    /** Hiding a project also hides its worktrees; keep the full folder map for routing. */
+    fun hiddenIds(folders: List<FolderDetail>, hidden: Set<Int>): Set<Int> =
+        hidden + folders.filter { it.parentId in hidden }.map { it.id }
+
     /** A folder is a worktree of a root repo when it has a parent. */
     fun isWorktree(folder: FolderDetail): Boolean = folder.parentId != null
 

@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.AltRoute
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CreateNewFolder
@@ -26,9 +27,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -60,6 +63,7 @@ import app.codeg.android.core.designsystem.component.LoadingView
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.designsystem.theme.colorFromHex
 import app.codeg.android.core.model.FolderDetail
+import app.codeg.android.core.model.FolderOrdering
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,6 +76,10 @@ fun ProjectListScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var showBrowser by remember { mutableStateOf(false) }
     var showClone by remember { mutableStateOf(false) }
+    var showOrder by remember(ui.hiddenScope) { mutableStateOf(false) }
+    val visibleFolders = remember(ui.folders, ui.hiddenFolderIds, ui.folderOrder) {
+        FolderOrdering.sorted(ui.visibleFolders, ui.folderOrder)
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -79,6 +87,14 @@ fun ProjectListScreen(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.tab_folders)) },
+                actions = {
+                    IconButton(
+                        onClick = { showOrder = true },
+                        enabled = ui.hiddenScope != null && ui.folders.any { !it.isChatFolder },
+                    ) {
+                        Icon(Icons.AutoMirrored.Rounded.Sort, stringResource(R.string.folders_manage))
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     titleContentColor = colors.textPrimary,
@@ -117,27 +133,40 @@ fun ProjectListScreen(
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         InlineError(Icons.Rounded.FolderOpen, stringResource(R.string.projects_load_failed), ui.error!!, viewModel::refresh)
                     }
-                ui.hasLoaded && ui.folders.isEmpty() ->
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        EmptyState(Icons.Rounded.FolderOpen, stringResource(R.string.projects_empty_title), stringResource(R.string.projects_empty_message))
+                ui.hasLoaded && visibleFolders.isEmpty() ->
+                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                        EmptyState(
+                            Icons.Rounded.FolderOpen,
+                            stringResource(if (ui.folders.isNotEmpty()) R.string.folders_all_hidden_title else R.string.projects_empty_title),
+                            stringResource(if (ui.folders.isNotEmpty()) R.string.folders_hidden_hint else R.string.projects_empty_message),
+                        )
+                        if (ui.hiddenFolderIds.isNotEmpty()) {
+                            TextButton(onClick = { showOrder = true }) { Text(stringResource(R.string.folders_manage)) }
+                        }
+                        ui.error?.let { Text(it, color = colors.danger, modifier = Modifier.padding(16.dp)) }
                     }
                 else -> PullToRefreshBox(isRefreshing = ui.refreshing, onRefresh = viewModel::refresh, modifier = Modifier.fillMaxSize()) {
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp),
                     ) {
+                        ui.error?.let { error ->
+                            item { Text(error, color = colors.danger, modifier = Modifier.padding(12.dp)) }
+                        }
                         // One continuous grouped surface holding every folder as a
                         // borderless row split by inset hairlines — the iOS grouped-list
                         // look, matching the Settings tab. Folder counts are small, so a
                         // single card inside the lazy list is fine.
                         item {
                             GlassCard(padding = 0.dp) {
-                                val list = sortedFolders(ui.folders)
+                                val list = visibleFolders
                                 list.forEachIndexed { index, folder ->
                                     if (index > 0) {
                                         HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 66.dp))
                                     }
-                                    FolderRow(folder, ui.runningCount(folder.id)) { onOpenFolder(folder.id) }
+                                    androidx.compose.runtime.key(ui.hiddenScope, folder.id) {
+                                        FolderRow(folder, ui.runningCount(folder.id)) { onOpenFolder(folder.id) }
+                                    }
                                 }
                             }
                         }
@@ -145,6 +174,19 @@ fun ProjectListScreen(
                 }
             }
         }
+    }
+
+    if (showOrder) {
+        FolderManagementSheet(
+            folders = FolderOrdering.sorted(ui.folders.filterNot { it.isChatFolder }, ui.folderOrder),
+            hiddenIds = ui.hiddenFolderIds,
+            onSetHidden = viewModel::setFolderHidden,
+            onMove = viewModel::moveFolder,
+            onReorder = viewModel::reorderFolders,
+            onReset = viewModel::resetFolderOrder,
+            onDismiss = { showOrder = false },
+            error = ui.error,
+        )
     }
 
     if (showBrowser) {
@@ -233,6 +275,3 @@ fun BranchPill(branch: String) {
         )
     }
 }
-
-private fun sortedFolders(folders: List<FolderDetail>): List<FolderDetail> =
-    folders.sortedWith(compareBy({ it.sortOrder }, { it.name.lowercase() }))

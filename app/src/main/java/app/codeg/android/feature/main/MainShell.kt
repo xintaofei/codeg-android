@@ -63,6 +63,8 @@ import app.codeg.android.app.AppViewModel
 import app.codeg.android.core.datastore.ServerProfile
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.feature.activity.ActivityScreen
+import app.codeg.android.feature.downloads.DownloadsScreen
+import app.codeg.android.feature.downloads.FileViewerScreen
 import app.codeg.android.feature.projects.ProjectDetailScreen
 import app.codeg.android.feature.search.SearchScreen
 import app.codeg.android.feature.projects.ProjectListScreen
@@ -70,6 +72,7 @@ import app.codeg.android.feature.server.ServerEditorScreen
 import app.codeg.android.feature.settings.SettingsScreen
 import app.codeg.android.feature.server.ServerListScreen
 import app.codeg.android.feature.sessiondetail.SessionDetailScreen
+import app.codeg.android.feature.sessiondetail.SessionDetailViewModel
 import app.codeg.android.feature.sessions.SessionListScreen
 
 /**
@@ -171,6 +174,25 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
             restoreState = true
         }
     }
+    val sourceEntryIds = remember { mutableMapOf<String, String>() }
+    val sourceKey: (Int) -> String = { id -> "${selectedProfile?.id}\u0000${selectedProfile?.baseUrl}\u0000$id" }
+    val rememberSource: (Int?, String) -> Unit = { id, entryId -> if (id != null) sourceEntryIds[sourceKey(id)] = entryId }
+    val openDownloads: () -> Unit = {
+        if (nav.currentDestination?.route == "download/{downloadKey}" && nav.previousBackStackEntry?.destination?.route == "downloads") {
+            nav.popBackStack()
+        } else nav.navigate("downloads") { launchSingleTop = true }
+    }
+    val openFile: (String) -> Unit = { key ->
+        if (nav.currentDestination?.route == "download/{downloadKey}") nav.popBackStack()
+        nav.navigate("download/$key")
+    }
+    val openSource: (Int) -> Unit = { id ->
+        // A newly created conversation still occupies its original draft destination.
+        val draft = runCatching { nav.getBackStackEntry("$ROUTE_NEW_TASK?folderId={folderId}") }.getOrNull()
+        if (draft != null && draft.id == sourceEntryIds[sourceKey(id)]) {
+            nav.popBackStack(draft.destination.id, false)
+        } else if (!nav.popBackStack("conversation/$id", false)) nav.navigate("conversation/$id") { launchSingleTop = true }
+    }
 
     // Handle incoming codeg:// deep links.
     val pendingLink by app.codeg.android.core.common.DeepLinkBus.pending.collectAsStateWithLifecycle()
@@ -267,6 +289,7 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
                         onManageServers = { nav.navigate(ROUTE_SERVERS) },
                         onOpenConversation = { id -> nav.navigate("conversation/$id") },
                         onNewTask = { nav.navigate(ROUTE_NEW_TASK) },
+                        onSearch = { nav.navigate(HomeTab.SEARCH.route) { launchSingleTop = true } },
                     )
                 }
             }
@@ -280,16 +303,39 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
                 SearchScreen(onOpenConversation = { id -> nav.navigate("conversation/$id") })
             }
             composable(HomeTab.SETTINGS.route) {
-                SettingsScreen()
+                SettingsScreen(onOpenDownloads = openDownloads)
+            }
+
+            composable("downloads") {
+                DownloadsScreen(onBack = { nav.popBackStack() }, onOpenFile = openFile, onOpenSource = openSource,
+                    initialTab = if (nav.previousBackStackEntry?.destination?.route == "download/{downloadKey}") 1 else 0,
+                    onViewRemote = { id, path -> nav.navigate("session-file/$id?path=${android.net.Uri.encode(path)}") })
+            }
+            composable("session-files/{conversationId}", arguments = listOf(navArgument("conversationId") { type = NavType.IntType })) {
+                DownloadsScreen(onBack = { nav.popBackStack() }, onOpenFile = openFile, onOpenSource = openSource,
+                    onViewRemote = { id, path -> nav.navigate("session-file/$id?path=${android.net.Uri.encode(path)}") })
+            }
+            composable("session-file/{conversationId}?path={path}", arguments = listOf(
+                navArgument("conversationId") { type = NavType.IntType }, navArgument("path") { type = NavType.StringType },
+            )) {
+                app.codeg.android.feature.downloads.SessionFileViewerScreen(onBack = { nav.popBackStack() }, onOpenDownload = openFile, onOpenSource = openSource)
+            }
+            composable("download/{downloadKey}", arguments = listOf(navArgument("downloadKey") { type = NavType.StringType })) {
+                FileViewerScreen(onBack = { nav.popBackStack() }, onDownloads = openDownloads, onOpenFile = openFile, onOpenSource = openSource)
             }
 
             composable(
                 route = "conversation/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.IntType }),
-            ) {
+            ) { entry ->
+                val model: SessionDetailViewModel = hiltViewModel()
                 SessionDetailScreen(
+                    viewModel = model,
                     onBack = { nav.popBackStack() },
                     onOpenSession = { folderId -> nav.navigate("$ROUTE_NEW_TASK?folderId=$folderId") },
+                    onOpenDownloads = { val id = model.ui.value.summary?.id; rememberSource(id, entry.id); if (id != null) nav.navigate("session-files/$id") else openDownloads() },
+                    onOpenFile = { key -> rememberSource(model.ui.value.summary?.id, entry.id); openFile(key) },
+                    onViewRemote = { id, path -> rememberSource(id, entry.id); nav.navigate("session-file/$id?path=${android.net.Uri.encode(path)}") },
                 )
             }
             composable(
@@ -300,10 +346,15 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
                         defaultValue = -1
                     },
                 ),
-            ) {
+            ) { entry ->
+                val model: SessionDetailViewModel = hiltViewModel()
                 SessionDetailScreen(
+                    viewModel = model,
                     onBack = { nav.popBackStack() },
                     onOpenSession = { folderId -> nav.navigate("$ROUTE_NEW_TASK?folderId=$folderId") },
+                    onOpenDownloads = { val id = model.ui.value.summary?.id; rememberSource(id, entry.id); if (id != null) nav.navigate("session-files/$id") else openDownloads() },
+                    onOpenFile = { key -> rememberSource(model.ui.value.summary?.id, entry.id); openFile(key) },
+                    onViewRemote = { id, path -> rememberSource(id, entry.id); nav.navigate("session-file/$id?path=${android.net.Uri.encode(path)}") },
                 )
             }
 

@@ -40,6 +40,7 @@ import app.codeg.android.core.designsystem.component.statusColor
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.ConversationSummary
 import androidx.compose.ui.res.stringResource
+import java.time.Instant
 
 /**
  * One conversation row in the Chats / Activity / Search lists: a single
@@ -59,6 +60,7 @@ fun SessionRow(
     folderName: String? = null,
     selected: Boolean = false,
     onTogglePin: (() -> Unit)? = null,
+    timestamp: Instant = conversation.updatedAt,
 ) {
     val colors = CodegTheme.colors
     var menuOpen by remember { mutableStateOf(false) }
@@ -131,7 +133,7 @@ fun SessionRow(
                 LivePulse()
             } else {
                 Text(
-                    text = RelativeTime.compact(conversation.updatedAt),
+                    text = RelativeTime.compact(timestamp),
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.textTertiary,
                 )

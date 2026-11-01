@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.codeg.android.R
 import app.codeg.android.core.data.ServerRepository
+import app.codeg.android.feature.downloads.DownloadRepository
 import app.codeg.android.core.datastore.SelectorPrefs
 import app.codeg.android.core.datastore.SelectorPrefsStore
 import app.codeg.android.core.datastore.ServerProfile
@@ -23,6 +24,7 @@ import android.net.Uri
 import app.codeg.android.core.model.ConversationConnectionInfo
 import app.codeg.android.core.model.ConversationStatus
 import app.codeg.android.core.model.ConversationSummary
+import app.codeg.android.core.model.ConversationDetail
 import app.codeg.android.core.model.FolderDetail
 import app.codeg.android.core.model.FolderVisibility
 import app.codeg.android.core.model.GitBranchList
@@ -54,6 +56,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -89,11 +94,12 @@ private const val STATUS_THINKING = "Thinking…"
  * snapshot live-message reconstruction are simplified; see notes).
  */
 @HiltViewModel
-class SessionDetailViewModel @Inject constructor(
+class SessionDetailViewModel @Inject internal constructor(
     private val repository: ServerRepository,
     private val selectorPrefs: SelectorPrefsStore,
-    savedStateHandle: SavedStateHandle,
+    private val savedStateHandle: SavedStateHandle,
     @ApplicationContext private val appContext: Context,
+    private val downloads: DownloadRepository,
 ) : ViewModel() {
 
     private val conversationIdArg: Int? = savedStateHandle.get<Int>("id")?.takeIf { it >= 0 }
@@ -141,51 +147,107 @@ class SessionDetailViewModel @Inject constructor(
     private var liveBuilder: LiveTurnBuilder? = null
     private var liveFlushScheduled = false
     private var turnBaseline = 0
+    private var loadJob: Job? = null
+    private var refreshJob: Job? = null
+    private var historyCacheSnapshot: String? = null
+    private var olderJob: Job? = null
+    private var historyGeneration = 0
 
     private val _ui = MutableStateFlow(SessionDetailUiState(isNew = conversationIdArg == null))
     val ui: StateFlow<SessionDetailUiState> = _ui.asStateFlow()
+
+    private val activeDownloadKey = MutableStateFlow<String?>(savedStateHandle["active_download_key"])
+    internal val fileDownload = combine(downloads.records, activeDownloadKey) { records, key -> records.firstOrNull { it.key == key } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    internal fun downloadFile(link: String): String? {
+        val selected = profile ?: return null
+        val activeFolderId = _ui.value.summary?.folderId ?: _ui.value.selectedFolderId
+        val currentPath = _ui.value.folderPath ?: allFolders.firstOrNull { it.id == activeFolderId }?.path
+        val key = downloads.start(selected, conversationId, _ui.value.summary?.trimmedTitle.orEmpty(), currentPath, link)
+        activeDownloadKey.value = key
+        savedStateHandle["active_download_key"] = key
+        return key
+    }
+
+    internal fun previewFilePath(link: String): String? {
+        val current = _ui.value.folderPath
+        val target = workspaceFileLink(link, allFolders.map { it.path }, current) ?: return null
+        if (target.path.endsWith(".apk", ignoreCase = true)) return null
+        return target.rootPath.trimEnd('/', '\\') + "/" + target.path
+    }
+
+    internal fun retryFileDownload() { activeDownloadKey.value?.let(downloads::retry) }
+    internal fun dismissFileDownload() {
+        activeDownloadKey.value = null
+        savedStateHandle.remove<String>("active_download_key")
+    }
 
     init {
         load()
     }
 
     fun load() {
-        _ui.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
+        loadJob?.cancel()
+        refreshJob?.cancel()
+        reconcileJob?.cancel()
+        invalidateOlderRequest()
+        _ui.update { it.copy(loading = it.summary == null, refreshing = false, error = null) }
+        loadJob = viewModelScope.launch {
             try {
                 val p = repository.selectedProfile.first() ?: throw IllegalStateException("No server selected")
                 profile = p
                 val c = repository.client(p) ?: throw IllegalStateException("Missing token for this server")
                 client = c
 
-                allFolders = runCatching { c.listFolders() }.getOrDefault(emptyList())
+                val folders = async {
+                    val known = c.cachedSessionList()?.value?.folders ?: runCatching { c.listFolders() }.getOrDefault(emptyList())
+                    if (conversationId != null) {
+                        allFolders = known
+                        _ui.value.summary?.let { summary ->
+                            folder = known.firstOrNull { it.id == summary.folderId }
+                            currentBranch = summary.gitBranch ?: folder?.gitBranch
+                            _ui.update {
+                                it.copy(
+                                    folderName = folder?.let { f -> FolderVisibility.displayName(f, allFolders) },
+                                    folderPath = folder?.path, selectedFolderId = folder?.id, currentBranch = currentBranch,
+                                )
+                            }
+                        }
+                    }
+                    known
+                }
 
                 val id = conversationId
                 if (id != null) {
-                    val detail = c.conversationDetail(id)
-                    agent = detail.summary.agentType
-                    externalId = detail.summary.externalId
+                    val cached = c.cachedConversation(id)
+                    if (cached != null) {
+                        historyCacheSnapshot = cached.snapshot
+                        showLoadedDetail(cached.value, cached.savedAt)
+                    }
+                    val needsNetwork = cached == null || !cached.isFresh() ||
+                        cached.value.summary.status.isLive || cached.value.inFlightUserTurnId != null
+                    if (needsNetwork && cached != null) _ui.update { it.copy(refreshing = true) }
+                    val detail = if (needsNetwork) c.conversationDetail(id).also {
+                        historyCacheSnapshot = null
+                        showLoadedDetail(it)
+                    } else cached!!.value
+                    // Reattach when the server reports the turn live — via an explicit
+                    // in-flight user turn id or the conversation status (iOS parity).
+                    if (needsNetwork && (detail.inFlightUserTurnId != null || detail.summary.status.isLive)) reattachIfLive()
+                    allFolders = folders.await()
                     folder = allFolders.firstOrNull { it.id == detail.summary.folderId }
                     currentBranch = detail.summary.gitBranch ?: folder?.gitBranch
                     _ui.update {
                         it.copy(
-                            loading = false,
-                            summary = detail.summary,
-                            turns = detail.turns,
-                            sessionStats = detail.sessionStats,
-                            agent = detail.summary.agentType,
                             folderName = folder?.let { f -> FolderVisibility.displayName(f, allFolders) },
                             folderPath = folder?.path,
                             selectedFolderId = folder?.id,
                             currentBranch = currentBranch,
-                            isDraftEditable = false,
-                            error = null,
                         )
                     }
-                    // Reattach when the server reports the turn live — via an explicit
-                    // in-flight user turn id or the conversation status (iOS parity).
-                    if (detail.inFlightUserTurnId != null || detail.summary.status.isLive) reattachIfLive()
                 } else {
+                    allFolders = folders.await()
                     // New task: load the draft pickers' sources (top-level open folders +
                     // installed/enabled agents) and pick sensible defaults — honoring a
                     // preselected folder (e.g. a worktree a branch switch opened).
@@ -221,9 +283,133 @@ class SessionDetailViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _ui.update { it.copy(loading = false, error = e.displayMessage()) }
+                _ui.update { it.copy(loading = false, refreshing = false, error = e.displayMessage()) }
             }
         }
+    }
+
+    private fun showLoadedDetail(detail: ConversationDetail, cachedAt: Long? = null) {
+        agent = detail.summary.agentType
+        externalId = detail.summary.externalId
+        currentBranch = detail.summary.gitBranch
+        folder = allFolders.firstOrNull { it.id == detail.summary.folderId }
+        _ui.update {
+            it.copy(
+                loading = false, refreshing = false, summary = detail.summary, turns = detail.turns,
+                historyWindow = TranscriptWindow.from(detail), historyChunkStarts = emptySet(), olderError = null,
+                sessionStats = detail.sessionStats, agent = agent,
+                folderName = folder?.let { f -> FolderVisibility.displayName(f, allFolders) },
+                folderPath = folder?.path, selectedFolderId = folder?.id, currentBranch = currentBranch,
+                isDraftEditable = false, error = null,
+                lastUpdatedAt = cachedAt ?: System.currentTimeMillis(), showingCached = cachedAt != null,
+            )
+        }
+    }
+
+    /** Explicit refresh always reaches the server, preserving the live builder and composer. */
+    fun refresh() {
+        if (_ui.value.refreshing || _ui.value.loading) return
+        if (conversationId == null || client == null) { load(); return }
+        _ui.update { it.copy(refreshing = true, error = null) }
+        refreshJob = viewModelScope.launch {
+            try {
+                loadJob?.join()
+                reconcileJob?.join()
+                val c = client ?: return@launch
+                val id = conversationId ?: return@launch
+                invalidateOlderRequest()
+                val builder = liveBuilder
+                val generation = historyGeneration
+                val detail = fetchDetailWindowed(c, id)
+                if (builder !== liveBuilder || generation != historyGeneration) return@launch
+                historyCacheSnapshot = null
+                _ui.update {
+                    // The live builder owns unconfirmed user/assistant records until reconcile.
+                    val replaceTranscript = it.live == null && it.pendingUserTurns.isEmpty()
+                    it.copy(
+                        turns = if (replaceTranscript) detail.turns else it.turns,
+                        historyWindow = if (replaceTranscript) TranscriptWindow.from(detail) else it.historyWindow,
+                        historyChunkStarts = if (!replaceTranscript || it.historyWindow?.acceptsRefresh(TranscriptWindow.from(detail)) == true) it.historyChunkStarts else emptySet(),
+                        summary = detail.summary, sessionStats = detail.sessionStats ?: it.sessionStats,
+                        olderError = null, lastUpdatedAt = System.currentTimeMillis(), showingCached = false,
+                    )
+                }
+                if (_ui.value.live == null && (detail.inFlightUserTurnId != null || detail.summary.status.isLive)) reattachIfLive()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _ui.update { it.copy(error = e.displayMessage()) } }
+            finally { _ui.update { it.copy(refreshing = false) } }
+        }
+    }
+
+    private fun invalidateOlderRequest() {
+        historyGeneration++
+        olderJob?.cancel()
+        olderJob = null
+        _ui.update { it.copy(loadingOlder = false) }
+    }
+
+    fun loadOlderTurns() {
+        val c = client ?: return
+        val id = conversationId ?: return
+        val state = _ui.value
+        val window = state.historyWindow ?: return
+        if (window.offset == 0 || state.loading || state.refreshing || state.loadingOlder || reconcileJob?.isActive == true) return
+        val generation = historyGeneration
+        _ui.update { it.copy(loadingOlder = true, olderError = null) }
+        olderJob = viewModelScope.launch {
+            try {
+                val cachedPage = historyCacheSnapshot?.let { c.cachedConversationTurns(id, window.offset, it) }
+                val page = if (cachedPage != null && window.prepend(cachedPage, state.turns) != null) cachedPage
+                    else c.conversationTurns(id, window.offset)
+                if (generation != historyGeneration || conversationId != id) return@launch
+                val current = _ui.value
+                val next = window.prepend(page, current.turns)
+                if (current.historyWindow != window || next == null) {
+                    _ui.update { it.copy(loadingOlder = false) }
+                    // History was rewritten; the old index seam is no longer usable.
+                    reconcileAfterMissedLive(resetWindow = true)
+                    return@launch
+                }
+                _ui.update {
+                    it.copy(
+                        turns = page.turns + it.turns,
+                        historyWindow = next,
+                        loadingOlder = false,
+                        // Keep partial replies as separate chunks so prepending cannot re-key
+                        // the Markdown/tool rows the user is currently reading.
+                        historyChunkStarts = it.historyChunkStarts +
+                            listOfNotNull(it.turns.firstOrNull()?.takeIf { t -> t.role == TurnRole.ASSISTANT }?.id),
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (generation == historyGeneration) {
+                    _ui.update { it.copy(loadingOlder = false, olderError = e.displayMessage()) }
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchDetailWindowed(c: CodegClient, id: Int): ConversationDetail {
+        val window = _ui.value.historyWindow ?: return c.conversationDetail(id)
+        val detail = c.conversationDetail(id, fromIndex = window.offset)
+        // Legacy servers return the full history without window metadata.
+        if (detail.turnsOffset == null || window.acceptsRefresh(TranscriptWindow.from(detail))) return detail
+        return c.conversationDetail(id)
+    }
+
+    /** Used by an in-thread jump whose target is above the loaded window. */
+    suspend fun loadThroughTurn(turnId: String): Boolean {
+        while (_ui.value.turns.none { it.id == turnId }) {
+            val offset = _ui.value.historyWindow?.offset ?: return false
+            if (offset == 0 || _ui.value.loading || reconcileJob?.isActive == true) return false
+            if (!_ui.value.loadingOlder) loadOlderTurns()
+            olderJob?.join()
+            val after = _ui.value.historyWindow?.offset ?: return false
+            if (_ui.value.olderError != null || after >= offset) return false
+        }
+        return true
     }
 
     // region Send / cancel
@@ -267,7 +453,7 @@ class SessionDetailViewModel @Inject constructor(
         )
         val builder = LiveTurnBuilder()
         liveBuilder = builder
-        turnBaseline = _ui.value.turns.size
+        turnBaseline = _ui.value.historyWindow?.countIncludingLocal(_ui.value.turns.size) ?: _ui.value.turns.size
         _ui.update {
             it.copy(
                 pendingUserTurns = it.pendingUserTurns + userTurn,
@@ -297,6 +483,7 @@ class SessionDetailViewModel @Inject constructor(
         // that row and not whatever conversationId happens to be by the time the failure lands.
         var createdId: Int? = null
         try {
+            loadJob?.join()
             ensureConversationCreated(text.ifEmpty { "Image" })
             if (createdConversation) createdId = conversationId
             try {
@@ -524,7 +711,7 @@ class SessionDetailViewModel @Inject constructor(
             // streaming; the snapshot's live message + active tools are seeded on arrival.
             val builder = LiveTurnBuilder()
             liveBuilder = builder
-            turnBaseline = _ui.value.turns.size
+            turnBaseline = _ui.value.historyWindow?.countIncludingLocal(_ui.value.turns.size) ?: _ui.value.turns.size
             _ui.update { it.copy(isInFlight = true, sendStatus = "Reattaching…", live = builder.snapshot()) }
             try {
                 openStream(found.connectionId, seedOnAttach = true)
@@ -757,13 +944,35 @@ class SessionDetailViewModel @Inject constructor(
 
     /** Server reported a live turn at load but no in-flight state surfaced — refetch so
      *  the transcript shows the final reply rather than the beat-stale load. */
-    private fun reconcileAfterMissedLive() {
+    private fun reconcileAfterMissedLive(resetWindow: Boolean = false) {
         val c = client ?: return
         val id = conversationId ?: return
-        viewModelScope.launch {
-            runCatching { c.conversationDetail(id) }.getOrNull()?.let { d ->
+        val builder = liveBuilder
+        invalidateOlderRequest()
+        reconcileJob?.cancel()
+        reconcileJob = viewModelScope.launch {
+            try {
+                val d = if (resetWindow) c.conversationDetail(id) else fetchDetailWindowed(c, id)
+                if (liveBuilder !== builder || conversationId != id) return@launch
+                historyCacheSnapshot = null
                 _ui.update {
-                    it.copy(turns = d.turns, sessionStats = d.sessionStats ?: it.sessionStats, summary = d.summary)
+                    it.copy(
+                        turns = d.turns,
+                        historyWindow = TranscriptWindow.from(d),
+                        historyChunkStarts = if (it.historyWindow?.acceptsRefresh(TranscriptWindow.from(d)) == true) {
+                            it.historyChunkStarts
+                        } else emptySet(),
+                        olderError = null,
+                        sessionStats = d.sessionStats ?: it.sessionStats,
+                        summary = d.summary,
+                        lastUpdatedAt = System.currentTimeMillis(), showingCached = false,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (resetWindow && liveBuilder === builder) {
+                    _ui.update { it.copy(olderError = e.displayMessage()) }
                 }
             }
         }
@@ -883,17 +1092,20 @@ class SessionDetailViewModel @Inject constructor(
         // live builder while we poll, bail rather than wiping the newer turn's state (its
         // pending user turn, live reply, in-flight flag). Mirrors iOS's `liveTurn === live`.
         val builder = liveBuilder
+        invalidateOlderRequest()
         reconcileJob?.cancel()
         reconcileJob = viewModelScope.launch {
             repeat(5) { attempt ->
                 delay(if (attempt == 0) 300 else 600)
                 if (liveBuilder !== builder) return@launch
-                val detail = runCatching { c.conversationDetail(id) }.getOrNull() ?: return@repeat
+                val detail = runCatching { fetchDetailWindowed(c, id) }.getOrNull() ?: return@repeat
+                if (liveBuilder !== builder) return@launch
                 val last = detail.turns.lastOrNull()
-                val advanced = detail.turns.size > turnBaseline &&
+                val advanced = (detail.turnsTotal ?: detail.turns.size) > turnBaseline &&
                     last?.role == TurnRole.ASSISTANT && last.blocks.isNotEmpty()
                 if (advanced) {
                     if (liveBuilder !== builder) return@launch
+                    historyCacheSnapshot = null
                     // This turn ended without a `turn_complete` of its own (a dead
                     // connection, an exhausted reconnect), so `finalizeTurn` never ran:
                     // resolve its parked plan-revision notes here instead of leaving them
@@ -903,8 +1115,14 @@ class SessionDetailViewModel @Inject constructor(
                     _ui.update {
                         it.copy(
                             turns = detail.turns,
+                            historyWindow = TranscriptWindow.from(detail),
+                            historyChunkStarts = if (it.historyWindow?.acceptsRefresh(TranscriptWindow.from(detail)) == true) {
+                                it.historyChunkStarts
+                            } else emptySet(),
+                            olderError = null,
                             sessionStats = detail.sessionStats ?: it.sessionStats,
                             summary = detail.summary,
+                            lastUpdatedAt = System.currentTimeMillis(), showingCached = false,
                             pendingUserTurns = emptyList(),
                             live = null,
                             liveFromReattach = false,
@@ -1200,6 +1418,7 @@ class SessionDetailViewModel @Inject constructor(
     /** List the folder's branches for the picker; refreshes the current-branch
      *  label opportunistically. Null when there's no git context / on failure. */
     suspend fun loadBranches(): GitBranchList? {
+        loadJob?.join()
         val c = client ?: return null
         val path = folder?.path ?: return null
         return try {
@@ -1326,6 +1545,7 @@ class SessionDetailViewModel @Inject constructor(
      *  catalog (slower) and pre-selects the user's remembered pick (validated against the
      *  catalog), falling back to the catalog's fresh-session defaults. iOS parity. */
     suspend fun loadAgentOptions(): AgentOptionsData {
+        loadJob?.join()
         val c = client ?: return AgentOptionsData()
         val convId = conversationId
         val snapshot = if (convId != null) runCatching { c.sessionSnapshotByConversation(convId) }.getOrNull() else null
@@ -1530,6 +1750,9 @@ sealed interface BranchSwitchOutcome {
 data class SessionDetailUiState(
     val isNew: Boolean,
     val loading: Boolean = false,
+    val refreshing: Boolean = false,
+    val lastUpdatedAt: Long? = null,
+    val showingCached: Boolean = false,
     val summary: ConversationSummary? = null,
     val folderName: String? = null,
     val folderPath: String? = null,
@@ -1539,6 +1762,10 @@ data class SessionDetailUiState(
     val availableFolders: List<FolderDetail> = emptyList(),
     val availableAgents: List<AgentType> = emptyList(),
     val turns: List<MessageTurn> = emptyList(),
+    val historyWindow: TranscriptWindow? = null,
+    val historyChunkStarts: Set<String> = emptySet(),
+    val loadingOlder: Boolean = false,
+    val olderError: String? = null,
     val pendingUserTurns: List<MessageTurn> = emptyList(),
     val live: LiveTurnState? = null,
     /** The live turn was rebuilt from a reattach snapshot (owns the in-flight reply). */

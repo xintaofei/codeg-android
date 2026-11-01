@@ -25,6 +25,21 @@ class TranscriptTimelineTest {
         MessageTurn(id, TurnRole.ASSISTANT, blocks, Instant.EPOCH, usage = usage)
 
     @Test
+    fun `prepending a partial round preserves existing row keys and content`() {
+        val tail = listOf(assistant("a2", listOf(ContentBlock.Text("reading here\n\nnext paragraph"))))
+        val before = TranscriptTimeline.buildPersisted(tail, emptyList(), agent)
+        val full = listOf(user("u1", "hi"), assistant("a1", listOf(ContentBlock.Text("earlier content")))) + tail
+        val after = TranscriptTimeline.buildPersisted(full, emptyList(), agent, chunkStarts = setOf("a2"))
+        before.filter { it.content !is NodeContent.Footer }.forEach { old ->
+            val kept = after.single { it.id == old.id }
+            assertEquals(old.content, kept.content)
+        }
+        assertEquals(after.size, after.map { it.id }.toSet().size)
+        val tailFooter = after.single { it.id == "a2#footer" }.content as NodeContent.Footer
+        assertEquals("u1", tailFooter.questionId)
+    }
+
+    @Test
     fun `the rail terminates at its endpoints`() {
         val nodes = TranscriptTimeline.build(listOf(user("u1", "hi")), emptyList(), null, agent)
         assertTrue(nodes.isNotEmpty())
