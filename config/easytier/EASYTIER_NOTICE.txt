@@ -1,0 +1,14 @@
+Optional EasyTier native transport
+
+This optional build uses EasyTier, Copyright the EasyTier contributors,
+licensed under the GNU Lesser General Public License version 3 (LGPL-3.0).
+The LGPL incorporates terms of the GNU General Public License version 3;
+both license texts accompany this notice.
+
+Source: https://github.com/EasyTier/EasyTier
+Revision: 4a10d1c2b93beae60ff0d6d3329463c1ad6928b2
+Local change: disable the Android JNI logger (LevelFilter::Debug -> Off).
+Build/replacement instructions: docs/easytier-native-build.md
+
+EasyTier's Rust dependencies retain their respective upstream licenses and
+copyright notices; see the pinned source and Cargo.lock for the exact graph.

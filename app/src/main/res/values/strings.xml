@@ -849,4 +849,17 @@
     <string name="cc_test_message_sent">Test message sent.</string>
     <string name="cc_token_removed">Token removed.</string>
     <string name="mcp_spec_invalid_json">Spec is not valid JSON</string>
+
+    <!-- Optional EasyTier transport -->
+    <string name="mesh_use">Connect through EasyTier</string>
+    <string name="mesh_description">Enter your own mesh settings. Only Codeg traffic is forwarded; no device-wide VPN is created. Use an HTTP URL with the server’s mesh IPv4 address and port.</string>
+    <string name="mesh_unavailable">This build does not include EasyTier. Install an EasyTier-enabled build, or turn this option off to use a directly reachable URL.</string>
+    <string name="mesh_network">Network name</string>
+    <string name="mesh_password">Network password</string>
+    <string name="mesh_peers">Peers (tcp://host:port or udp://host:port, one per line)</string>
+    <string name="mesh_ipv4">Virtual IPv4 (optional; empty uses DHCP)</string>
+    <string name="mesh_connecting">Connecting to %1$s…</string>
+    <string name="mesh_connect_failed">Could not connect to %1$s. Check the mesh settings, peer reachability, and server token.</string>
+    <string name="mesh_retry">Retry</string>
+    <string name="mesh_choose_server">Choose server</string>
 </resources>

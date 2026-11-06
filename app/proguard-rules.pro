@@ -18,3 +18,6 @@
 -dontwarn org.slf4j.**
 -dontwarn io.ktor.**
 -keep class io.ktor.** { *; }
+
+# EasyTier exports JNI symbols using this exact class and native method names.
+-keep class com.easytier.jni.EasyTierJNI { native <methods>; }

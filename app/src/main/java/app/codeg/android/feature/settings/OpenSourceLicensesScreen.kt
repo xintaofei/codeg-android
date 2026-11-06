@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.codeg.android.R
+import app.codeg.android.BuildConfig
 import app.codeg.android.core.designsystem.theme.CodegTheme
 
 private const val NoticeAsset = "NOTICE_BUNDLE.txt"
@@ -33,7 +34,15 @@ fun OpenSourceLicensesScreen() {
     val colors = CodegTheme.colors
     val chunks = remember(context) {
         runCatching {
-            context.assets.open(NoticeAsset).bufferedReader().use { it.readText() }
+            buildString {
+                append(context.assets.open(NoticeAsset).bufferedReader().use { it.readText() })
+                if (BuildConfig.EASYTIER_ENABLED) {
+                    for (asset in listOf("EASYTIER_NOTICE.txt", "EasyTier-LGPL-3.0.txt", "GPL-3.0.txt", "THIRD_PARTY_NOTICES.txt")) {
+                        appendLine(); appendLine(asset)
+                        append(context.assets.open(asset).bufferedReader().use { it.readText() })
+                    }
+                }
+            }
         }.getOrNull()?.lineSequence()?.chunked(LinesPerChunk)?.map { lines ->
             lines.joinToString("\n")
         }?.toList().orEmpty()

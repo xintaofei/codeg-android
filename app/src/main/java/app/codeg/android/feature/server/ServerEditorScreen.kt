@@ -2,6 +2,11 @@ package app.codeg.android.feature.server
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Switch
+import androidx.compose.ui.Alignment
+import app.codeg.android.BuildConfig
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -79,6 +84,22 @@ fun ServerEditorScreen(
                 mono = true,
             )
 
+            if (BuildConfig.EASYTIER_ENABLED || viewModel.useMesh) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.mesh_use), Modifier.weight(1f))
+                    Switch(checked = viewModel.useMesh, onCheckedChange = viewModel::onUseMeshChange,
+                        enabled = BuildConfig.EASYTIER_ENABLED || viewModel.useMesh)
+                }
+                if (viewModel.useMesh) {
+                    Text(stringResource(if (BuildConfig.EASYTIER_ENABLED) R.string.mesh_description else R.string.mesh_unavailable),
+                        style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
+                    CodegTextField(value = viewModel.networkName, onValueChange = viewModel::onNetworkNameChange, label = stringResource(R.string.mesh_network))
+                    SecretField(value = viewModel.networkPassword, onValueChange = viewModel::onNetworkPasswordChange, label = stringResource(R.string.mesh_password))
+                    CodegTextField(value = viewModel.peers, onValueChange = viewModel::onPeersChange, label = stringResource(R.string.mesh_peers), mono = true, singleLine = false)
+                    CodegTextField(value = viewModel.ipv4, onValueChange = viewModel::onIpv4Change, label = stringResource(R.string.mesh_ipv4), mono = true)
+                }
+            }
+
             SectionHeader(stringResource(R.string.server_section_auth))
             SecretField(
                 value = viewModel.token,
@@ -90,7 +111,7 @@ fun ServerEditorScreen(
                 text = stringResource(R.string.server_test_connection),
                 onClick = viewModel::testConnection,
                 loading = viewModel.test is TestState.Testing,
-                enabled = viewModel.url.isNotBlank() && viewModel.token.isNotBlank(),
+                enabled = viewModel.canTest,
             )
             when (val test = viewModel.test) {
                 is TestState.Success -> Text(
