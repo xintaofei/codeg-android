@@ -2,6 +2,8 @@ import com.github.jk1.license.render.InventoryMarkdownReportRenderer
 import com.github.jk1.license.render.JsonReportRenderer
 import com.github.jk1.license.render.ReportRenderer
 import java.util.Properties
+import java.security.MessageDigest
+import groovy.json.JsonSlurper
 import org.gradle.api.tasks.Delete
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.Sync
@@ -28,6 +30,8 @@ val checkedInThirdPartyLicensesDir = rootProject.layout.projectDirectory.dir("th
 val generatedThirdPartyLicensesDir = layout.buildDirectory.dir("reports/dependency-license")
 val supplementalLicensesDir = rootProject.layout.projectDirectory.dir("config/licenses")
 
+val easyTierEnabled = providers.gradleProperty("easyTier").map(String::toBoolean).getOrElse(false)
+
 android {
     namespace = "app.codeg.android"
     compileSdk = 36
@@ -38,6 +42,13 @@ android {
         targetSdk = 36
         versionCode = 2
         versionName = "1.0.1"
+        buildConfigField("boolean", "EASYTIER_ENABLED", easyTierEnabled.toString())
+        if (easyTierEnabled) {
+            // Other AndroidX dependencies ship native libraries too. Restrict the whole APK
+            // to the ABIs that also have EasyTier, so Android cannot select a partial ABI.
+            ndk.abiFilters += rootProject.file("build/easytier/jniLibs")
+                .listFiles().orEmpty().filter(File::isDirectory).map(File::getName)
+        }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -92,6 +103,11 @@ android {
 
     sourceSets {
         getByName("main").assets.srcDir(checkedInThirdPartyLicensesDir)
+        if (easyTierEnabled) {
+            getByName("main").jniLibs.srcDir(rootProject.file("build/easytier/jniLibs"))
+            getByName("main").assets.srcDir(rootProject.file("config/easytier"))
+            getByName("main").assets.srcDir(rootProject.file("build/easytier/licenses"))
+        }
     }
 
     packaging {
@@ -287,4 +303,43 @@ dependencies {
     // --- Instrumentation tests ---
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+}
+
+// Native artifacts are built from the pinned public source by the explicit script.
+// Never silently ship an enabled picker without its transport implementation.
+if (easyTierEnabled) {
+    tasks.named("preBuild") {
+        doFirst {
+            val libraries = rootProject.file("build/easytier/jniLibs")
+                .walkTopDown().filter { it.name == "libeasytier_android_jni.so" }.toList()
+            check(libraries.isNotEmpty()) {
+                "EasyTier is enabled but its JNI library is missing. Run scripts/build-easytier.py first."
+            }
+            val metadata = JsonSlurper().parse(rootProject.file("build/easytier/build-info.json")) as Map<*, *>
+            val records = metadata["libraries"] as List<*>
+            val hashes = records.associate { item ->
+                val record = item as Map<*, *>
+                record["abi"] as String to record["sha256"] as String
+            }
+            check(libraries.map { it.parentFile.name }.toSet() == hashes.keys) {
+                "EasyTier ABI outputs do not match this build's manifest. Rebuild the complete requested ABI set."
+            }
+            libraries.forEach { library ->
+                val digest = MessageDigest.getInstance("SHA-256").digest(library.readBytes())
+                    .joinToString("") { "%02x".format(it) }
+                check(digest == hashes[library.parentFile.name]) { "EasyTier library differs from its build manifest." }
+            }
+            val notices = JsonSlurper().parse(rootProject.file("build/easytier/licenses/EASYTIER_DEPENDENCIES.json")) as Map<*, *>
+            val targets = mapOf("arm64-v8a" to "aarch64-linux-android", "x86_64" to "x86_64-linux-android",
+                "armeabi-v7a" to "armv7-linux-androideabi", "x86" to "i686-linux-android")
+            check((notices["targets"] as List<*>).toSet() == hashes.keys.map { targets.getValue(it) }.toSet() &&
+                (notices["packages"] as List<*>).isNotEmpty() && (notices["missing_notice_packages"] as List<*>).isEmpty() &&
+                (notices["pointer_notice_files"] as List<*>).isEmpty()) {
+                "EasyTier dependency notices are incomplete or belong to another ABI set."
+            }
+            check(rootProject.file("build/easytier/licenses/THIRD_PARTY_NOTICES.txt").isFile) {
+                "EasyTier dependency notices are missing. Run scripts/easytier-license-report.py first."
+            }
+        }
+    }
 }

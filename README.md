@@ -67,6 +67,16 @@ release APK.
 2. Open the Android app and add a server profile.
 3. Enter the server URL and token, test the connection, and save the profile.
 
+The selected server is restored automatically the next time the app starts.
+An optional EasyTier-enabled build also supports a userspace mesh connection per
+profile: enter your network name, password, peer URLs, and the Codeg server's mesh
+HTTP address. The password is encrypted separately from the profile. A connection
+screen offers retry and server selection if the mesh cannot reach Codeg.
+
+The standard build stays a direct client; it does not display an unavailable mesh
+option. See [the optional native build instructions](docs/easytier-native-build.md)
+for `-PeasyTier=true`, supported ABIs, source pinning, and dependency notices.
+
 For a server on the same local network, a URL might look like
 `http://192.168.1.10:3080`.
 

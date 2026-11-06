@@ -5,6 +5,10 @@ on:
     tags:
       - "v*.*.*"
 
+# Maintainers may opt the official APK into EasyTier without changing normal builds.
+env:
+  ORG_GRADLE_PROJECT_easyTier: ${{ vars.CODEG_EASYTIER == 'true' && 'true' || 'false' }}
+
 permissions:
   contents: write
 
@@ -15,7 +19,7 @@ concurrency:
 jobs:
   android:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ vars.CODEG_EASYTIER == 'true' && 120 || 30 }}
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -33,6 +37,19 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+
+      - name: Build optional EasyTier transport and notices
+        if: vars.CODEG_EASYTIER == 'true'
+        shell: bash
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup default 1.95.0
+          rustup target add aarch64-linux-android x86_64-linux-android armv7-linux-androideabi i686-linux-android
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          sdkmanager "ndk;27.2.12479018"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          python3 scripts/build-easytier.py --abi arm64-v8a --abi x86_64 --abi armeabi-v7a --abi x86
 
       - name: Validate release tag
         shell: bash
@@ -114,6 +131,13 @@ jobs:
             sha256sum "$(basename "$release_apk")" > "$(basename "$checksum")"
           )
           printf 'apk=%s\nchecksum=%s\n' "$release_apk" "$checksum" >> "$GITHUB_OUTPUT"
+          if [[ "$ORG_GRADLE_PROJECT_easyTier" == true ]]; then
+            native_source="$release_dir/easytier-corresponding-source.tar.gz"
+            native_notices="$release_dir/easytier-dependency-notices.tar.gz"
+            tar --exclude=.git -czf "$native_source" -C build/easytier/source .
+            tar -czf "$native_notices" -C build/easytier licenses build-info.json
+            printf 'native_source=%s\nnative_notices=%s\n' "$native_source" "$native_notices" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Remove signing material
         if: always()
@@ -126,6 +150,8 @@ jobs:
           path: |
             ${{ steps.package.outputs.apk }}
             ${{ steps.package.outputs.checksum }}
+            ${{ steps.package.outputs.native_source }}
+            ${{ steps.package.outputs.native_notices }}
           if-no-files-found: error
           retention-days: 30
 
@@ -153,8 +179,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           APK_PATH: ${{ steps.package.outputs.apk }}
           CHECKSUM_PATH: ${{ steps.package.outputs.checksum }}
+          NATIVE_SOURCE: ${{ steps.package.outputs.native_source }}
+          NATIVE_NOTICES: ${{ steps.package.outputs.native_notices }}
         run: |
+          native_assets=()
+          if [[ -n "$NATIVE_SOURCE" ]]; then
+            native_assets+=("$NATIVE_SOURCE#EasyTier corresponding source" "$NATIVE_NOTICES#EasyTier dependency notices")
+          fi
           gh release upload "$GITHUB_REF_NAME" \
+            "${native_assets[@]}" \
             "$APK_PATH#Android APK" \
             "$CHECKSUM_PATH#SHA-256 checksum" \
             --repo "$GITHUB_REPOSITORY" \

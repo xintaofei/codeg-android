@@ -1,6 +1,19 @@
 package app.codeg.android.app
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.key
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+import app.codeg.android.R
+import app.codeg.android.core.datastore.ServerProfile
+import app.codeg.android.feature.server.ServerListScreen
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
@@ -33,9 +46,16 @@ fun CodegApp(appViewModel: AppViewModel = hiltViewModel()) {
     CodegTheme(themeMode = settings.themeMode, accentId = settings.accentId) {
         CodegBackground {
             val servers by appViewModel.servers.collectAsStateWithLifecycle()
-            when (val list = servers) {
-                null -> Splash()
-                else -> if (list.isEmpty()) OnboardingRoot() else MainShell(appViewModel, list)
+            val connection by appViewModel.connection.collectAsStateWithLifecycle()
+            val managing by appViewModel.managingServers.collectAsStateWithLifecycle()
+            when {
+                servers == null -> Splash()
+                servers!!.isEmpty() -> OnboardingRoot()
+                managing -> ServerManagement(appViewModel, servers!!)
+                connection is ConnectionState.Ready -> key((connection as ConnectionState.Ready).profile) {
+                    MainShell(appViewModel, servers!!)
+                }
+                else -> ConnectionGate(connection, appViewModel)
             }
         }
     }
@@ -59,5 +79,44 @@ private fun OnboardingRoot() {
 private fun Splash() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         CircularProgressIndicator(color = CodegTheme.colors.accent)
+    }
+}
+
+/** A failed or slow mesh connection never traps the user away from server management. */
+@Composable
+private fun ConnectionGate(state: ConnectionState, model: AppViewModel) {
+    val failed = state is ConnectionState.Failed
+    val profile = when (state) {
+        is ConnectionState.Connecting -> state.profile
+        is ConnectionState.Failed -> state.profile
+        else -> null
+    }
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            if (!failed) CircularProgressIndicator()
+            Text(stringResource(if (failed) R.string.mesh_connect_failed else R.string.mesh_connecting, profile?.name.orEmpty()))
+            if (failed) TextButton(onClick = model::retryConnection) { Text(stringResource(R.string.mesh_retry)) }
+            TextButton(onClick = { model.managingServers.value = true }) { Text(stringResource(R.string.mesh_choose_server)) }
+        }
+    }
+}
+
+@Composable
+private fun ServerManagement(model: AppViewModel, servers: List<ServerProfile>) {
+    val nav = rememberNavController()
+    val selected by model.selectedProfile.collectAsStateWithLifecycle()
+    NavHost(navController = nav, startDestination = "servers") {
+        composable("servers") {
+            ServerListScreen(
+                servers = servers, selectedId = selected?.id,
+                onSelect = model::selectServer, onDelete = model::deleteServer,
+                onAdd = { nav.navigate("editor") },
+                onEdit = { nav.navigate("editor?serverId=$it") },
+                onBack = { model.managingServers.value = false },
+            )
+        }
+        composable("editor?serverId={serverId}", arguments = listOf(navArgument("serverId") {
+            type = NavType.StringType; nullable = true; defaultValue = null
+        })) { ServerEditorScreen(onDone = { nav.popBackStack() }) }
     }
 }

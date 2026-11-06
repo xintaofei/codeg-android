@@ -12,4 +12,14 @@ data class ServerProfile(
     val id: String,
     val name: String,
     val baseUrl: String,
+    val mesh: MeshSettings? = null,
+    val connectionRevision: String = "",
+)
+
+/** Public connection settings only; the mesh password lives in SecretStore. */
+@Serializable
+data class MeshSettings(
+    val networkName: String,
+    val peers: List<String>,
+    val ipv4: String = "",
 )

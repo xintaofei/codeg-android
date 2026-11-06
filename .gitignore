@@ -29,3 +29,7 @@ service-account*.json
 # Release signing — local only, never commit
 /codeg-release.jks
 /keystore.properties
+
+# Local Python verification helpers
+__pycache__/
+*.pyc

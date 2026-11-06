@@ -1,0 +1,131 @@
+[
+  {
+    "path": "boringtun-easytier-0.6.1/LICENSE.md",
+    "source": "https://raw.githubusercontent.com/EasyTier/boringtun/431e8c49567c7c870e96d2d07770cff078e010cb/LICENSE.md",
+    "sha256": "6dbef24708bad8c727bd80cca58ba8aa1637cdcb2cc6e9a31ea49235717e9391"
+  },
+  {
+    "path": "crc-catalog-2.4.0/LICENSE-APACHE",
+    "source": "https://raw.githubusercontent.com/akhilles/crc-catalog/b500ea693c552f8d946e290722a7b3ee8b9a7ee2/LICENSES/Apache-2.0.txt",
+    "sha256": "d3cdb764b98283ee7c3a3cea8d374e2a2957322374378d1f3263f4d512741fc3"
+  },
+  {
+    "path": "crc-catalog-2.4.0/LICENSE-MIT",
+    "source": "https://raw.githubusercontent.com/akhilles/crc-catalog/b500ea693c552f8d946e290722a7b3ee8b9a7ee2/LICENSES/MIT.txt",
+    "sha256": "5ef8fcfb6cccec8fcae043c834099a60c8b7406408db576e026d2b7e67dc5cf5"
+  },
+  {
+    "path": "defmt-0.3.8/LICENSE-APACHE",
+    "source": "https://raw.githubusercontent.com/knurling-rs/defmt/3d9da813629bda34cf02429c1f0e4471f2196c23/LICENSE-APACHE",
+    "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+  },
+  {
+    "path": "defmt-0.3.8/LICENSE-MIT",
+    "source": "https://raw.githubusercontent.com/knurling-rs/defmt/3d9da813629bda34cf02429c1f0e4471f2196c23/LICENSE-MIT",
+    "sha256": "30fefc3a7d6a0041541858293bcbea2dde4caa4c0a5802f996a7f7e8c0085652"
+  },
+  {
+    "path": "defmt-macros-0.3.9/LICENSE-APACHE",
+    "source": "https://raw.githubusercontent.com/knurling-rs/defmt/7265708107da961a3a976b6fd6b8af7f12c5d512/LICENSE-APACHE",
+    "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+  },
+  {
+    "path": "defmt-macros-0.3.9/LICENSE-MIT",
+    "source": "https://raw.githubusercontent.com/knurling-rs/defmt/7265708107da961a3a976b6fd6b8af7f12c5d512/LICENSE-MIT",
+    "sha256": "30fefc3a7d6a0041541858293bcbea2dde4caa4c0a5802f996a7f7e8c0085652"
+  },
+  {
+    "path": "defmt-parser-0.3.4/LICENSE-APACHE",
+    "source": "https://raw.githubusercontent.com/knurling-rs/defmt/f149fa8f77c454b31a3529c65224ecea7f818921/LICENSE-APACHE",
+    "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+  },
+  {
+    "path": "defmt-parser-0.3.4/LICENSE-MIT",
+    "source": "https://raw.githubusercontent.com/knurling-rs/defmt/f149fa8f77c454b31a3529c65224ecea7f818921/LICENSE-MIT",
+    "sha256": "30fefc3a7d6a0041541858293bcbea2dde4caa4c0a5802f996a7f7e8c0085652"
+  },
+  {
+    "path": "encoding-utils-0.1.0/NOTICE-MIT.txt",
+    "source": "Published crate Cargo.toml + standard MIT permission terms; see notice for provenance",
+    "sha256": "4b6b918a52b17adf57f5eefbeeba4e136c51b8965d03d7eb42f79581b5cb022c"
+  },
+  {
+    "path": "guarden-0.2.0/LICENSE",
+    "source": "https://raw.githubusercontent.com/ZnqbuZ/guarden/7d8ff644b4e276c6a4c725b90a6ba3649338db53/LICENSE",
+    "sha256": "f6dede52f74e360219bc8e7ba1155dbcf4f34a9c1b77612aa9bc41d1a3a04fad",
+    "resolved_from": "guarden/LICENSE -> ../LICENSE; revision from published .cargo_vcs_info.json"
+  },
+  {
+    "path": "guarden-macros-0.2.0/LICENSE",
+    "source": "https://raw.githubusercontent.com/ZnqbuZ/guarden/7d8ff644b4e276c6a4c725b90a6ba3649338db53/LICENSE",
+    "sha256": "f6dede52f74e360219bc8e7ba1155dbcf4f34a9c1b77612aa9bc41d1a3a04fad",
+    "resolved_from": "guarden-macros/LICENSE -> ../LICENSE; revision from published .cargo_vcs_info.json"
+  },
+  {
+    "path": "pbjson-0.9.0/LICENSE",
+    "source": "https://raw.githubusercontent.com/influxdata/pbjson/48ee5989564e0ace82ad71b87736d3d1b2e0e1cd/LICENSE",
+    "sha256": "791a00933f2ea7e512856361e026998362241c3918d7be948c24d29441033b55"
+  },
+  {
+    "path": "pbjson-build-0.9.0/LICENSE",
+    "source": "https://raw.githubusercontent.com/influxdata/pbjson/48ee5989564e0ace82ad71b87736d3d1b2e0e1cd/LICENSE",
+    "sha256": "791a00933f2ea7e512856361e026998362241c3918d7be948c24d29441033b55"
+  },
+  {
+    "path": "prost-wkt-0.7.1/LICENSE",
+    "source": "https://raw.githubusercontent.com/fdeantoni/prost-wkt/781786cf8efff7fb30a31cf102985db2e56f6806/LICENSE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "path": "prost-wkt-build-0.7.1/LICENSE",
+    "source": "https://raw.githubusercontent.com/fdeantoni/prost-wkt/781786cf8efff7fb30a31cf102985db2e56f6806/LICENSE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "path": "prost-wkt-types-0.7.1/LICENSE",
+    "source": "https://raw.githubusercontent.com/fdeantoni/prost-wkt/781786cf8efff7fb30a31cf102985db2e56f6806/LICENSE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "path": "rust-i18n-macro-3.1.2/LICENSE",
+    "source": "https://raw.githubusercontent.com/longbridgeapp/rust-i18n/84ac7dbb598f39901cd5fbc511664ae3cc36b4c1/LICENSE",
+    "sha256": "d6fde6c28ecbccfc7f6d97c0badbb14bbea2cc8f5e81a8c1537204bdfed9a6d5"
+  },
+  {
+    "path": "rust-i18n-support-3.1.2/LICENSE",
+    "source": "https://raw.githubusercontent.com/longbridgeapp/rust-i18n/84ac7dbb598f39901cd5fbc511664ae3cc36b4c1/LICENSE",
+    "sha256": "d6fde6c28ecbccfc7f6d97c0badbb14bbea2cc8f5e81a8c1537204bdfed9a6d5"
+  },
+  {
+    "path": "rustls-platform-verifier-android-0.1.1/LICENSE-APACHE",
+    "source": "https://raw.githubusercontent.com/rustls/rustls-platform-verifier/670de1a872b68c2a0a31a6c491e04bc95d5de5e8/LICENSE-APACHE",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "resolved_from": "android-release-support/LICENSE-APACHE -> ../LICENSE-APACHE"
+  },
+  {
+    "path": "rustls-platform-verifier-android-0.1.1/LICENSE-MIT",
+    "source": "https://raw.githubusercontent.com/rustls/rustls-platform-verifier/670de1a872b68c2a0a31a6c491e04bc95d5de5e8/LICENSE-MIT",
+    "sha256": "1c7cf76689c837a68ed8d704994e52a0f2940c087958f860d17f3186afbdcc0c",
+    "resolved_from": "android-release-support/LICENSE-MIT -> ../LICENSE-MIT"
+  },
+  {
+    "path": "seahash-4.1.0/NOTICE-MIT.txt",
+    "source": "Published crate Cargo.toml + standard MIT permission terms; see notice for provenance",
+    "sha256": "fdd8bd91fae494d314ca8538f2897e7c5e03cfd7473c05d0286ab14fa2802364"
+  },
+  {
+    "path": "tun-easytier-1.1.1/LICENSE-WTFPL",
+    "source": "https://github.com/EasyTier/rust-tun/blob/12378839e7985283df0e4fb536b7137230356db5/src/lib.rs#L1-L13",
+    "sha256": "6d54c2b49221654a95efb0a3a3521f0e8dca2575e8123ce20e1a1f32e72afd33"
+  },
+  {
+    "path": "yasna-0.5.2/LICENSE-APACHE",
+    "source": "https://raw.githubusercontent.com/qnighy/yasna.rs/b7e65f9a4c317494cce2d18ea02b3d6eaaea7985/LICENSE-APACHE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "path": "yasna-0.5.2/LICENSE-MIT",
+    "source": "https://raw.githubusercontent.com/qnighy/yasna.rs/b7e65f9a4c317494cce2d18ea02b3d6eaaea7985/LICENSE-MIT",
+    "sha256": "2a7df90e60fd5512b8bca35d3ce90e068f21c52d962855053fd1d9e2e7ca0f16"
+  }
+]

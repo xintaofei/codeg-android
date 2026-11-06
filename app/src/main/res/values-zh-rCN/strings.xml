@@ -836,4 +836,17 @@
     <string name="cc_test_message_sent">测试消息已发送。</string>
     <string name="cc_token_removed">令牌已移除。</string>
     <string name="mcp_spec_invalid_json">规格不是有效的 JSON</string>
+
+    <!-- Optional EasyTier transport -->
+    <string name="mesh_use">通过 EasyTier 连接</string>
+    <string name="mesh_description">填写自己的组网配置。仅转发 Codeg 流量，不创建全局 VPN。服务器地址请填写包含组网 IPv4 和端口的 HTTP 地址。</string>
+    <string name="mesh_unavailable">此构建未包含 EasyTier。请安装支持 EasyTier 的构建，或关闭此选项并使用可以直接访问的服务器地址。</string>
+    <string name="mesh_network">网络名称</string>
+    <string name="mesh_password">网络密码</string>
+    <string name="mesh_peers">节点（tcp://主机:端口 或 udp://主机:端口，每行一个）</string>
+    <string name="mesh_ipv4">虚拟 IPv4（可选，留空使用 DHCP）</string>
+    <string name="mesh_connecting">正在连接 %1$s…</string>
+    <string name="mesh_connect_failed">无法连接 %1$s。请检查组网配置、节点连通性和服务器令牌。</string>
+    <string name="mesh_retry">重试</string>
+    <string name="mesh_choose_server">选择服务器</string>
 </resources>
