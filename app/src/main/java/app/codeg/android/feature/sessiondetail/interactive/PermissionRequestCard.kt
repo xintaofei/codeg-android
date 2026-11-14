@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Assignment
 import androidx.compose.material.icons.rounded.GppMaybe
+import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,6 +57,14 @@ fun PermissionRequestCard(
     val colors = CodegTheme.colors
     var submitting by remember(parsed.jsonPreview) { mutableStateOf<String?>(null) }
     val accent = colors.accent
+    // What each option would actually grant. Empty for every agent that ships no
+    // `_meta.permission` — i.e. everything but codex ≥1.1.8 and claude ≥0.64.1 —
+    // and, within one request, for the options the agent chose not to annotate.
+    val grants = remember(options) {
+        options.mapNotNull { option ->
+            parsePermissionOptionChanges(option.meta).takeIf { it.isNotEmpty() }?.let { option to it }
+        }
+    }
 
     Column(
         modifier
@@ -96,13 +105,16 @@ fun PermissionRequestCard(
         }
 
         // Body.
-        val scrolls = parsed.diffFiles.isNotEmpty() || parsed.planMarkdown != null ||
-            parsed.planEntries.size > 4 || parsed.allowedPrompts.size > 4
+        val scrolls = permissionBodyScrolls(parsed, grants.isNotEmpty())
         Column(
             modifier = if (scrolls) Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState()) else Modifier,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PermissionBody(parsed)
+            // Last body section: directly above the buttons it describes, and a
+            // pathological list scrolls with the rest instead of pushing them
+            // off screen.
+            if (grants.isNotEmpty()) OptionGrants(grants)
         }
 
         // Option buttons.
@@ -172,6 +184,85 @@ private fun PermissionBody(parsed: ParsedPermission) {
             if (parsed.command == null) parsed.prompt?.let { Text(it, fontSize = 12.sp, color = colors.textSecondary) }
         }
     }
+}
+
+/**
+ * Whether the card body needs its own bounded scroll region. The card floats
+ * above the composer with nothing else capping its height, so anything that can
+ * grow without bound has to be listed here or it pushes the option buttons off
+ * screen — leaving the user unable to answer, and the turn stuck.
+ *
+ * Grants count regardless of how many there are: each description is allowed up
+ * to 200 characters, so even a single one can be many lines tall. Bounding a
+ * body that already fits costs nothing — `heightIn` only caps.
+ */
+internal fun permissionBodyScrolls(parsed: ParsedPermission, hasGrants: Boolean): Boolean =
+    hasGrants || parsed.diffFiles.isNotEmpty() || parsed.planMarkdown != null ||
+        parsed.planEntries.size > 4 || parsed.allowedPrompts.size > 4
+
+/**
+ * What each option would grant, and for how long. Only some options carry a list
+ * (claude annotates the always-allow one alone), so every group names its button
+ * rather than leaving the user to match sentences to a row of buttons.
+ */
+@Composable
+private fun OptionGrants(grants: List<Pair<PermissionOption, List<PermissionOptionChange>>>) {
+    val colors = CodegTheme.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.textPrimary.copy(alpha = 0.04f))
+            .padding(9.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Icon(
+                Icons.Rounded.VpnKey,
+                contentDescription = null,
+                tint = colors.textTertiary,
+                modifier = Modifier.size(13.dp),
+            )
+            Text(stringResource(R.string.perm_option_grants), fontSize = 11.sp, color = colors.textSecondary)
+        }
+        for ((option, changes) in grants) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(option.name, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
+                for (change in changes) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Top) {
+                        // Duration first, so it reads as a scannable column.
+                        change.scope?.let { ScopeBadge(it) }
+                        Text(
+                            change.description,
+                            fontSize = 12.sp,
+                            color = colors.textSecondary,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * How long one change lasts. Neutral for every scope, like the desktop dialog:
+ * the label already spells out the persistence ("This session" vs "Saved to
+ * project settings"), and tinting the durable ones would put a warning colour on
+ * routine, reversible settings writes.
+ */
+@Composable
+private fun ScopeBadge(scope: PermissionChangeScope) {
+    val colors = CodegTheme.colors
+    Text(
+        stringResource(scope.labelRes),
+        fontSize = 10.sp,
+        color = colors.textTertiary,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(colors.textPrimary.copy(alpha = 0.06f))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
 }
 
 @Composable

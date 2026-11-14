@@ -838,6 +838,13 @@
 
     <!-- ===== Session Detail · Permission fallback ===== -->
     <string name="perm_request_title">权限请求</string>
+    <string name="perm_option_grants">各选项将授予的权限</string>
+    <string name="perm_scope_session">本次会话</string>
+    <string name="perm_scope_process">本次运行</string>
+    <string name="perm_scope_user">保存到用户设置</string>
+    <string name="perm_scope_project">保存到项目设置</string>
+    <string name="perm_scope_project_local">保存到本地项目设置</string>
+    <string name="perm_scope_persistent">永久保存</string>
 
     <!-- ===== ViewModel toasts (interactive flows) ===== -->
     <string name="cc_test_message_sent">测试消息已发送。</string>

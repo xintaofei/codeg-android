@@ -6,6 +6,7 @@ import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonElement
 
 /**
  * One choice the user can pick to resolve a `permission_request` (Rust
@@ -18,6 +19,20 @@ data class PermissionOption(
     val optionId: String,
     val name: String,
     val kind: String,
+    /**
+     * The option's ACP `_meta`, forwarded verbatim by the server (same
+     * opaque-passthrough treatment as the request's `tool_call`). codex-acp
+     * ≥1.1.8 and claude-agent-acp ≥0.64.1 hang
+     * `permission = {version: 1, changes: [...]}` here, saying what picking this
+     * option would grant and for how long; `parsePermissionOptionChanges` reads
+     * it. Absent for every other agent, and for snapshots taken before the
+     * server carried it — hence the default.
+     *
+     * Typed as a raw element, not `JsonObject`: it is an untyped
+     * `serde_json::Value` upstream, and a non-object here must not fail the
+     * whole options list and blank out the buttons.
+     */
+    val meta: JsonElement? = null,
 ) {
     /** Deny / keep-planning style choice — rendered as a bordered (non-filled) button. */
     val isReject: Boolean get() = kind.lowercase().startsWith("reject")

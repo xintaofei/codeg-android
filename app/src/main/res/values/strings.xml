@@ -853,6 +853,14 @@
 
     <!-- ===== Session Detail · Permission fallback ===== -->
     <string name="perm_request_title">Permission Request</string>
+    <!-- What picking each permission option would grant (_meta.permission.changes). -->
+    <string name="perm_option_grants">What each option grants</string>
+    <string name="perm_scope_session">This session</string>
+    <string name="perm_scope_process">This run</string>
+    <string name="perm_scope_user">Saved to user settings</string>
+    <string name="perm_scope_project">Saved to project settings</string>
+    <string name="perm_scope_project_local">Saved to local project settings</string>
+    <string name="perm_scope_persistent">Saved permanently</string>
 
     <!-- ===== ViewModel toasts (interactive flows) ===== -->
     <string name="cc_test_message_sent">Test message sent.</string>
