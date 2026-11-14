@@ -81,4 +81,32 @@ class ContextCompactionTest {
         val settled = MessageRender.adaptTurn(turn).single() as RenderPart.Compaction
         assertFalse(settled.running)
     }
+
+    @Test
+    fun `the versioned marker counts, with its payload's figures`() {
+        val versioned = meta("""{"contextCompaction":{"version":1,"trigger":"auto","preTokens":180000,"postTokens":22000,"durationMs":5300}}""")
+        assertTrue(ContextCompaction.matches(versioned))
+        assertTrue(ContextCompaction.matches(meta("""{"contextCompaction":{"version":1}}""")))
+        assertFalse(ContextCompaction.matches(meta("""{"contextCompaction":{"version":0}}""")))
+        assertFalse(ContextCompaction.matches(meta("""{"contextCompaction":{"version":"1"}}""")))
+        assertFalse(ContextCompaction.matches(meta("""{"contextCompaction":{"version":1.5}}""")))
+        assertEquals(180000 to 22000, ContextCompaction.tokens(versioned))
+        assertEquals(5300, ContextCompaction.durationMs(versioned))
+        assertEquals("compaction:180000:22000:5300", ContextCompaction.eventKey(versioned))
+        // codex's bare marker names no event: two of them must not fold into one.
+        assertNull(ContextCompaction.eventKey(meta("""{"contextCompaction":{"version":1}}""")))
+    }
+
+    @Test
+    fun `a summary only on the server's claim, a failure on the adapter's word`() {
+        val claimed = meta("""{"contextCompaction":{"version":1},"codeg.compactionSummary":true}""")
+        assertEquals("kept: the plan", ContextCompaction.summary(claimed, "kept: the plan"))
+        assertNull(ContextCompaction.summary(claimed, "  "))
+        // The legacy call parks other things on its output.
+        assertNull(ContextCompaction.summary(meta("""{"contextCompaction":true}"""), """{"trigger":"auto"}"""))
+        val failed = ContextCompaction.part("c1", meta("""{"contextCompaction":{"version":1,"error":"context too small"}}"""), running = false, failed = false, output = null)
+        assertTrue(failed.failed)
+        assertEquals("c1", failed.callId)
+    }
 }
+

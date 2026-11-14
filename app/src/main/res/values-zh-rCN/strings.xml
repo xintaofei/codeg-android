@@ -533,6 +533,8 @@
     <string name="compaction_running">正在压缩上下文…</string>
     <string name="compaction_done">上下文已压缩</string>
     <string name="compaction_done_tokens">上下文已压缩 · %1$s → %2$s tokens</string>
+    <string name="compaction_failed">上下文压缩失败</string>
+    <string name="compaction_summary">摘要</string>
     <!-- Detail · Cursor -->
     <string name="agents_cursor_section">Cursor 配置</string>
     <string name="agents_cursor_footer">两种方式都登录 Cursor 自己的后端 —— cursor-agent 不支持自定义端点，因此没有 API 地址可填。</string>

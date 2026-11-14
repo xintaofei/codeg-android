@@ -538,6 +538,8 @@
     <string name="compaction_running">Compacting context…</string>
     <string name="compaction_done">Context compacted</string>
     <string name="compaction_done_tokens">Context compacted · %1$s → %2$s tokens</string>
+    <string name="compaction_failed">Context compaction failed</string>
+    <string name="compaction_summary">Summary</string>
     <!-- Detail · Cursor -->
     <string name="agents_cursor_section">Cursor Configuration</string>
     <string name="agents_cursor_footer">Both methods sign in to Cursor\'s own backend — cursor-agent has no custom-endpoint support, so there is no API URL to set.</string>

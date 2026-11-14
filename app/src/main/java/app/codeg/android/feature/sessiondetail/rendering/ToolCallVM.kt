@@ -137,7 +137,19 @@ sealed interface RenderPart {
      * marker, not a tool call. Rendered as a chrome-less centred divider; the token
      * counts are Grok-only (codex sends none).
      */
-    data class Compaction(val before: Int?, val after: Int?, val running: Boolean) : RenderPart
+    data class Compaction(
+        val before: Int?,
+        val after: Int?,
+        val running: Boolean,
+        val failed: Boolean = false,
+        val durationMs: Int? = null,
+        /** The retained summary, when the server claims the call's output is one. */
+        val summary: String? = null,
+        /** The compaction call's id: the event's own name where the live and history copies agree on one. */
+        val callId: String? = null,
+        /** [ContextCompaction.eventKey]: the event's identity by its figures. */
+        val eventKey: String? = null,
+    ) : RenderPart
     /** A turn failure ([ContentBlock.TurnError]). The server only emits one inside a system
      *  turn, which the timeline handles itself; this arm keeps a stray one visible. */
     data class Error(val message: String) : RenderPart
@@ -194,8 +206,7 @@ object MessageRender {
                     // divider between turns, so it never becomes a ToolCallVM (and so
                     // can't be swept into a tool group).
                     if (ContextCompaction.matches(block.meta)) {
-                        val (before, after) = ContextCompaction.tokens(block.meta)
-                        parts.add(RenderPart.Compaction(before, after, state == ToolCallState.RUNNING))
+                        parts.add(ContextCompaction.part(block.id, block.meta, state == ToolCallState.RUNNING, isErr, output))
                         return@forEachIndexed
                     }
                     parts.add(

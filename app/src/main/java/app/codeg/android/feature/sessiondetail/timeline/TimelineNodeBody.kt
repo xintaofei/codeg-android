@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -67,10 +68,11 @@ import app.codeg.android.core.model.MessageTurn
 import app.codeg.android.feature.sessiondetail.rendering.InlineImage
 import app.codeg.android.feature.sessiondetail.rendering.LivePlanView
 import app.codeg.android.feature.sessiondetail.rendering.ReasoningBlock
+import app.codeg.android.feature.sessiondetail.rendering.RenderPart
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallCard
 import app.codeg.android.feature.sessiondetail.rendering.ToolGroupCard
-import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 private val SuccessGreen = Color(0xFF85D18F)
 
@@ -100,7 +102,7 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
         is NodeContent.Tool -> ToolCallCard(c.vm, modifier)
         is NodeContent.ToolGroup -> ToolGroupCard(c.items, modifier, streaming = c.streaming, disclosureKey = node.id)
         is NodeContent.Image -> InlineImage(c.image, c.caption, modifier)
-        is NodeContent.Compaction -> ContextCompactionDivider(c.before, c.after, c.running, modifier)
+        is NodeContent.Compaction -> ContextCompactionDivider(c.part, modifier)
         is NodeContent.Footer -> TurnFooter(c.turn, c.questionId, modifier)
         is NodeContent.Plan -> LivePlanView(c.entries, modifier)
         is NodeContent.Thinking -> ThinkingShimmer(modifier)
@@ -280,32 +282,74 @@ private fun BlinkingCaret() {
  * The context-compaction boundary: a hairline running the content width with a small
  * archive glyph + label centred on it. Deliberately chrome-less (no card, no border) —
  * it marks "the conversation's context was compacted here", it is not something the
- * agent *did*.
+ * agent *did*. Web `ContextCompactionCard`.
  *
- * Grok stamps the before/after token counts on its compaction; codex sends none, and a
- * no-op delta (before == after) would read as a bug, so both fall back to the plain
- * label.
+ * The before/after token counts show only for a real reduction (a no-op delta would read
+ * as a bug; codex sends none), the time it took once it is done. A summary the server
+ * claims for the call opens under the divider.
  */
 @Composable
-fun ContextCompactionDivider(before: Int?, after: Int?, running: Boolean, modifier: Modifier = Modifier) {
+fun ContextCompactionDivider(part: RenderPart.Compaction, modifier: Modifier = Modifier) {
     val colors = CodegTheme.colors
+    val (before, after) = part.before to part.after
     val label = when {
-        running -> stringResource(R.string.compaction_running)
+        part.failed -> stringResource(R.string.compaction_failed)
+        part.running -> stringResource(R.string.compaction_running)
         before != null && after != null && before != after ->
             stringResource(R.string.compaction_done_tokens, groupDigits(before), groupDigits(after))
         else -> stringResource(R.string.compaction_done)
     }
-    Row(
-        modifier.fillMaxWidth().padding(vertical = 2.dp).alpha(if (running) 0.65f else 1f),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        HorizontalDivider(Modifier.weight(1f), color = colors.hairline)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Icon(Icons.Rounded.Archive, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.size(13.dp))
-            Text(label, fontSize = 11.sp, color = colors.textTertiary)
+    val duration = part.durationMs?.takeIf { !part.failed && !part.running && it > 0 }?.let { ms ->
+        val seconds = ms / 1000.0
+        if (seconds >= 10) "${seconds.roundToInt()}s" else String.format(java.util.Locale.ROOT, "%.1fs", seconds)
+    }
+    val summary = part.summary?.takeIf { it.isNotBlank() }
+    var summaryOpen by remember { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 2.dp).alpha(if (part.running) 0.65f else 1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            HorizontalDivider(Modifier.weight(1f), color = colors.hairline)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                val tint = if (part.failed) colors.danger else colors.textTertiary
+                Icon(Icons.Rounded.Archive, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
+                Text(label, fontSize = 11.sp, color = tint)
+                if (duration != null) Text("· $duration", fontSize = 11.sp, color = colors.textTertiary.copy(alpha = 0.75f))
+                if (summary != null) {
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { summaryOpen = !summaryOpen }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(stringResource(R.string.compaction_summary), fontSize = 11.sp, color = colors.textTertiary)
+                        Icon(
+                            if (summaryOpen) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                            contentDescription = null,
+                            tint = colors.textTertiary,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                }
+            }
+            HorizontalDivider(Modifier.weight(1f), color = colors.hairline)
         }
-        HorizontalDivider(Modifier.weight(1f), color = colors.hairline)
+        if (summary != null && summaryOpen) {
+            Box(
+                Modifier
+                    .padding(top = 4.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(0.5.dp, colors.hairline, RoundedCornerShape(8.dp))
+                    .background(colors.bgElevated.copy(alpha = 0.4f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                MarkdownContent(summary)
+            }
+        }
     }
 }
 

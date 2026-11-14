@@ -43,9 +43,8 @@ sealed interface NodeContent {
     data class Tool(val vm: ToolCallVM) : NodeContent
     data class ToolGroup(val items: List<ToolCallVM>, val streaming: Boolean) : NodeContent
     data class Image(val image: ImageData, val caption: String?) : NodeContent
-    /** A context-compaction boundary — rendered as a chrome-less divider, not a card.
-     *  Token counts are Grok-only (codex sends none). */
-    data class Compaction(val before: Int?, val after: Int?, val running: Boolean) : NodeContent
+    /** A context-compaction boundary — rendered as a chrome-less divider, not a card. */
+    data class Compaction(val part: RenderPart.Compaction) : NodeContent
     data class Footer(val turn: MessageTurn, val questionId: String?) : NodeContent
     data class Plan(val entries: List<PlanEntry>) : NodeContent
     data object Thinking : NodeContent
@@ -266,7 +265,11 @@ object TranscriptTimeline {
         inFlightUserTurnId: String? = null,
         localTurns: List<MessageTurn> = emptyList(),
     ): List<TimelineNode> = terminate(
-        flatten(persistedEntries(turns, pending, agent, hideTrailingAssistantReply, inFlightUserTurnId, localTurns) + liveEntries(live, agent)) { true },
+        flatten(
+            dedupeCompactions(
+                persistedEntries(turns, pending, agent, hideTrailingAssistantReply, inFlightUserTurnId, localTurns) + liveEntries(live, agent),
+            ),
+        ) { true },
     )
 
     /**
@@ -317,12 +320,31 @@ object TranscriptTimeline {
                     i++
                 }
                 TurnRole.ASSISTANT -> {
+                    if (hoistsCompaction(source, i)) {
+                        compactionRow(turn, agent, runningToolIds)?.let { entries.add(ThreadEntry.Row(it)) }
+                        i++
+                        continue
+                    }
+                    // The reply runs on through its assistant turns, and through the empty
+                    // placeholders parsers leave between them — but not into a compaction it
+                    // doesn't go on after, which stands between turns.
                     var j = i + 1
-                    while (j < source.size && source[j].role == TurnRole.ASSISTANT) j++
-                    val merged = merge(source.subList(i, j))
+                    var end = j
+                    while (j < source.size) {
+                        val next = source[j]
+                        if (next.role == TurnRole.ASSISTANT) {
+                            if (hoistsCompaction(source, j)) break
+                            end = ++j
+                        } else if (rendersNothing(next)) {
+                            j++
+                        } else {
+                            break
+                        }
+                    }
+                    val merged = merge(source.subList(i, end).filter { it.role == TurnRole.ASSISTANT })
                     val completed = !(inFlightStart >= 0 && i > inFlightStart && i < server.size)
                     entries.add(ThreadEntry.Reply(persistedReply(merged, lastUserId, agent, runningToolIds, completed)))
-                    i = j
+                    i = end
                 }
             }
         }
@@ -330,6 +352,83 @@ object TranscriptTimeline {
             entries.add(ThreadEntry.Row(TimelineNode(turn.id, NodeContent.User(turn), agent, startsGroup = true)))
         }
         return entries
+    }
+
+    /**
+     * A turn with nothing to draw: the empty placeholders parsers leave between a reply's
+     * turns, which don't break it (web `isEmptyTurnItem`). A failed round's record is not one.
+     */
+    private fun rendersNothing(turn: MessageTurn): Boolean = when (turn.role) {
+        TurnRole.SYSTEM -> systemText(turn).isEmpty() && turn.turnErrors.isEmpty()
+        TurnRole.USER, TurnRole.ASSISTANT -> turn.blocks.all { it is ContentBlock.Text && it.text.isBlank() }
+    }
+
+    /** A turn holding one compaction call (and its result) and nothing else. */
+    private fun isCompactionOnly(turn: MessageTurn): Boolean {
+        if (turn.role != TurnRole.ASSISTANT) return false
+        var compaction: ContentBlock.ToolUse? = null
+        for (block in turn.blocks) {
+            when (block) {
+                is ContentBlock.Text -> if (block.text.isNotBlank()) return false
+                is ContentBlock.ToolUse -> {
+                    if (compaction != null || !ContextCompaction.matches(block.meta)) return false
+                    compaction = block
+                }
+                is ContentBlock.ToolResult -> if (compaction == null || (block.id != null && block.id != compaction.id)) return false
+                else -> return false
+            }
+        }
+        return compaction != null
+    }
+
+    /**
+     * Whether the turn at [index] is a compaction drawn as a divider between turns rather than
+     * as a step of a reply (web `hoistedCompaction`): it holds nothing else, and no reply goes
+     * on after it — the next turn with anything in it, past empty placeholders and other
+     * compactions, is not the agent's. An agent compacting by itself mid-turn goes on with the
+     * same reply, and live the compaction is one of that reply's steps; hoisted out, it would
+     * cut the reply in two. A `/compact` between replies, or one at the very end, divides.
+     */
+    private fun hoistsCompaction(source: List<MessageTurn>, index: Int): Boolean {
+        if (!isCompactionOnly(source[index])) return false
+        for (k in index + 1 until source.size) {
+            val next = source[k]
+            if (rendersNothing(next)) continue
+            if (next.role != TurnRole.ASSISTANT) return true
+            if (!isCompactionOnly(next)) return false
+        }
+        return true
+    }
+
+    /** A compaction-only turn → its divider row, under the id its part would have in a reply. */
+    private fun compactionRow(turn: MessageTurn, agent: AgentType, runningToolIds: Set<String>): TimelineNode? {
+        val parts = MessageRender.adaptParts(turn, runningToolIds)
+        val index = parts.indexOfFirst { it is RenderPart.Compaction }
+        val part = parts.getOrNull(index) as? RenderPart.Compaction ?: return null
+        return TimelineNode("${turn.id}#$index", NodeContent.Compaction(part), agent, startsGroup = true)
+    }
+
+    /**
+     * Drop repeat renderings of one compaction divider, keeping the first (web
+     * `dedupeCompactionItems`). A compaction reaches the thread twice: the live call, and the
+     * agent's transcript under the parser's id — and mid-turn both can be in hand, with no
+     * in-flight prompt to hide the transcript's copy by (`/compact` is persisted after the
+     * boundary, or never). Two identities, either enough: the call id where both copies name
+     * the event alike (codex), the figures where they don't ([ContextCompaction.eventKey]).
+     */
+    fun dedupeCompactions(entries: List<ThreadEntry>): List<ThreadEntry> {
+        val seen = mutableSetOf<String>()
+        var dropped = false
+        val kept = entries.filter { entry ->
+            val part = ((entry as? ThreadEntry.Row)?.node?.content as? NodeContent.Compaction)?.part ?: return@filter true
+            val keys = listOfNotNull(part.eventKey, part.callId?.let { "call:$it" })
+            val repeat = keys.any { it in seen }
+            // A repeat's other identity names the same event too.
+            seen.addAll(keys)
+            if (repeat) dropped = true
+            !repeat
+        }
+        return if (dropped) kept else entries
     }
 
     /** A merged reply → its rows, and a footer (always, even tool-only). Text is parse-memoized. */
@@ -395,10 +494,19 @@ object TranscriptTimeline {
             } else {
                 emptyList()
             }
+            val calls = liveParts(chunk)
+            // A compaction with nothing else said (yet) is a divider between turns, as in
+            // history ([hoistsCompaction]); once the reply goes on, it is one of its steps.
+            val compaction = calls.singleOrNull() as? RenderPart.Compaction
+            if (compaction != null && plan.isEmpty()) {
+                entries.add(ThreadEntry.Row(TimelineNode("$ownerId#0", NodeContent.Compaction(compaction), agent, startsGroup = true)))
+                trailer.forEach { entries.add(ThreadEntry.Row(it)) }
+                return@forEachIndexed
+            }
             // Live text is parsed uncached (each flush is a new key → cache churn).
             entries.add(
                 ThreadEntry.Reply(
-                    replyRows(ownerId, agent, liveParts(chunk), cached = false, completed = !streaming, durationMs = null, trailer, plan, caret = streaming),
+                    replyRows(ownerId, agent, calls, cached = false, completed = !streaming, durationMs = null, trailer, plan, caret = streaming),
                 ),
             )
         }
@@ -532,8 +640,9 @@ object TranscriptTimeline {
                 // `Context compacting` → `Context compacted` pair on one id, so the
                 // divider flips from running to settled in place.
                 is LiveSegment.Tool -> if (ContextCompaction.matches(seg.call.meta)) {
-                    val (before, after) = ContextCompaction.tokens(seg.call.meta)
-                    parts.add(RenderPart.Compaction(before, after, !seg.call.isFinished))
+                    val call = seg.call
+                    val output = call.rawOutput.takeIf { it.isNotBlank() } ?: call.content
+                    parts.add(ContextCompaction.part(call.id, call.meta, !call.isFinished, call.isError, output))
                 } else {
                     parts.add(RenderPart.Tool(seg.call.toVM()))
                 }
@@ -564,8 +673,7 @@ object TranscriptTimeline {
             is RenderPart.ToolGroup ->
                 listOf(TimelineNode(groupRowId(part, base), NodeContent.ToolGroup(part.items, part.streaming), agent))
             is RenderPart.Image -> listOf(TimelineNode(base, NodeContent.Image(part.image, part.caption), agent))
-            is RenderPart.Compaction ->
-                listOf(TimelineNode(base, NodeContent.Compaction(part.before, part.after, part.running), agent))
+            is RenderPart.Compaction -> listOf(TimelineNode(base, NodeContent.Compaction(part), agent))
             is RenderPart.Error -> listOf(TimelineNode(base, NodeContent.Error(part.message), agent))
             is RenderPart.Unknown -> listOf(TimelineNode(base, NodeContent.Unsupported(part.type), agent))
         }

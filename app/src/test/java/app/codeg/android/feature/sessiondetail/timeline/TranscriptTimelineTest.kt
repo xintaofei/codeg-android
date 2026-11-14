@@ -10,6 +10,8 @@ import app.codeg.android.feature.sessiondetail.LiveTurnError
 import app.codeg.android.feature.sessiondetail.LiveTurnBuilder
 import app.codeg.android.feature.sessiondetail.LiveTurnState
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -437,6 +439,81 @@ class TranscriptTimelineTest {
         assertEquals(listOf(true, false), headers.map { it.completed })
         // A settled reply carries the time it took; one being written doesn't show it.
         assertNull(headers[1].durationMs)
+    }
+
+    private fun compactionMeta(extra: String = "") =
+        Json.parseToJsonElement("""{"contextCompaction":{"version":1$extra}}""") as JsonObject
+
+    private fun compaction(id: String, callId: String = "$id-call", extra: String = "") = assistant(
+        id,
+        listOf(ContentBlock.ToolUse(callId, "Context compacted", null, compactionMeta(extra)), ContentBlock.ToolResult(callId, "", false)),
+    )
+
+    private fun shape(nodes: List<TimelineNode>) = nodes.map {
+        when (val c = it.content) {
+            is NodeContent.ReplyHeader -> "header:${c.replyId}"
+            is NodeContent.Compaction -> "compaction:${it.id}"
+            is NodeContent.User -> "user:${it.id}"
+            else -> null
+        }
+    }.filterNotNull()
+
+    @Test
+    fun `a compaction between replies divides them, one mid-reply stays a step`() {
+        val between = TranscriptTimeline.build(
+            listOf(user("u1", "q"), assistant("a1", listOf(ContentBlock.Text("done"))), compaction("c1"), user("u2", "next")),
+            emptyList(), null, agent,
+        )
+        assertEquals(listOf("user:u1", "header:a1", "compaction:c1#0", "user:u2"), shape(between))
+        // The agent compacted by itself and went on with the same reply.
+        val midReply = TranscriptTimeline.build(
+            listOf(user("u1", "q"), assistant("a1", listOf(ContentBlock.Text("working"))), compaction("c1"), assistant("a2", listOf(ContentBlock.Text("done")))),
+            emptyList(), null, agent,
+        )
+        assertEquals(listOf("user:u1", "header:a1", "compaction:a1#1"), shape(midReply))
+        // At the very end: a divider too.
+        val atEnd = TranscriptTimeline.build(listOf(user("u1", "/compact"), compaction("c1")), emptyList(), null, agent)
+        assertEquals(listOf("user:u1", "compaction:c1#0"), shape(atEnd))
+    }
+
+    @Test
+    fun `one compaction reaching the thread twice is drawn once`() {
+        val live = LiveTurnBuilder("live-1").apply {
+            upsertToolCall("c1-call", "Context compacted", "", "completed", null, "", null, compactionMeta())
+        }.snapshot()
+        val nodes = TranscriptTimeline.build(listOf(user("u1", "/compact"), compaction("c1")), emptyList(), live, agent)
+        assertEquals(1, nodes.count { it.content is NodeContent.Compaction })
+        // Under different ids, the figures name the event.
+        val figures = ""","preTokens":9,"postTokens":4,"durationMs":70"""
+        val claude = LiveTurnBuilder("live-2").apply {
+            upsertToolCall("compacting-status", "Compacting", "", "completed", null, "", null, compactionMeta(figures))
+        }.snapshot()
+        val twice = TranscriptTimeline.build(listOf(user("u1", "/compact"), compaction("c1", extra = figures)), emptyList(), claude, agent)
+        assertEquals(1, twice.count { it.content is NodeContent.Compaction })
+        // codex's bare markers under different ids are two compactions.
+        val two = TranscriptTimeline.build(listOf(user("u1", "q"), compaction("c1"), user("u2", "q"), compaction("c2")), emptyList(), null, agent)
+        assertEquals(2, two.count { it.content is NodeContent.Compaction })
+    }
+
+    @Test
+    fun `an empty placeholder turn doesn't cut a reply in two`() {
+        val turns = listOf(
+            user("u1", "q"),
+            assistant("a1", listOf(ContentBlock.Text("first"))),
+            MessageTurn("s1", TurnRole.SYSTEM, emptyList(), Instant.EPOCH),
+            MessageTurn("p1", TurnRole.USER, listOf(ContentBlock.Text(" ")), Instant.EPOCH),
+            assistant("a2", listOf(ContentBlock.Text("second"))),
+        )
+        assertEquals(listOf("user:u1", "header:a1"), shape(TranscriptTimeline.build(turns, emptyList(), null, agent)))
+    }
+
+    @Test
+    fun `a live compaction is a divider until the reply goes on`() {
+        val b = LiveTurnBuilder("live-1")
+        b.upsertToolCall("k1", "Compacting", "", "in_progress", null, "", null, compactionMeta())
+        assertEquals(listOf("compaction:live-1#0"), shape(TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent)))
+        b.appendText("carrying on")
+        assertEquals(listOf("header:live-1", "compaction:live-1#0"), shape(TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent)))
     }
 }
 
