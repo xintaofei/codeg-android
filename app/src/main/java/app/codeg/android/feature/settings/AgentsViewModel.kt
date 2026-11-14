@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.codeg.android.core.data.ServerRepository
 import app.codeg.android.core.model.AcpAgentInfo
+import app.codeg.android.core.model.AdapterInfo
 import app.codeg.android.core.model.AgentConfig
 import app.codeg.android.core.model.AgentDraft
 import app.codeg.android.core.model.AgentToml
@@ -27,6 +28,8 @@ import app.codeg.android.core.model.hermesProvider
 import app.codeg.android.core.network.CodegClient
 import app.codeg.android.core.network.displayMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,6 +63,23 @@ class AgentsViewModel @Inject constructor(
      * iOS `opTail` serial chain.
      */
     private val opMutex = Mutex()
+
+    /**
+     * Bumped on every [openDetail]. Each async fill that targets the detail carries the
+     * generation it was issued for, so a slow answer to a question the user has moved on from
+     * is dropped rather than written onto whatever panel happens to be open by then.
+     *
+     * Only [openDetail] bumps it, because only it changes what the detail IS. Closing is the
+     * screen's own local state (`SettingsScreen` drops back to the agent list), which the
+     * generation does not need to model: whatever is still in flight can at worst re-fill a
+     * detail nothing is rendering, and the next open supersedes it.
+     */
+    private var detailGeneration = 0L
+
+    /** The in-flight adapter preflight, cancelled on the next open so a stack of panel opens
+     *  can't leave a stack of `node`/`npm` probes running on the server. Correctness rides on
+     *  [detailGeneration], not on this — a cancel can always lose the race. */
+    private var adapterJob: Job? = null
 
     init { load() }
 
@@ -135,14 +155,35 @@ class AgentsViewModel @Inject constructor(
 
     // region Detail
 
-    /** Open the config editor for [agentType], building a fresh draft + provider list. */
+    /**
+     * Open the config editor for [agentType], building a fresh draft + provider list.
+     *
+     * Gated on [detailGeneration], because both fetches suspend and the user can open another
+     * agent meanwhile: a slow open of A would otherwise land A's row and providers on B's
+     * panel.
+     *
+     * The publish is then WHOLESALE, deliberately. Reopening the same agent renders the cached
+     * panel while this load is in flight, so anything typed in that window is lost — a real
+     * (narrow) bug, filed rather than patched here. Splicing the loaded half onto the retained
+     * draft was tried and reverted: [AgentDetailState] is three things at once — the editor's
+     * baseline, the server snapshot that `save()` diffs raw config against, and async
+     * operation state — so a spliced value mixes revisions and turns a lost keystroke into
+     * wrong bytes on the wire (a raw Cursor/Grok config classified as user-edited and written
+     * back wholesale, merge keys deleted because the baseline predates them, a real difference
+     * reading as clean and disabling Save). One revision at a time is the only consistent
+     * thing this type can hold; fixing it properly means splitting those three roles apart.
+     */
     fun openDetail(agentType: AgentType) {
+        val generation = ++detailGeneration
+        // Whatever the previous panel was still probing is now nobody's answer.
+        adapterJob?.cancel()
+        adapterJob = null
         viewModelScope.launch {
             try {
                 val profile = repository.selectedProfile.first() ?: throw IllegalStateException("No server selected")
                 val c = client ?: repository.client(profile)?.also { client = it }
                     ?: throw IllegalStateException("Missing token")
-                val agent = _ui.value.agents.firstOrNull { it.agentType == agentType }
+                val listed = _ui.value.agents.firstOrNull { it.agentType == agentType }
                     ?: c.acpListAgents().firstOrNull { it.agentType == agentType }
                     ?: throw IllegalStateException("Agent not found")
                 val providers = if (agentSupportsProviders(agentType)) {
@@ -151,17 +192,46 @@ class AgentsViewModel @Inject constructor(
                 } else {
                     emptyList()
                 }
+                if (generation != detailGeneration) return@launch
+                // Re-read the row at publish time: the provider fetch above suspends, and an
+                // enable toggle in that window writes the new value into the list. Publishing
+                // the pre-suspend copy would visibly flip the header switch back.
+                val agent = _ui.value.agents.firstOrNull { it.agentType == agentType } ?: listed
                 val draft = AgentDraft.fromAgent(agent)
                 _ui.update {
                     it.copy(detail = AgentDetailState(agentType, agent, draft = draft, original = draft, providers = providers))
                 }
+                if (agent.isAcpAdapter) loadAdapterInfo(c, agentType, generation)
             } catch (e: Exception) {
                 _ui.update { it.copy(error = e.displayMessage()) }
             }
         }
     }
 
-    fun closeDetail() = _ui.update { it.copy(detail = null) }
+    /**
+     * Fill in the adapter explainer after the detail is already on screen. Caller checks the
+     * agent is an adapter — that flag comes from the same backend table
+     * `PreflightResult.adapter` is derived from, so the skipped calls are exactly the ones
+     * that would have answered null.
+     *
+     * Deliberately not awaited by [openDetail]: preflight can spawn `node`/`npm` on the
+     * server, and an explainer card is never worth holding the config editor closed for. A
+     * failure is silent for the same reason — the card is context, not a control, and an error
+     * banner over a panel the user opened to edit their API key would be noise.
+     */
+    private fun loadAdapterInfo(c: CodegClient, agentType: AgentType, generation: Long) {
+        adapterJob = viewModelScope.launch {
+            val adapter = try {
+                c.acpPreflight(agentType).adapter
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            } ?: return@launch
+            if (generation != detailGeneration) return@launch
+            _ui.update { st -> st.copy(detail = st.detail?.copy(adapter = adapter) ?: st.detail) }
+        }
+    }
 
     /** Edit a structured field, then re-bake the raw config/env so they stay in lockstep. */
     fun editDraft(transform: (AgentDraft) -> AgentDraft) = updateDetail { d ->
@@ -564,6 +634,9 @@ data class AgentDetailState(
     val draft: AgentDraft,
     val original: AgentDraft,
     val providers: List<ModelProviderInfo> = emptyList(),
+    /** The adapter-vs-vendor-CLI split, for the two agents codeg launches through an ACP
+     *  adapter. Null for every other agent, and until the preflight behind it resolves. */
+    val adapter: AdapterInfo? = null,
     val saving: Boolean = false,
     val saveError: String? = null,
 ) {

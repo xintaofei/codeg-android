@@ -262,6 +262,11 @@ data class UpdateAgentEnvBody(
     val modelProviderId: Int? = null,
 )
 
+/** `acp_preflight`. `forceRefresh` is left off: the server's only cache is the npm-environment
+ *  probe, which this client renders none of. */
+@Serializable
+data class AgentTypeBody(val agentType: AgentType)
+
 @Serializable
 data class SkillListBody(val agentType: AgentType, val workspacePath: String? = null)
 

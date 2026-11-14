@@ -74,6 +74,8 @@ import app.codeg.android.core.model.QuickMessageCreateBody
 import app.codeg.android.core.model.QuickMessageReorderBody
 import app.codeg.android.core.model.QuickMessageUpdateBody
 import app.codeg.android.core.model.AcpAgentInfo
+import app.codeg.android.core.model.AgentPreflight
+import app.codeg.android.core.model.AgentTypeBody
 import app.codeg.android.core.model.CursorAuthStatus
 import app.codeg.android.core.model.CursorModelsResult
 import app.codeg.android.core.model.CursorStructuredConfig
@@ -557,6 +559,18 @@ class CodegClient(
         return runCatching { decodeAgentList(text) }
             .getOrElse { throw ApiError.Decoding(it.message ?: "Failed to decode response") }
     }
+
+    /**
+     * Probe the server's launch environment for one agent (`acp_preflight`).
+     *
+     * This client reads it for one thing: [AgentPreflight.adapter], the explainer for agents
+     * codeg launches through an ACP adapter rather than the vendor CLI. Cheap for those — the
+     * adapter probe is path resolution only, no `--version` spawns — but the surrounding
+     * toolchain checks can spawn `node`/`npm`, so callers should treat it as slow and
+     * best-effort rather than gating a screen on it.
+     */
+    suspend fun acpPreflight(agentType: AgentType): AgentPreflight =
+        decode(send("acp_preflight", encode(AgentTypeBody(agentType))), AgentPreflight.serializer())
 
     /**
      * Replace an agent's enabled flag, full env map, and model-provider link in one

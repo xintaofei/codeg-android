@@ -317,6 +317,12 @@
     <string name="agents_empty_subtitle">未注册任何智能体。</string>
     <!-- Agents · per-agent detail / config editor -->
     <string name="agents_detail_unavailable">不可用 —— 请先在服务器上安装后再启用。</string>
+    <string name="agents_adapter_label">ACP 适配器</string>
+    <string name="agents_adapter_learn_more">了解详情</string>
+    <string name="agents_adapter_ready">适配器 %1$s 已安装 —— Codeg 启动的就是它。它自带运行时，因此不需要另外安装 %2$s。</string>
+    <string name="agents_adapter_ready_with_native">适配器 %1$s 已安装 —— Codeg 启动的是它，而不是你本地的 %2$s（%3$s）。两者是各自独立的包，可以共存，且都读取 %4$s，登录和配置共享。</string>
+    <string name="agents_adapter_missing">Codeg 通过 ACP 协议驱动智能体，而 %1$s 本身不支持 ACP，所以它启动的是单独的适配器包 %2$s。适配器自带运行时，因此不必先装 %3$s CLI；如果你已经装了，两者可以共存，并共用 %4$s 里的登录信息。请在桌面端的「智能体设置」里安装适配器。</string>
+    <string name="agents_adapter_missing_with_native">已检测到你本地的 %1$s：%2$s。Codeg 通过 ACP 协议驱动智能体，而该 CLI 本身不支持 ACP，所以它启动的是单独的适配器包 %3$s —— 目前还没安装。适配器不会修改或替换你的 %4$s 命令，读取的也是同一个 %5$s，已有的登录直接沿用。请在桌面端的「智能体设置」里安装。</string>
     <string name="agents_detail_not_installed">未安装</string>
     <string name="agents_detail_version_latest">v%1$s · 最新 v%2$s</string>
     <!-- Detail · sections -->

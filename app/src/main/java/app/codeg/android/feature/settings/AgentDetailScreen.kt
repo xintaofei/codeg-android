@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -52,6 +53,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -70,6 +72,7 @@ import app.codeg.android.core.designsystem.component.PrimaryButton
 import app.codeg.android.core.designsystem.component.SecretField
 import app.codeg.android.core.designsystem.theme.CodegColors
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.core.model.AdapterInfo
 import app.codeg.android.core.model.AgentConfig
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.ClaudeAuthMode
@@ -219,14 +222,93 @@ private fun AgentHeader(state: AgentDetailState, onToggle: (Boolean) -> Unit) {
         if (agent.description.isNotEmpty()) {
             Text(agent.description, fontSize = 13.sp, color = colors.textTertiary)
         }
+        // `available` is the platform/runtime gate, never the install one: the server hardcodes
+        // it true for every npx agent (`commands/acp.rs`), which is both ACP adapters. So this
+        // line only ever fires for a binary agent on an unsupported platform or a uvx agent
+        // with no uv — cases where adapter wording would be wrong anyway. Everything the
+        // adapter split has to say is said by [AdapterNote], just below.
         if (!agent.available) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(Icons.Rounded.Warning, contentDescription = null, tint = colors.danger, modifier = Modifier.size(16.dp))
                 Text(stringResource(R.string.agents_detail_unavailable), fontSize = 12.sp, color = colors.danger)
             }
         }
+        state.adapter?.let { AdapterNote(it) }
         agent.configFilePath?.takeIf { it.isNotBlank() }?.let { path ->
             Text(path, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/**
+ * Explains that codeg launches an ACP *adapter* for this agent, not the vendor CLI.
+ *
+ * Four states, because the two facts that matter are independent: whether the adapter is
+ * installed (does anything work at all) and whether the user's own vendor CLI was found (is
+ * "not installed" going to read as a bug in codeg). Naming the path we found it at is the
+ * single most useful line here — it is the evidence that codeg looked and is talking about a
+ * different program.
+ *
+ * Read-only by construction. The web copy ends every missing-state with "Install it below";
+ * nothing on a phone can install anything on the server, so this says where the install lives
+ * instead of offering a button that would have to fail.
+ */
+@Composable
+private fun AdapterNote(adapter: AdapterInfo) {
+    val colors = CodegTheme.colors
+    val installed = adapter.adapterInstalled
+    val nativePath = adapter.nativePath?.takeIf { it.isNotBlank() }
+    val tone = if (installed) colors.textTertiary else CursorActionableAmber
+    val text = when {
+        installed && nativePath != null -> stringResource(
+            R.string.agents_adapter_ready_with_native,
+            adapter.adapterCmd, adapter.nativeCmd, nativePath, adapter.sharedConfigDir,
+        )
+        installed -> stringResource(
+            R.string.agents_adapter_ready, adapter.adapterCmd, adapter.nativeLabel,
+        )
+        nativePath != null -> stringResource(
+            R.string.agents_adapter_missing_with_native,
+            adapter.nativeLabel, nativePath, adapter.adapterPackage,
+            adapter.nativeCmd, adapter.sharedConfigDir,
+        )
+        else -> stringResource(
+            R.string.agents_adapter_missing,
+            adapter.nativeLabel, adapter.adapterPackage, adapter.nativeCmd, adapter.sharedConfigDir,
+        )
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(tone.copy(alpha = 0.10f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            stringResource(R.string.agents_adapter_label),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = tone,
+        )
+        Text(text, fontSize = 12.sp, color = colors.textSecondary, lineHeight = 17.sp)
+        // The one action a phone CAN take here. Everything else this card describes happens on
+        // the desktop, so without the docs there is nowhere at all to go from a card that is
+        // otherwise pure explanation.
+        adapter.docsUrl.takeIf { it.isNotBlank() }?.let { url ->
+            val uriHandler = LocalUriHandler.current
+            Text(
+                stringResource(R.string.agents_adapter_learn_more),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.accent,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { runCatching { uriHandler.openUri(url) } }
+                    .heightIn(min = 44.dp)
+                    .wrapContentHeight()
+                    .padding(vertical = 2.dp),
+            )
         }
     }
 }
@@ -236,6 +318,13 @@ private fun VersionLine(state: AgentDetailState) {
     val colors = CodegTheme.colors
     val installed = state.agent.installedVersion
     val latest = state.agent.registryVersion
+    // Deliberately says nothing about the ACP adapter, though "Not installed" beside an agent
+    // the user demonstrably has is exactly the confusion this step set out to end. The two
+    // facts arrive from different calls at different times — the version from the agent list,
+    // whether the adapter resolves from the preflight probe — so any adapter claim made here
+    // is a second, staler opinion that can contradict [AdapterNote] directly below it in
+    // either direction. That note has all the facts from one probe and states them in full;
+    // this line stays about the version alone.
     val text = when {
         installed.isNullOrBlank() -> stringResource(R.string.agents_detail_not_installed)
         latest != null && latest.isNotBlank() && latest != installed ->
@@ -830,8 +919,8 @@ private fun RuleEditor(
     }
 }
 
-/** "Actionable, not broken" — the amber the status badges already use for a state the
- *  user can fix (here: cursor-agent installed but not signed in). */
+/** "Actionable, not broken" — the amber the status badges use for a state the user can fix
+ *  (cursor-agent installed but not signed in; an ACP adapter that isn't installed yet). */
 private val CursorActionableAmber = Color(0xFFF5BD5C)
 
 // endregion

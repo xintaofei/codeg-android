@@ -5,6 +5,7 @@ import app.codeg.android.core.model.CursorAuthStatus
 import app.codeg.android.core.model.CursorModelsResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -80,6 +81,39 @@ class CodegClientStaticTest {
         assertEquals("registry", goose.customSource)
         // …and the wire form round-trips, so a session can actually be created with it.
         assertEquals("custom:goose", goose.agentType.wire)
+    }
+
+    @Test
+    fun `an adapter agent with nothing installed still reports available`() {
+        // Pins the two fields that LOOK like they say the adapter is missing and don't, which
+        // is why the header states nothing about it and `AdapterNote` — one preflight, all the
+        // facts — says it all instead.
+        //
+        // `available` is hardcoded true for every npx-distributed agent (commands/acp.rs), and
+        // both ACP adapters are npx: it is the platform gate, never the install one.
+        // `installed_version` isn't it either — the server resolves the command first and
+        // probes the version separately, and that probe fails on its own. Only
+        // `AdapterInfo.adapter_installed` answers the question.
+        val agents = CodegClient.decodeAgentList(
+            """
+            [{"agent_type":"claude_code","name":"Claude Code","distribution_type":"npx",
+              "available":true,"installed_version":null,"is_acp_adapter":true}]
+            """.trimIndent(),
+        )
+
+        val claude = agents.single()
+        assertTrue(claude.isAcpAdapter)
+        assertTrue("npx agents are always `available`", claude.available)
+        assertNull(claude.installedVersion)
+    }
+
+    @Test
+    fun `a non-adapter agent is not flagged as one`() {
+        // Absent must read as false: the flag is what asks for the adapter probe, and probing
+        // an agent codeg installs directly would either answer null (a wasted round trip on
+        // every detail open) or, if it ever didn't, describe a package that does not exist.
+        val agents = CodegClient.decodeAgentList("""[{"agent_type":"gemini","name":"Gemini"}]""")
+        assertFalse(agents.single().isAcpAdapter)
     }
 
     @Test

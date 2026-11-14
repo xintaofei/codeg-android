@@ -252,6 +252,63 @@ data class AcpAgentInfo(
      * screen's per-agent rows.
      */
     val skillsCapable: Boolean = true,
+    /**
+     * Whether codeg's entry for this agent is a third-party ACP *adapter* wrapping a vendor CLI
+     * of a different name (Claude Code → claude-agent-acp, Codex → codex-acp).
+     *
+     * Answers only "is this an adapter agent", which is what it can know from the list call —
+     * it says nothing about whether that adapter is installed. So it gates asking for the
+     * preflight probe, and [AdapterInfo] (one call, all the facts) says everything else.
+     */
+    val isAcpAdapter: Boolean = false,
+)
+
+/**
+ * The adapter-vs-vendor-CLI split for an agent whose codeg entry is an ACP *adapter*
+ * (`PreflightResult.adapter`; null for every other agent).
+ *
+ * Ten of the twelve built-ins install the vendor CLI itself, so an existing global install is
+ * simply detected. Claude Code and Codex are the exception: neither `claude` nor `codex`
+ * speaks ACP, so codeg installs `claude-agent-acp` / `codex-acp` and the launch gate looks for
+ * THAT command. Without this the user sees "Not installed" beside an agent they demonstrably
+ * have — by far the most-reported confusion.
+ *
+ * Deliberately structured, not prose: the server ships the facts and the client owns the
+ * wording, so it can be localized (and, here, phrased for a phone that cannot install
+ * anything — every string points at the desktop rather than offering an action).
+ */
+@Serializable
+data class AdapterInfo(
+    /** npm spec codeg installs, e.g. `@zed-industries/claude-code-acp@0.65.0`. */
+    val adapterPackage: String = "",
+    /** Command the launch gate resolves, e.g. `claude-agent-acp`. */
+    val adapterCmd: String = "",
+    /** Whether that command currently resolves on the server. */
+    val adapterInstalled: Boolean = false,
+    /** The vendor CLI, e.g. `claude`. */
+    val nativeCmd: String = "",
+    /** Display name for the vendor CLI, e.g. `Claude Code CLI`. */
+    val nativeLabel: String = "",
+    /** Where the user's own vendor CLI was found, if at all. codeg never launches it — it is
+     *  named so the user can see we did look. */
+    val nativePath: String? = null,
+    /** Config dir both read, so no second sign-in is needed. */
+    val sharedConfigDir: String = "",
+    val docsUrl: String = "",
+)
+
+/**
+ * `acp_preflight` result, narrowed to what this client renders.
+ *
+ * The `checks` array is deliberately NOT modelled: its rows are backend-authored English
+ * prose about the server's own toolchain (node/npm/uv), and every fix they offer runs on the
+ * desktop. [adapter] is the one part that explains something the phone actually shows.
+ */
+@Serializable
+data class AgentPreflight(
+    val agentType: AgentType,
+    val passed: Boolean = false,
+    val adapter: AdapterInfo? = null,
 )
 
 /**

@@ -317,6 +317,14 @@
     <string name="agents_empty_subtitle">No agents registered.</string>
     <!-- Agents · per-agent detail / config editor -->
     <string name="agents_detail_unavailable">Not available — install it on the server to enable.</string>
+    <!-- The ACP-adapter explainer. %s order matches AdapterNote; every one is a literal
+         command, package or path, so none of them are translated. -->
+    <string name="agents_adapter_label">ACP adapter</string>
+    <string name="agents_adapter_learn_more">Learn more</string>
+    <string name="agents_adapter_ready">Adapter %1$s is installed — that is what Codeg launches. It ships its own runtime, so %2$s is not required.</string>
+    <string name="agents_adapter_ready_with_native">Adapter %1$s is installed — that is what Codeg launches, not your own %2$s at %3$s. They are separate packages that coexist, and both read %4$s, so sign-in and settings are shared.</string>
+    <string name="agents_adapter_missing">Codeg drives agents over ACP and %1$s does not speak ACP, so it launches a separate adapter package, %2$s. The adapter ships its own runtime, so the %3$s CLI is not required first; if you do have it, the two coexist and share the same %4$s sign-in. Install the adapter from Agent Settings on the desktop.</string>
+    <string name="agents_adapter_missing_with_native">Found your own %1$s at %2$s. Codeg drives agents over ACP and that CLI does not speak ACP, so it launches a separate adapter package, %3$s — which isn\'t installed yet. The adapter never modifies or replaces your %4$s command and reads the same %5$s, so your sign-in carries over. Install it from Agent Settings on the desktop.</string>
     <string name="agents_detail_not_installed">Not installed</string>
     <string name="agents_detail_version_latest">v%1$s · latest v%2$s</string>
     <!-- Detail · sections -->
