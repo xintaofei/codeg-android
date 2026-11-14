@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
@@ -341,7 +340,9 @@ private fun VersionLine(state: AgentDetailState) {
 private fun SaveBar(canSave: Boolean, saving: Boolean, error: String?, onSave: () -> Unit) {
     val colors = CodegTheme.colors
     Surface(color = colors.bg) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // No navigation-bar inset here: this page sits above the app's own tab bar (or beside
+        // the rail, whose frame already pads the inset), never against the system bar.
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             HorizontalDivider(color = colors.hairline)
             error?.let { Text(it, fontSize = 12.sp, color = colors.danger) }
             PrimaryButton(text = stringResource(R.string.common_save), onClick = onSave, enabled = canSave, loading = saving)
