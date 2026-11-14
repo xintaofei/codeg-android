@@ -573,6 +573,7 @@
     <string name="agents_provider_endpoint">端点</string>
     <!-- Detail · advanced raw editor -->
     <string name="agents_custom_note">此 agent 在 codeg 桌面端注册。这里可以启用或停用它；启动命令、版本和图标都在桌面端管理。</string>
+    <string name="agents_desktop_managed_note">此 agent 的设置在 codeg 桌面端管理。这里可以启用或停用它。</string>
     <string name="agents_advanced">高级</string>
     <string name="agents_advanced_override_hint">此处的修改在保存时会覆盖上方字段。</string>
 

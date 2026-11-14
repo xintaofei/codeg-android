@@ -45,6 +45,14 @@ object AgentVisuals {
         BuiltinAgent.PI -> R.drawable.ic_agent_pi
         BuiltinAgent.GROK -> R.drawable.ic_agent_grok
         BuiltinAgent.CURSOR -> R.drawable.ic_agent_cursor
+        BuiltinAgent.DEEPSEEK -> R.drawable.ic_agent_deepseek
+        BuiltinAgent.QODER -> R.drawable.ic_agent_qoder
+        BuiltinAgent.ANTIGRAVITY -> R.drawable.ic_agent_antigravity
+        BuiltinAgent.KIRO -> R.drawable.ic_agent_kiro
+        BuiltinAgent.ZCODE -> R.drawable.ic_agent_zcode
+        BuiltinAgent.TRAE -> R.drawable.ic_agent_trae
+        BuiltinAgent.COMMAND_CODE -> R.drawable.ic_agent_command_code
+        BuiltinAgent.MINIMAX_CODE -> R.drawable.ic_agent_minimax_code
         null -> R.drawable.ic_agent_custom
     }
 
@@ -57,10 +65,13 @@ object AgentVisuals {
     fun iconIsTemplate(agent: AgentType): Boolean = when (agent.builtin) {
         BuiltinAgent.OPEN_CODE, BuiltinAgent.CLINE, BuiltinAgent.HERMES,
         BuiltinAgent.CODE_BUDDY, BuiltinAgent.GROK, BuiltinAgent.CURSOR,
+        BuiltinAgent.QODER, BuiltinAgent.ANTIGRAVITY,
         null,
         -> true
         BuiltinAgent.CLAUDE_CODE, BuiltinAgent.CODEX, BuiltinAgent.GEMINI,
         BuiltinAgent.OPEN_CLAW, BuiltinAgent.KIMI_CODE, BuiltinAgent.PI,
+        BuiltinAgent.DEEPSEEK, BuiltinAgent.KIRO, BuiltinAgent.ZCODE,
+        BuiltinAgent.TRAE, BuiltinAgent.COMMAND_CODE, BuiltinAgent.MINIMAX_CODE,
         -> false
     }
 
@@ -83,7 +94,16 @@ object AgentVisuals {
         BuiltinAgent.CODE_BUDDY -> Color(0xFF3378F5) // tencent blue
         BuiltinAgent.KIMI_CODE -> Color(0xFF1782FF) // moonshot blue
         BuiltinAgent.PI -> Color(0xFF383842) // pi slate
-        BuiltinAgent.GROK, BuiltinAgent.CURSOR ->
+        // The web's AGENT_COLORS for the agents built in since 0.4x.
+        BuiltinAgent.DEEPSEEK -> Color(0xFF4D6BFE) // deepseek blue
+        BuiltinAgent.QODER -> Color(0xFF6C4CF1) // qoder violet
+        BuiltinAgent.ANTIGRAVITY -> Color(0xFF1A73E8) // google blue
+        BuiltinAgent.KIRO -> Color(0xFF9046FF) // kiro purple
+        BuiltinAgent.TRAE -> Color(0xFF32F08C) // trae green
+        BuiltinAgent.MINIMAX_CODE -> Color(0xFFF23F5D) // minimax red
+        // ZCode's and Command Code's brand colour is near-black, like Grok's and Cursor's,
+        // so it follows the theme the same way.
+        BuiltinAgent.GROK, BuiltinAgent.CURSOR, BuiltinAgent.ZCODE, BuiltinAgent.COMMAND_CODE ->
             if (isDark) Color(0xFFEBEBEB) else Color(0xFF1F1F1F)
         // A registered agent has no brand colour codeg can know, and they all wear the
         // same plug — so derive a stable tint from the id, which is the only thing

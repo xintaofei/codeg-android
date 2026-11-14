@@ -23,7 +23,7 @@ class AgentTypeTest {
         }
         assertEquals("claude_code", AgentType.CLAUDE_CODE.wire)
         assertEquals("code_buddy", AgentType.CODE_BUDDY.wire)
-        assertEquals(12, AgentType.BUILTINS.size)
+        assertEquals(20, AgentType.BUILTINS.size)
     }
 
     @Test
@@ -99,5 +99,31 @@ class AgentTypeTest {
         // the picker is a 64dp cell, so the curated short label wins.
         val choice = AgentChoice.of(AcpAgentInfo(agentType = AgentType.CLAUDE_CODE, name = "Claude Code"))
         assertEquals("Claude", choice.label)
+    }
+
+    @Test
+    fun `the agents built in since 0_4x decode as built-ins`() {
+        assertEquals(
+            listOf(
+                AgentType.DEEPSEEK, AgentType.QODER, AgentType.ANTIGRAVITY, AgentType.KIRO,
+                AgentType.ZCODE, AgentType.TRAE, AgentType.COMMAND_CODE, AgentType.MINIMAX_CODE,
+            ),
+            listOf("deepseek", "qoder", "antigravity", "kiro", "zcode", "trae", "command_code", "minimax_code")
+                .map(AgentType::fromWire),
+        )
+        assertEquals(20, AgentType.BUILTINS.size)
+    }
+
+    @Test
+    fun `custom ids follow the server's reserved list, not every built-in`() {
+        // Reserved: a custom id may not shadow these built-ins.
+        for (id in listOf("deepseek", "qoder", "antigravity", "kiro", "claude_code")) {
+            assertEquals("custom:$id", AgentType.Unknown("custom:$id"), AgentType.fromWire("custom:$id"))
+        }
+        // zcode / trae / command_code / minimax_code were hand-registered custom agents
+        // before they were built in, so those ids stay valid identities of their own.
+        for (id in listOf("zcode", "trae", "command_code", "minimax_code")) {
+            assertEquals(AgentType.Custom(id), AgentType.fromWire("custom:$id"))
+        }
     }
 }

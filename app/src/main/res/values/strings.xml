@@ -578,6 +578,7 @@
     <string name="agents_provider_endpoint">Endpoint</string>
     <!-- Detail · advanced raw editor -->
     <string name="agents_custom_note">This agent was registered in the codeg desktop app. You can enable or disable it here; its command, version and icon are managed there.</string>
+    <string name="agents_desktop_managed_note">This agent\'s settings are managed in the codeg desktop app. You can enable or disable it here.</string>
     <string name="agents_advanced">Advanced</string>
     <string name="agents_advanced_override_hint">Edits here override the fields above on save.</string>
 

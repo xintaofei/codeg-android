@@ -123,7 +123,8 @@ fun AgentDetailContent(
     // accepts a config.json and drops it on the floor. Showing the editor and a Save
     // button would report success and discard the text on the next reload, so both are
     // hidden — the enable toggle, which rides `acp_update_agent_env`, still works.
-    val hasLocalConfig = agentType.builtin != null
+    // The same holds for the built-ins this app has no panel for yet ([BuiltinAgent.managedOnDesktop]).
+    val hasLocalConfig = agentType.builtin?.managedOnDesktop == false
     Column(Modifier.fillMaxSize().imePadding()) {
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
@@ -145,10 +146,12 @@ fun AgentDetailContent(
                 AgentType.CURSOR -> CursorSection(detail, viewModel)
                 AgentType.KIMI_CODE -> AgentConfigKimiView(detail.agent, viewModel)
                 AgentType.PI -> AgentConfigPiView(detail.agent, viewModel)
-                // A custom (user-registered) or unrecognised agent has no hand-written
-                // panel. The header already shows its own name, description and version;
-                // everything else about it is registered in the desktop app.
-                else -> CustomAgentNote()
+                // No hand-written panel: a custom (user-registered) or unrecognised agent, or a
+                // built-in this app doesn't have a panel for yet. The header already shows its
+                // name, description and version; everything else is managed on the desktop.
+                else -> CustomAgentNote(
+                    if (agentType.builtin != null) R.string.agents_desktop_managed_note else R.string.agents_custom_note,
+                )
             }
 
             if (agentType != AgentType.HERMES && !selfContained && hasLocalConfig) {
@@ -180,10 +183,10 @@ fun AgentDetailContent(
  * rather than leaving an agent detail page that looks broken.
  */
 @Composable
-private fun CustomAgentNote() {
+private fun CustomAgentNote(@StringRes text: Int) {
     val colors = CodegTheme.colors
     Text(
-        stringResource(R.string.agents_custom_note),
+        stringResource(text),
         fontSize = 13.sp,
         color = colors.textTertiary,
         modifier = Modifier

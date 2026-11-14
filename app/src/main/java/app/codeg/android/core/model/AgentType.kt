@@ -28,7 +28,18 @@ enum class BuiltinAgent(val wire: String) {
     KIMI_CODE("kimi_code"),
     PI("pi"),
     GROK("grok"),
-    CURSOR("cursor");
+    CURSOR("cursor"),
+
+    // Built in since codeg 0.4x. None has a hand-written settings panel in this app yet
+    // ([managedOnDesktop]).
+    DEEPSEEK("deepseek"),
+    QODER("qoder"),
+    ANTIGRAVITY("antigravity"),
+    KIRO("kiro"),
+    ZCODE("zcode"),
+    TRAE("trae"),
+    COMMAND_CODE("command_code"),
+    MINIMAX_CODE("minimax_code");
 
     val displayName: String
         get() = when (this) {
@@ -44,6 +55,14 @@ enum class BuiltinAgent(val wire: String) {
             PI -> "Pi"
             GROK -> "Grok"
             CURSOR -> "Cursor"
+            DEEPSEEK -> "DeepSeek Harness"
+            QODER -> "Qoder"
+            ANTIGRAVITY -> "Google Antigravity"
+            KIRO -> "Kiro CLI"
+            ZCODE -> "ZCode"
+            TRAE -> "TRAE CLI"
+            COMMAND_CODE -> "Command Code"
+            MINIMAX_CODE -> "MiniMax Code"
         }
 
     /** Short label for dense badges. */
@@ -61,6 +80,26 @@ enum class BuiltinAgent(val wire: String) {
             PI -> "Pi"
             GROK -> "Grok"
             CURSOR -> "Cursor"
+            DEEPSEEK -> "DeepSeek"
+            QODER -> "Qoder"
+            ANTIGRAVITY -> "Antigravity"
+            KIRO -> "Kiro"
+            ZCODE -> "ZCode"
+            TRAE -> "TRAE"
+            COMMAND_CODE -> "Command Code"
+            MINIMAX_CODE -> "MiniMax"
+        }
+
+    /**
+     * Configured only in the codeg desktop app: this app has no panel for it. The server
+     * keeps no local config file for most of these (`agent_local_config_path` is None), so
+     * the generic config editor would report a save and drop it — the detail screen shows
+     * a note instead.
+     */
+    val managedOnDesktop: Boolean
+        get() = when (this) {
+            DEEPSEEK, QODER, ANTIGRAVITY, KIRO, ZCODE, TRAE, COMMAND_CODE, MINIMAX_CODE -> true
+            else -> false
         }
 
     companion object {
@@ -138,8 +177,16 @@ sealed interface AgentType {
         val PI = Builtin(BuiltinAgent.PI)
         val GROK = Builtin(BuiltinAgent.GROK)
         val CURSOR = Builtin(BuiltinAgent.CURSOR)
+        val DEEPSEEK = Builtin(BuiltinAgent.DEEPSEEK)
+        val QODER = Builtin(BuiltinAgent.QODER)
+        val ANTIGRAVITY = Builtin(BuiltinAgent.ANTIGRAVITY)
+        val KIRO = Builtin(BuiltinAgent.KIRO)
+        val ZCODE = Builtin(BuiltinAgent.ZCODE)
+        val TRAE = Builtin(BuiltinAgent.TRAE)
+        val COMMAND_CODE = Builtin(BuiltinAgent.COMMAND_CODE)
+        val MINIMAX_CODE = Builtin(BuiltinAgent.MINIMAX_CODE)
 
-        /** The twelve built-ins, in declaration order. Does NOT include custom agents —
+        /** The built-ins, in declaration order. Does NOT include custom agents —
          *  use the live `acp_list_agents` result for the set the server actually has. */
         val BUILTINS: List<Builtin> = BuiltinAgent.entries.map(::Builtin)
 
@@ -161,15 +208,28 @@ sealed interface AgentType {
          * `is_valid_custom_agent_id`. The server uses it as a filesystem path component,
          * so it stays a conservative slug: it may not be empty, exceed 64 chars, contain
          * anything but ASCII alphanumerics / `-` / `_` / `.`, start with a dot (which
-         * would mean a hidden directory, and `.`/`..` would escape one), or shadow a
-         * built-in wire name (which would make the wire form ambiguous).
+         * would mean a hidden directory, and `.`/`..` would escape one), or be one of
+         * [RESERVED_CUSTOM_IDS].
          */
         fun isValidCustomId(id: String): Boolean =
             id.isNotEmpty() &&
                 id.length <= 64 &&
                 id.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' || it == '.' } &&
                 !id.startsWith('.') &&
-                BuiltinAgent.fromWire(id) == null
+                id !in RESERVED_CUSTOM_IDS
+
+        /**
+         * Built-in wire names a custom id may not take — the server's list, verbatim. It is
+         * NOT every built-in: zcode, trae, command_code and minimax_code were runnable only as
+         * hand-registered custom agents before they were built in, so `custom:zcode` etc. stay
+         * valid, distinct identities (their built-ins use other registry ids). Deriving this
+         * from [BuiltinAgent] would turn those sessions into [Unknown].
+         */
+        private val RESERVED_CUSTOM_IDS: Set<String> = setOf(
+            "claude_code", "codex", "open_code", "gemini", "open_claw", "cline", "hermes",
+            "code_buddy", "kimi_code", "pi", "grok", "cursor",
+            "deepseek", "qoder", "antigravity", "kiro",
+        )
     }
 
     object AgentTypeSerializer : KSerializer<AgentType> {
