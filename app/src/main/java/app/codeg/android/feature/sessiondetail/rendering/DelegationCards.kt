@@ -330,6 +330,49 @@ fun DelegationCard(vm: ToolCallVM, model: DelegationModel, modifier: Modifier = 
 }
 
 /**
+ * A `resume_delegation` the broker refused ([Delegations.resumeRefusal]): the resume, and the
+ * broker's reason read in place. It revived nothing, so it never shows a sub-agent or a run
+ * state — the reason is the point (web: the row `DelegationResumeRow` falls back to).
+ */
+@Composable
+fun RefusedResumeCard(
+    vm: ToolCallVM,
+    refusal: Delegations.ResumeRefusal,
+    modifier: Modifier = Modifier,
+    nested: Boolean = false,
+) {
+    val colors = CodegTheme.colors
+    Column(
+        modifier
+            .delegationCard(colors, nested)
+            .padding(start = 12.dp, end = 10.dp, top = 9.dp, bottom = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                refusal.taskId?.let { stringResource(R.string.delegation_resume_refused_task, it.take(8)) }
+                    ?: stringResource(R.string.delegation_resume_refused),
+                fontSize = 13.5.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            // A refusal sent as an error is the call failing; an ordinary one is an answer.
+            if (vm.isError || vm.state == ToolCallState.ERROR) StatusWord(stringResource(R.string.delegation_failed), colors.danger)
+        }
+        // The broker's own words (protocol English), verbatim.
+        refusal.message?.let { message ->
+            SelectionContainer {
+                Text(message, fontSize = 12.5.sp, lineHeight = 17.sp, color = colors.textSecondary)
+            }
+        }
+    }
+}
+
+/**
  * The line under a delegation's title (web `ProgressLine`): its steps, what it is doing now —
  * or, once it ended, the first line of its result — and the way into its own session.
  */

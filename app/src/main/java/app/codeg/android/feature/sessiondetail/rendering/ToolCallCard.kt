@@ -86,7 +86,11 @@ fun ToolCallCard(vm: ToolCallVM, modifier: Modifier = Modifier, nested: Boolean 
         delegation != null -> DelegationCard(vm, delegation, modifier, nested)
         Delegations.isStatusPoll(vm.rawName) || Delegations.isCancel(vm.rawName) ->
             DelegationChecksCard(listOf(vm), modifier, nested)
-        else -> PlainToolCallCard(vm, modifier, nested)
+        else -> {
+            // A refused resume revived nothing: the broker's reason is the card.
+            val refusal = remember(vm) { Delegations.resumeRefusal(vm) }
+            if (refusal != null) RefusedResumeCard(vm, refusal, modifier, nested) else PlainToolCallCard(vm, modifier, nested)
+        }
     }
 }
 

@@ -877,6 +877,11 @@
     <string name="delegation_err_assistant_not_found">助手不存在</string>
     <string name="delegation_err_assistants_unsupported">需要重启</string>
     <string name="delegation_err_assistant_support_unknown">未响应</string>
+    <!-- Timeline: thought titles, refused resume_delegation (code-mode delegation shares the card) -->
+    <string name="activity_thought">思考</string>
+    <string name="activity_thinking">思考中</string>
+    <string name="delegation_resume_refused">恢复委派任务</string>
+    <string name="delegation_resume_refused_task">恢复任务 #%1$s</string>
     <string name="goal_title">目标：</string>
     <string name="goal_objective">目标</string>
     <string name="goal_status_label">状态</string>

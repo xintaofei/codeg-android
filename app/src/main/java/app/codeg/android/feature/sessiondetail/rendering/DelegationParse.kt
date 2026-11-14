@@ -108,6 +108,8 @@ object DelegationParse {
         val taskId: String? = null,
         /** Why a resume was asked for. */
         val reason: String? = null,
+        /** The assistant the call names: the backend then ignores its `agent_type`. */
+        val assistantId: Int? = null,
     )
 
     private val argsWrappers = listOf("arguments", "input", "params", "payload", "_meta", "args")
@@ -118,17 +120,25 @@ object DelegationParse {
         if (value is JsonPrimitive) return if (value.isString) findArgs(parse(value.content), depth + 1) else null
         val obj = value as? JsonObject ?: return null
         if (argKeys.any { (obj[it] as? JsonPrimitive)?.isString == true }) return obj
+        if (CodeModeDelegation.coerceAssistantId(obj["assistant_id"]) != null) return obj
         for (key in argsWrappers) findArgs(obj[key], depth + 1)?.let { return it }
         return null
     }
 
-    /** The call's arguments, peeling the wrappers hosts nest them in (web `parseInput`). */
+    /**
+     * The call's arguments, peeling the wrappers hosts nest them in (web `parseInput`) — or, for
+     * an OpenCode code-mode `execute`, read out of the object literal in its `code`
+     * ([CodeModeDelegation.args]): a code-mode call whose arguments can't be read is still one,
+     * with nothing known.
+     */
     fun args(raw: String?): Args {
         if (raw.isNullOrBlank()) return Args()
-        val obj = findArgs(parse(raw)) ?: return Args()
+        val parsed = parse(raw)
+        val obj = findArgs(parsed) ?: return CodeModeDelegation.args(parsed) ?: Args()
         fun field(key: String) = obj.str(key)?.trim()?.takeIf { it.isNotEmpty() }
         return Args(
-            agentType = field("agent_type"),
+            agentType = CodeModeDelegation.coerceAgentType(obj.str("agent_type")),
+            assistantId = CodeModeDelegation.coerceAssistantId(obj["assistant_id"]),
             task = obj.str("task")?.takeIf { it.isNotBlank() },
             workingDir = field("working_dir"),
             taskId = field("task_id"),
@@ -267,6 +277,31 @@ object DelegationParse {
         val parsed = callResult(output)
         if (parsed?.structured == true) return parsed.errorCode == NOT_RESUMABLE
         return listOfNotNull(parsed?.text, output).any { it.trimStart().startsWith(REFUSED_TEXT) }
+    }
+
+    /**
+     * What a refused resume explains itself with ("Not resumed: the task already completed —
+     * …"): the report's own `message` where it carries the refusal — for a `completed` report
+     * the content text a host shows may be the child's earlier output — then whatever the
+     * result shows, then the raw result. Null for an empty result.
+     */
+    fun refusalMessage(output: String?): String? {
+        val raw = output?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        val candidates = mutableListOf<String?>()
+        objectOf(raw)?.let { found ->
+            val obj = settle(found).obj ?: return@let
+            val result = McpResultEnvelope.peel(obj, ::isResolvableCallResult).obj
+            val content = firstContentText(result)
+            candidates += (result["structuredContent"] as? JsonObject)?.str("message")
+            candidates += result.str("message")
+            candidates += content?.let(::embeddedObject)?.str("message")
+            candidates += content
+        }
+        candidates += callResult(raw)?.text
+        candidates += raw
+        val texts = candidates.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
+        return texts.firstOrNull { it.startsWith(REFUSED_TEXT) } ?: texts.firstOrNull()
     }
 
     // endregion

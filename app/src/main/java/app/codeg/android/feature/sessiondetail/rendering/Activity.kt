@@ -32,6 +32,8 @@ private val BROWSER_NAMES = setOf("browser", "browser_action")
 fun stepFamily(vm: ToolCallVM): StepFamily? {
     // Ahead of the MCP rule: codeg's own server is how these arrive.
     if (Delegations.isStatusPoll(vm.rawName)) return StepFamily.DELEGATION_POLL
+    // A code-mode `execute` delegating is a delegation, not one more command in a run.
+    if (CodeModeDelegation.isCall(vm.rawName, vm.input)) return null
     if (vm.isPlanMode || isMcpCall(vm)) return null
     return when (vm.bucket) {
         ToolKindBucket.READ, ToolKindBucket.SEARCH -> StepFamily.EXPLORE

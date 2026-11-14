@@ -106,8 +106,32 @@ object Delegations {
     /** A cancel of a delegated task. */
     fun isCancel(name: String): Boolean = bareName(name) == "cancel_delegation"
 
-    /** A call the delegation card draws: a delegate or resume, or one the broker stamped. */
-    fun drawsCard(vm: ToolCallVM): Boolean = isDelegateCall(vm.rawName) || vm.meta?.containsKey(META_KEY) == true
+    /**
+     * A call the delegation card draws: a delegate or resume, one the broker stamped, or an
+     * OpenCode code-mode `execute` whose script calls `delegate_to_agent`. Each on the call's
+     * own evidence — its name, the broker's stamp, the script — never on a name inferred from a
+     * live title, which can quote anything (a Bash `rg 'delegate_to_agent'` would lose its
+     * command and output to a sub-agent card).
+     */
+    fun drawsCard(vm: ToolCallVM): Boolean =
+        isDelegateCall(vm.rawName) || vm.meta?.containsKey(META_KEY) == true ||
+            CodeModeDelegation.isCall(vm.rawName, vm.input)
+
+    /** A `resume_delegation` the broker refused: the task it named, and what it said. */
+    data class ResumeRefusal(val taskId: String?, val message: String?)
+
+    /**
+     * The refusal a `resume_delegation` came back with (web `isRefusedResume`); null for any
+     * other call, a resume that went ahead, and one still in flight. A refusal still names the
+     * task's agent, child and real status — which would pass for a sub-agent that came back —
+     * so it draws as just the refusal.
+     */
+    fun resumeRefusal(vm: ToolCallVM): ResumeRefusal? {
+        if (!isResumeCall(vm.rawName)) return null
+        val output = vm.output?.takeIf { it.isNotBlank() } ?: vm.content?.takeIf { it.isNotBlank() } ?: return null
+        if (!DelegationParse.refusedResume(output)) return null
+        return ResumeRefusal(DelegationParse.args(vm.input).taskId, DelegationParse.refusalMessage(output))
+    }
 
     /** The task a delegate (or resume) call is about, from what the call itself carries. */
     fun callTaskId(vm: ToolCallVM, binding: DelegationBinding?): String? {
@@ -132,7 +156,7 @@ object Delegations {
         val stamped = fromMeta(vm.meta)
         val result = DelegationParse.callResult(output, forceError = vm.isError)
         val hasModel = binding != null || stamped != null ||
-            (!resumed && (args.agentType != null || args.task != null)) ||
+            (!resumed && (args.agentType != null || args.assistantId != null || args.task != null)) ||
             result?.agentType != null || result?.childConversationId != null
         if (!hasModel) return null
         val report = later?.report
@@ -167,7 +191,8 @@ object Delegations {
         return DelegationModel(
             status = status,
             agentType = binding?.agentType?.takeIf { it.isNotEmpty() }
-                ?: args.agentType?.takeIf { !resumed }
+                // A call that names an assistant: the backend ignores its `agent_type`.
+                ?: args.agentType?.takeIf { !resumed && args.assistantId == null }
                 ?: result?.agentType
                 ?: stamped?.agentType
                 ?: report?.agentType,

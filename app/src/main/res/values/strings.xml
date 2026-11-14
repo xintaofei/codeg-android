@@ -895,6 +895,11 @@
     <string name="delegation_err_assistant_not_found">assistant not found</string>
     <string name="delegation_err_assistants_unsupported">needs restart</string>
     <string name="delegation_err_assistant_support_unknown">no answer</string>
+    <!-- Timeline: thought titles, refused resume_delegation (code-mode delegation shares the card) -->
+    <string name="activity_thought">Thought</string>
+    <string name="activity_thinking">Thinking</string>
+    <string name="delegation_resume_refused">Resuming a delegated task</string>
+    <string name="delegation_resume_refused_task">Resuming task #%1$s</string>
     <string name="goal_title">Goal:</string>
     <string name="goal_objective">Objective</string>
     <string name="goal_status_label">Status</string>
