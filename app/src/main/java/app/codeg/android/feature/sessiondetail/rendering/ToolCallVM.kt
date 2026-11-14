@@ -127,6 +127,9 @@ sealed interface RenderPart {
      * counts are Grok-only (codex sends none).
      */
     data class Compaction(val before: Int?, val after: Int?, val running: Boolean) : RenderPart
+    /** A turn failure ([ContentBlock.TurnError]). The server only emits one inside a system
+     *  turn, which the timeline handles itself; this arm keeps a stray one visible. */
+    data class Error(val message: String) : RenderPart
     data class Unknown(val type: String) : RenderPart
 }
 
@@ -195,6 +198,8 @@ object MessageRender {
                         ),
                     )
                 }
+                is ContentBlock.TurnError ->
+                    if (block.message.isNotBlank()) parts.add(RenderPart.Error(block.message.trim()))
                 is ContentBlock.Unknown -> parts.add(RenderPart.Unknown(block.type))
             }
         }

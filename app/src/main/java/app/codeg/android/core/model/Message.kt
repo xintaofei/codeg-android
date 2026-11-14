@@ -90,6 +90,13 @@ sealed interface ContentBlock {
         val meta: JsonObject? = null,
     ) : ContentBlock
     data class ToolResult(val id: String?, val outputPreview: String?, val isError: Boolean) : ContentBlock
+    /**
+     * The turn FAILED, in the agent's own words ("API Error: 503 …"). Never agent prose:
+     * the server's parsers put it alone in a [TurnRole.SYSTEM] turn that closes the failed
+     * round (Rust `ContentBlock::TurnError`, `parsers::turn_error_message`), so a reopened
+     * session still shows why the round stopped.
+     */
+    data class TurnError(val message: String) : ContentBlock
     data class Unknown(val type: String) : ContentBlock
 
     companion object {
@@ -125,6 +132,7 @@ sealed interface ContentBlock {
                     outputPreview = obj.stringOrNull("output_preview"),
                     isError = obj.boolOrNull("is_error") ?: false,
                 )
+                "turn_error" -> TurnError(obj.stringOrNull("message").orEmpty())
                 else -> Unknown(type)
             }
         }
@@ -160,3 +168,15 @@ data class MessageTurn(
     @Serializable(with = InstantSerializer::class)
     val completedAt: Instant? = null,
 )
+
+/**
+ * A failed round's closing record: a system turn made only of [ContentBlock.TurnError]
+ * (`parsers::message_turn_count` excludes exactly this shape from the message count).
+ * It ends a round just as an assistant reply does.
+ */
+val MessageTurn.isTurnErrorRecord: Boolean
+    get() = role == TurnRole.SYSTEM && blocks.isNotEmpty() && blocks.all { it is ContentBlock.TurnError }
+
+/** The turn's failure messages, blank ones dropped. */
+val MessageTurn.turnErrors: List<String>
+    get() = blocks.mapNotNull { (it as? ContentBlock.TurnError)?.message?.trim()?.takeIf(String::isNotEmpty) }

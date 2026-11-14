@@ -2,6 +2,10 @@ package app.codeg.android.core.network
 
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.ConnectBody
+import app.codeg.android.core.model.ContentBlock
+import app.codeg.android.core.model.MessageTurn
+import app.codeg.android.core.model.isTurnErrorRecord
+import app.codeg.android.core.model.turnErrors
 import app.codeg.android.core.model.ConversationStatus
 import app.codeg.android.core.model.ConversationSummary
 import app.codeg.android.core.model.FolderDetail
@@ -83,6 +87,17 @@ class CodegJsonTest {
         assertEquals(AgentType.Custom("goose"), c.agentType)
         assertEquals("goose", c.agentType.displayName)
         assertEquals("custom:goose", c.agentType.wire)
+    }
+
+    @Test
+    fun `a failed round's turn_error record decodes as one`() {
+        val turn = CodegJson.response.decodeFromString<MessageTurn>(
+            """{"id":"s1","role":"system","timestamp":"2024-01-02T03:04:05Z",
+               "blocks":[{"type":"turn_error","message":"API Error: 503"}]}""",
+        )
+        assertEquals(listOf(ContentBlock.TurnError("API Error: 503")), turn.blocks)
+        assertTrue(turn.isTurnErrorRecord)
+        assertEquals(listOf("API Error: 503"), turn.turnErrors)
     }
 
     @Test

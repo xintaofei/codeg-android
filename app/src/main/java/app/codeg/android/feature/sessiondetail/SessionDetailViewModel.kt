@@ -50,6 +50,7 @@ import app.codeg.android.core.network.isNoActiveTurn
 import app.codeg.android.core.network.isStaleConnection
 import app.codeg.android.feature.sessiondetail.interactive.ParsedPermission
 import app.codeg.android.feature.sessiondetail.timeline.dropTrailingAssistantRun
+import app.codeg.android.feature.sessiondetail.timeline.endsRound
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -1740,8 +1741,9 @@ class SessionDetailViewModel @Inject constructor(
                 if (!isLatestFetch(generation)) continue
                 attempt += 1
                 val detail = fetched.detail
-                val last = detail.turns.lastOrNull()
-                val endsInReply = last?.role == TurnRole.ASSISTANT && last.blocks.isNotEmpty()
+                // A failed round ends on its `turn_error` record, not on a reply — without
+                // that arm a failed turn never reads as landed and falls to local promotion.
+                val endsInReply = endsRound(detail.turns)
 
                 // Getting this response cost a re-anchor: the transcript was REWRITTEN
                 // (a compaction) while the turn was ending. Every index moved, so the

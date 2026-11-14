@@ -10,6 +10,8 @@ import app.codeg.android.core.model.MessageTurn
 import app.codeg.android.core.model.PlanEntry
 import app.codeg.android.core.model.TurnRole
 import app.codeg.android.core.model.TurnUsage
+import app.codeg.android.core.model.isTurnErrorRecord
+import app.codeg.android.core.model.turnErrors
 import app.codeg.android.feature.sessiondetail.LiveSegment
 import app.codeg.android.feature.sessiondetail.rendering.ContextCompaction
 import app.codeg.android.feature.sessiondetail.LiveToolCallState
@@ -114,6 +116,15 @@ data class TimelineNode(
 internal fun systemText(turn: MessageTurn): String =
     turn.blocks.mapNotNull { (it as? ContentBlock.Text)?.text }.joinToString("\n").trim()
 
+/**
+ * Whether [turns] end on a finished round: an assistant reply with content, or a failed
+ * round's closing [isTurnErrorRecord] (a failure persists no assistant reply of its own).
+ */
+internal fun endsRound(turns: List<MessageTurn>): Boolean {
+    val last = turns.lastOrNull() ?: return false
+    return (last.role == TurnRole.ASSISTANT && last.blocks.isNotEmpty()) || last.isTurnErrorRecord
+}
+
 /** Drop the trailing run of assistant turns (those after the last non-assistant turn).
  *  On reattach the live turn rebuilt from the snapshot owns the in-flight reply, so the
  *  partial copy the server has persisted at the tail must be hidden to avoid doubling it. */
@@ -172,6 +183,12 @@ object TranscriptTimeline {
                 TurnRole.SYSTEM -> {
                     if (systemText(turn).isNotEmpty()) {
                         nodes.add(TimelineNode(turn.id, NodeContent.System(turn), agent, startsGroup = true))
+                    }
+                    // A failed round's closing record: drawn as the same error row the live
+                    // turn showed, attached to the reply it ends (no group gap above it).
+                    turn.turnErrors.forEachIndexed { k, message ->
+                        val id = if (k == 0) "${turn.id}#error" else "${turn.id}#error$k"
+                        nodes.add(TimelineNode(id, NodeContent.Error(message), agent))
                     }
                     i++
                 }
@@ -280,6 +297,7 @@ object TranscriptTimeline {
             is RenderPart.Image -> listOf(TimelineNode(base, NodeContent.Image(part.image, part.caption), agent))
             is RenderPart.Compaction ->
                 listOf(TimelineNode(base, NodeContent.Compaction(part.before, part.after, part.running), agent))
+            is RenderPart.Error -> listOf(TimelineNode(base, NodeContent.Error(part.message), agent))
             is RenderPart.Unknown -> listOf(TimelineNode(base, NodeContent.Unsupported(part.type), agent))
         }
     }

@@ -195,4 +195,46 @@ class TranscriptTimelineTest {
         val nodes = TranscriptTimeline.build(turns, emptyList(), null, agent)
         assertEquals(0, nodes.count { it.content is NodeContent.System })
     }
+
+    private fun turnError(id: String, message: String) =
+        MessageTurn(id, TurnRole.SYSTEM, listOf(ContentBlock.TurnError(message)), Instant.EPOCH)
+
+    @Test
+    fun `a persisted turn_error renders as an error row, not a system note`() {
+        val turns = listOf(
+            user("u1", "hi"),
+            assistant("a1", listOf(ContentBlock.Text("working on it"))),
+            turnError("s1", "  API Error: 503 overloaded "),
+        )
+        val nodes = TranscriptTimeline.build(turns, emptyList(), null, agent)
+        assertEquals(0, nodes.count { it.content is NodeContent.System })
+        val error = nodes.single { it.content is NodeContent.Error }
+        assertEquals("s1#error", error.id)
+        assertEquals("API Error: 503 overloaded", (error.content as NodeContent.Error).message)
+        // It closes the reply it ends rather than opening a new group…
+        assertFalse(error.startsGroup)
+        // …and sits after that reply's footer.
+        assertTrue(nodes.indexOf(error) > nodes.indexOfFirst { it.content is NodeContent.Footer })
+    }
+
+    @Test
+    fun `a blank turn_error produces no node`() {
+        val nodes = TranscriptTimeline.build(listOf(user("u1", "hi"), turnError("s1", " ")), emptyList(), null, agent)
+        assertEquals(0, nodes.count { it.content is NodeContent.Error })
+    }
+
+    @Test
+    fun `a round ends on a reply or on its failure record`() {
+        assertTrue(endsRound(listOf(user("u1", "hi"), assistant("a1", listOf(ContentBlock.Text("done"))))))
+        // A failed round may persist no reply at all — its turn_error is what closes it.
+        assertTrue(endsRound(listOf(user("u1", "hi"), turnError("s1", "API Error"))))
+        assertFalse(endsRound(listOf(user("u1", "hi"))))
+        assertFalse(endsRound(listOf(user("u1", "hi"), assistant("a1", emptyList()))))
+        // An ordinary system note is not a round's end.
+        assertFalse(
+            endsRound(
+                listOf(user("u1", "hi"), MessageTurn("s1", TurnRole.SYSTEM, listOf(ContentBlock.Text("note")), Instant.EPOCH)),
+            ),
+        )
+    }
 }
