@@ -13,6 +13,7 @@ import app.codeg.android.core.model.TurnUsage
 import app.codeg.android.core.model.isTurnErrorRecord
 import app.codeg.android.core.model.turnErrors
 import app.codeg.android.feature.sessiondetail.LiveSegment
+import app.codeg.android.feature.sessiondetail.rendering.ActivitySummary
 import app.codeg.android.feature.sessiondetail.rendering.ContextCompaction
 import app.codeg.android.feature.sessiondetail.LiveToolCallState
 import app.codeg.android.feature.sessiondetail.LiveTurnState
@@ -21,6 +22,9 @@ import app.codeg.android.feature.sessiondetail.rendering.MessageRender
 import app.codeg.android.feature.sessiondetail.rendering.RenderPart
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallVM
+import app.codeg.android.feature.sessiondetail.rendering.ToolKindBucket
+import app.codeg.android.feature.sessiondetail.rendering.answerStart
+import app.codeg.android.feature.sessiondetail.rendering.summarizeActivity
 
 /**
  * The payload of one timeline row. The whole transcript (persisted turns +
@@ -50,6 +54,25 @@ sealed interface NodeContent {
      *  cancellation, carry none. */
     data class Error(val message: String, val details: String? = null) : NodeContent
     data class Unsupported(val type: String) : NodeContent
+
+    /**
+     * The head of an assistant reply (web `ActivityHeader`): what it did — its steps, its
+     * failures, the time it took — and, when [foldable], the control folding its steps away.
+     * [failureRowId] is the row "show the failure" opens the reply at.
+     */
+    data class ReplyHeader(
+        val replyId: String,
+        val summary: ActivitySummary,
+        val completed: Boolean,
+        val hasSteps: Boolean,
+        val durationMs: Int?,
+        val foldable: Boolean,
+        val open: Boolean,
+        val failureRowId: String?,
+    ) : NodeContent
+
+    /** The foot of an open reply's steps: what they were, and the control folding them back. */
+    data class ReplyFoot(val replyId: String, val steps: Int, val durationMs: Int?) : NodeContent
 }
 
 /**
@@ -71,7 +94,10 @@ data class TimelineNode(
         get() = when (val c = content) {
             is NodeContent.User -> MarkerKind.User
             is NodeContent.System -> MarkerKind.System
-            is NodeContent.AssistantBlock -> MarkerKind.Assistant(agent)
+            // The reply's header carries the agent; its prose is a point on the rail.
+            is NodeContent.AssistantBlock -> MarkerKind.Prose
+            is NodeContent.ReplyHeader -> MarkerKind.Assistant(agent)
+            is NodeContent.ReplyFoot -> MarkerKind.Fold
             is NodeContent.Reasoning -> MarkerKind.Reasoning
             is NodeContent.Tool -> MarkerKind.Tool(c.vm.bucket, c.vm.state)
             is NodeContent.ToolGroup -> MarkerKind.ToolGroup(c.items.any { it.state == ToolCallState.ERROR }, c.streaming)
@@ -110,6 +136,8 @@ data class TimelineNode(
             is NodeContent.Thinking -> "thinking"
             is NodeContent.Error -> "error"
             is NodeContent.Unsupported -> "unsupported"
+            is NodeContent.ReplyHeader -> "reply.header"
+            is NodeContent.ReplyFoot -> "reply.foot"
         }
 }
 
@@ -179,13 +207,56 @@ internal fun List<MessageTurn>.inFlightToolCallIds(inFlightUserTurnId: String?):
 }
 
 /**
- * Flattens a conversation into an ordered `[TimelineNode]`. User/system turns map
- * 1:1; runs of consecutive assistant turns merge into one reply (codeg persists a
- * logical reply as several turns) that expands into part nodes + a single footer.
- * Faithful port of the iOS `TranscriptTimeline`.
+ * One assistant reply's rows, before its fold is applied ([TranscriptTimeline.flatten]).
+ * Its parts split at the last step: [process] up to it, [answer] after it.
+ */
+data class ReplyRows(
+    val id: String,
+    val agent: AgentType,
+    /** The reply's work: its steps, and the prose and thoughts between them. */
+    val process: List<TimelineNode>,
+    /** The reply's closing words, in view whether its steps are folded or not. */
+    val answer: List<TimelineNode>,
+    /** What closes the reply whatever its fold: the agent working, a failure, its footer. */
+    val trailer: List<TimelineNode>,
+    val summary: ActivitySummary,
+    val completed: Boolean,
+    val durationMs: Int?,
+    /** The row holding [ActivitySummary.firstUnrecoveredId]'s call. */
+    val failureRowId: String?,
+    /** Process rows that stay in view folded: a sub-agent still running outlives its turn. */
+    val pinned: Set<String> = emptySet(),
+) {
+    /**
+     * Whether folding has anything to trade away. Folding keeps the answer, so a settled
+     * reply with none — stopped mid-call, or ended on a card that IS its answer — stays
+     * open; a reply being written hasn't written its answer yet, and is foldable as soon as
+     * it has a step.
+     */
+    val foldable: Boolean get() = process.isNotEmpty() && (!completed || answer.isNotEmpty())
+
+    /** Nothing to head: an empty placeholder reply keeps only its [trailer]. */
+    val blank: Boolean get() = completed && process.isEmpty() && answer.isEmpty()
+}
+
+/** One entry of the thread: a row always drawn, or a reply whose steps fold. */
+sealed interface ThreadEntry {
+    data class Row(val node: TimelineNode) : ThreadEntry
+    data class Reply(val rows: ReplyRows) : ThreadEntry
+}
+
+/**
+ * Flattens a conversation into an ordered `[TimelineNode]`. User/system turns map 1:1; runs
+ * of consecutive assistant turns merge into one reply (codeg persists a logical reply as
+ * several turns), headed by its activity header, its steps folding away under it.
+ *
+ * Three stages, so each re-runs only when its own input moves: [persistedEntries] (the
+ * transcript; memoize it), [liveEntries] (the reply streaming in, every flush), and
+ * [flatten] (the fold, cheap).
  */
 object TranscriptTimeline {
 
+    /** Every reply open, the rail terminated — the whole transcript as rows. */
     fun build(
         turns: List<MessageTurn>,
         pending: List<MessageTurn>,
@@ -193,33 +264,36 @@ object TranscriptTimeline {
         agent: AgentType,
         hideTrailingAssistantReply: Boolean = false,
         inFlightUserTurnId: String? = null,
-    ): List<TimelineNode> =
-        withLive(buildPersisted(turns, pending, agent, hideTrailingAssistantReply, inFlightUserTurnId), live, agent)
+        localTurns: List<MessageTurn> = emptyList(),
+    ): List<TimelineNode> = terminate(
+        flatten(persistedEntries(turns, pending, agent, hideTrailingAssistantReply, inFlightUserTurnId, localTurns) + liveEntries(live, agent)) { true },
+    )
 
     /**
-     * The persisted + optimistic-pending nodes, with the rail NOT yet terminated.
-     * Memoize this (it re-merges/adapts every turn) separately from [withLive] so the
-     * ~50ms live stream only re-runs the cheap live append, not the whole transcript.
+     * The persisted + optimistic-pending entries.
      *
-     * [hideTrailingAssistantReply] drops the in-flight round's persisted assistant
-     * turns ([hideInFlightReply], keyed by [inFlightUserTurnId]) — used on reattach, where the live turn rebuilt from the snapshot is the
-     * authoritative in-flight reply while the agent concurrently persists a partial
-     * copy into [turns]; showing both would double the reply. Port of the iOS
-     * `liveOwnsInFlightReply` de-dup.
+     * [hideTrailingAssistantReply] drops the in-flight round's persisted assistant turns
+     * ([hideInFlightReply], keyed by [inFlightUserTurnId]) — used on reattach, where the live
+     * turn rebuilt from the snapshot is the authoritative in-flight reply while the agent
+     * concurrently persists a partial copy into [turns]; showing both would double the reply.
+     * [localTurns] (finished rounds handed off locally) follow the server window.
      */
-    fun buildPersisted(
+    fun persistedEntries(
         turns: List<MessageTurn>,
         pending: List<MessageTurn>,
         agent: AgentType,
         hideTrailingAssistantReply: Boolean = false,
         inFlightUserTurnId: String? = null,
         localTurns: List<MessageTurn> = emptyList(),
-    ): List<TimelineNode> {
+    ): List<ThreadEntry> {
         // Only the server's window can hold a partial copy of the running reply; the local
         // turns after it are finished rounds.
-        val source = (if (hideTrailingAssistantReply) turns.hideInFlightReply(inFlightUserTurnId) else turns) + localTurns
+        val server = if (hideTrailingAssistantReply) turns.hideInFlightReply(inFlightUserTurnId) else turns
+        val source = server + localTurns
         val runningToolIds = source.inFlightToolCallIds(inFlightUserTurnId)
-        val nodes = mutableListOf<TimelineNode>()
+        // A reply after the in-flight prompt is still being written, read from the transcript.
+        val inFlightStart = server.inFlightRoundStart(inFlightUserTurnId)
+        val entries = mutableListOf<ThreadEntry>()
         var lastUserId: String? = null
         var i = 0
         while (i < source.size) {
@@ -227,18 +301,18 @@ object TranscriptTimeline {
             when (turn.role) {
                 TurnRole.USER -> {
                     lastUserId = turn.id
-                    nodes.add(TimelineNode(turn.id, NodeContent.User(turn), agent, startsGroup = true))
+                    entries.add(ThreadEntry.Row(TimelineNode(turn.id, NodeContent.User(turn), agent, startsGroup = true)))
                     i++
                 }
                 TurnRole.SYSTEM -> {
                     if (systemText(turn).isNotEmpty()) {
-                        nodes.add(TimelineNode(turn.id, NodeContent.System(turn), agent, startsGroup = true))
+                        entries.add(ThreadEntry.Row(TimelineNode(turn.id, NodeContent.System(turn), agent, startsGroup = true)))
                     }
                     // A failed round's closing record: drawn as the same error row the live
                     // turn showed, attached to the reply it ends (no group gap above it).
                     turn.turnErrors.forEachIndexed { k, message ->
                         val id = if (k == 0) "${turn.id}#error" else "${turn.id}#error$k"
-                        nodes.add(TimelineNode(id, NodeContent.Error(message), agent))
+                        entries.add(ThreadEntry.Row(TimelineNode(id, NodeContent.Error(message), agent)))
                     }
                     i++
                 }
@@ -246,59 +320,42 @@ object TranscriptTimeline {
                     var j = i + 1
                     while (j < source.size && source[j].role == TurnRole.ASSISTANT) j++
                     val merged = merge(source.subList(i, j))
-                    nodes.addAll(assistantNodes(merged, lastUserId, agent, runningToolIds))
+                    val completed = !(inFlightStart >= 0 && i > inFlightStart && i < server.size)
+                    entries.add(ThreadEntry.Reply(persistedReply(merged, lastUserId, agent, runningToolIds, completed)))
                     i = j
                 }
             }
         }
         for (turn in pending) {
-            nodes.add(TimelineNode(turn.id, NodeContent.User(turn), agent, startsGroup = true))
+            entries.add(ThreadEntry.Row(TimelineNode(turn.id, NodeContent.User(turn), agent, startsGroup = true)))
         }
-        return nodes
+        return entries
     }
 
-    /** Append the in-flight reply to the persisted nodes and terminate the rail's endpoints. */
-    fun withLive(persisted: List<TimelineNode>, live: LiveTurnState?, agent: AgentType): List<TimelineNode> {
-        val nodes = persisted.toMutableList()
-        if (live != null) nodes.addAll(liveNodes(live, agent))
-        if (nodes.isNotEmpty()) {
-            nodes[0] = nodes[0].copy(connectTop = false)
-            nodes[nodes.lastIndex] = nodes[nodes.lastIndex].copy(connectBottom = false)
-        }
-        return nodes
-    }
-
-    /** A merged reply → ordered part nodes + a footer (always emitted, even tool-only).
-     *  Text parts split into per-block nodes; persisted text is parse-memoized. */
-    private fun assistantNodes(
+    /** A merged reply → its rows, and a footer (always, even tool-only). Text is parse-memoized. */
+    private fun persistedReply(
         merged: MessageTurn,
         questionId: String?,
         agent: AgentType,
         runningToolIds: Set<String>,
-    ): List<TimelineNode> {
-        val out = MessageRender.adaptTurn(merged, runningToolIds)
-            .flatMapIndexed { idx, part -> nodesFor(part, merged.id, idx, agent, cached = true) }
-            .toMutableList()
-        out.add(TimelineNode("${merged.id}#footer", NodeContent.Footer(merged, questionId), agent))
-        return out
+        completed: Boolean,
+    ): ReplyRows {
+        val calls = MessageRender.adaptParts(merged, runningToolIds)
+        val footer = TimelineNode("${merged.id}#footer", NodeContent.Footer(merged, questionId), agent)
+        return replyRows(merged.id, agent, calls, cached = true, completed, merged.durationMs, trailer = listOf(footer))
     }
 
     /**
-     * The in-flight reply → plan? + thinking? + grouped parts + error?.
+     * The in-flight reply → its entries: the reply (plan? + grouped parts), the agent working
+     * (before its first word), its failure.
      *
      * A note steered into the turn ([LiveSegment.Steer]) splits it the way the transcript
-     * will: the reply so far, the note as the user's message, then the reply that follows.
-     * Each part after the first takes the id its settled turn will have (`<id>-<n>`, see
-     * [LiveTurnBuilder.snapshotAsMessageTurns]).
+     * will: the reply so far, the note as the user's message, then the reply that follows —
+     * each reply of its own. Each part after the first takes the id its settled turn will
+     * have (`<id>-<n>`, see [LiveTurnBuilder.snapshotAsMessageTurns]).
      */
-    private fun liveNodes(live: LiveTurnState, agent: AgentType): List<TimelineNode> {
-        val out = mutableListOf<TimelineNode>()
-        if (live.livePlan.isNotEmpty()) {
-            out.add(TimelineNode("${live.id}#plan", NodeContent.Plan(live.livePlan), agent))
-        }
-        if (live.isEmpty && live.isStreaming) {
-            out.add(TimelineNode("${live.id}#thinking", NodeContent.Thinking, agent))
-        }
+    fun liveEntries(live: LiveTurnState?, agent: AgentType): List<ThreadEntry> {
+        if (live == null) return emptyList()
         val chunks = mutableListOf(mutableListOf<LiveSegment>())
         val steers = mutableListOf<LiveSegment.Steer>()
         for (seg in live.segments) {
@@ -309,7 +366,7 @@ object TranscriptTimeline {
                 chunks.last() += seg
             }
         }
-        val partNodes = mutableListOf<TimelineNode>()
+        val entries = mutableListOf<ThreadEntry>()
         chunks.forEachIndexed { k, chunk ->
             if (k > 0) {
                 val steer = steers[k - 1]
@@ -319,32 +376,149 @@ object TranscriptTimeline {
                     listOf(ContentBlock.Text(steer.text)),
                     java.time.Instant.EPOCH,
                 )
-                partNodes.add(TimelineNode(turn.id, NodeContent.User(turn), agent, startsGroup = true))
+                entries.add(ThreadEntry.Row(TimelineNode(turn.id, NodeContent.User(turn), agent, startsGroup = true)))
             }
-            // Same grouping as the persisted path: consecutive non-task tools collapse.
-            // Live text is parsed uncached (each flush is a new key → cache churn).
             val ownerId = if (k == 0) live.id else "${live.id}-$k"
-            val parts = MessageRender.groupConsecutiveTools(liveParts(chunk))
-            partNodes.addAll(parts.flatMapIndexed { idx, part -> nodesFor(part, ownerId, idx, agent, cached = false) })
+            val last = k == chunks.lastIndex
+            // The parts before a steered note are done: the agent went on past them.
+            val streaming = last && live.isStreaming
+            val trailer = buildList {
+                // Nothing streamed yet (or nothing since a note was steered in): the agent is
+                // working on it.
+                if (streaming && chunk.isEmpty() && (k > 0 || live.livePlan.isEmpty())) {
+                    add(TimelineNode("$ownerId#thinking", NodeContent.Thinking, agent))
+                }
+                if (last) live.error?.let { add(TimelineNode("${live.id}#error", NodeContent.Error(it.message, it.details), agent)) }
+            }
+            val plan = if (k == 0 && live.livePlan.isNotEmpty()) {
+                listOf(TimelineNode("${live.id}#plan", NodeContent.Plan(live.livePlan), agent))
+            } else {
+                emptyList()
+            }
+            // Live text is parsed uncached (each flush is a new key → cache churn).
+            entries.add(
+                ThreadEntry.Reply(
+                    replyRows(ownerId, agent, liveParts(chunk), cached = false, completed = !streaming, durationMs = null, trailer, plan, caret = streaming),
+                ),
+            )
         }
-        // A note just steered in, with nothing streamed after it yet: the agent is working on it.
-        if (live.isStreaming && live.segments.lastOrNull() is LiveSegment.Steer) {
-            partNodes.add(TimelineNode("${live.id}-${chunks.lastIndex}#thinking", NodeContent.Thinking, agent))
+        return entries
+    }
+
+    /**
+     * A reply's parts → its rows. [calls] ungrouped, so the summary counts what grouping
+     * leaves out. [caret] marks the final block of prose being written — only when the reply
+     * ends on prose: a trailing tool or group shows its own pulsing marker instead (matches
+     * iOS `adaptLive` streaming-on-last-segment).
+     */
+    private fun replyRows(
+        id: String,
+        agent: AgentType,
+        calls: List<RenderPart>,
+        cached: Boolean,
+        completed: Boolean,
+        durationMs: Int?,
+        trailer: List<TimelineNode>,
+        lead: List<TimelineNode> = emptyList(),
+        caret: Boolean = false,
+    ): ReplyRows {
+        val parts = MessageRender.groupConsecutiveTools(calls)
+        val rows = parts.mapIndexed { idx, part -> nodesFor(part, id, idx, agent, cached) }.toMutableList()
+        val lastRows = rows.lastOrNull()
+        val tail = lastRows?.lastOrNull()
+        if (caret && tail != null) {
+            val marked = when (val c = tail.content) {
+                is NodeContent.AssistantBlock -> tail.copy(content = c.copy(streaming = true))
+                is NodeContent.Reasoning -> tail.copy(content = c.copy(streaming = true))
+                else -> null
+            }
+            if (marked != null) rows[rows.lastIndex] = lastRows.dropLast(1) + marked
         }
-        // Caret only when the *final* block is prose — a trailing tool/group shows its
-        // own pulsing marker instead (matches iOS `adaptLive` streaming-on-last-segment).
-        if (live.isStreaming && partNodes.isNotEmpty()) {
-            val lastIdx = partNodes.lastIndex
-            when (val c = partNodes[lastIdx].content) {
-                is NodeContent.AssistantBlock -> partNodes[lastIdx] = partNodes[lastIdx].copy(content = c.copy(streaming = true))
-                is NodeContent.Reasoning -> partNodes[lastIdx] = partNodes[lastIdx].copy(content = c.copy(streaming = true))
-                else -> {}
+        val split = answerStart(parts)
+        val summary = summarizeActivity(calls)
+        val process = lead + rows.take(split).flatten()
+        return ReplyRows(
+            id = id,
+            agent = agent,
+            process = process,
+            answer = rows.drop(split).flatten(),
+            trailer = trailer,
+            summary = summary,
+            completed = completed,
+            durationMs = durationMs,
+            failureRowId = summary.firstUnrecoveredId?.let { failed -> rowOfCall(parts, id, failed) },
+            pinned = process.filter { node ->
+                val vm = (node.content as? NodeContent.Tool)?.vm
+                vm != null && vm.bucket == ToolKindBucket.TASK && vm.state == ToolCallState.RUNNING
+            }.mapTo(mutableSetOf()) { it.id },
+        )
+    }
+
+    /** The id of the row drawing call [callId]: its own, or the group it is folded into. */
+    private fun rowOfCall(parts: List<RenderPart>, ownerId: String, callId: String): String? {
+        parts.forEachIndexed { idx, part ->
+            when (part) {
+                is RenderPart.Tool -> if (part.vm.id == callId) return toolRowId(part.vm)
+                is RenderPart.ToolGroup -> if (part.items.any { it.id == callId }) return groupRowId(part, "$ownerId#$idx")
+                else -> Unit
             }
         }
-        out.addAll(partNodes)
-        live.error?.let {
-            out.add(TimelineNode("${live.id}#error", NodeContent.Error(it.message, it.details), agent))
+        return null
+    }
+
+    /**
+     * Thread entries → rows, each reply folded or not as [open] says (asked only of a reply
+     * that can fold). A reply's header leads it; folded, its process gives way to its answer
+     * (bar what [ReplyRows.pinned] keeps); open and settled, a foot between its steps and its
+     * answer folds them back.
+     */
+    fun flatten(entries: List<ThreadEntry>, open: (ReplyRows) -> Boolean): List<TimelineNode> {
+        val out = ArrayList<TimelineNode>(entries.size * 2)
+        for (entry in entries) {
+            when (entry) {
+                is ThreadEntry.Row -> out.add(entry.node)
+                is ThreadEntry.Reply -> {
+                    val r = entry.rows
+                    if (r.blank) {
+                        out.addAll(r.trailer)
+                        continue
+                    }
+                    val isOpen = !r.foldable || open(r)
+                    out.add(
+                        TimelineNode(
+                            "${r.id}#header",
+                            NodeContent.ReplyHeader(
+                                replyId = r.id,
+                                summary = r.summary,
+                                completed = r.completed,
+                                hasSteps = r.process.isNotEmpty(),
+                                durationMs = r.durationMs,
+                                foldable = r.foldable,
+                                open = isOpen,
+                                failureRowId = r.failureRowId,
+                            ),
+                            r.agent,
+                        ),
+                    )
+                    if (isOpen) out.addAll(r.process) else r.process.filterTo(out) { it.id in r.pinned }
+                    // The foot closes the steps, above the answer they fold away from.
+                    if (isOpen && r.foldable && r.completed) {
+                        out.add(TimelineNode("${r.id}#foot", NodeContent.ReplyFoot(r.id, r.summary.steps, r.durationMs), r.agent))
+                    }
+                    out.addAll(r.answer)
+                    out.addAll(r.trailer)
+                }
+            }
         }
+        return out
+    }
+
+    /** End the rail at its endpoints. */
+    fun terminate(nodes: List<TimelineNode>): List<TimelineNode> {
+        if (nodes.isEmpty()) return nodes
+        val out = nodes.toMutableList()
+        out[0] = out[0].copy(connectTop = false)
+        out[out.lastIndex] = out[out.lastIndex].copy(connectBottom = false)
         return out
     }
 
@@ -363,12 +537,17 @@ object TranscriptTimeline {
                 } else {
                     parts.add(RenderPart.Tool(seg.call.toVM()))
                 }
-                // Split on by [liveNodes]; never reaches a part list.
+                // Split on by [liveEntries]; never reaches a part list.
                 is LiveSegment.Steer -> Unit
             }
         }
         return parts
     }
+
+    private fun toolRowId(vm: ToolCallVM) = "tool-${vm.id}"
+
+    private fun groupRowId(group: RenderPart.ToolGroup, base: String) =
+        group.items.firstOrNull()?.let { "toolgroup-${it.id}" } ?: base
 
     /**
      * One render part → node(s). Text splits into per-block nodes (below); everything
@@ -381,11 +560,9 @@ object TranscriptTimeline {
         return when (part) {
             is RenderPart.Text -> textBlockNodes(part.text, base, agent, cached)
             is RenderPart.Reasoning -> listOf(TimelineNode(base, NodeContent.Reasoning(part.text), agent))
-            is RenderPart.Tool -> listOf(TimelineNode("tool-${part.vm.id}", NodeContent.Tool(part.vm), agent))
-            is RenderPart.ToolGroup -> {
-                val gid = part.items.firstOrNull()?.let { "toolgroup-${it.id}" } ?: base
-                listOf(TimelineNode(gid, NodeContent.ToolGroup(part.items, part.streaming), agent))
-            }
+            is RenderPart.Tool -> listOf(TimelineNode(toolRowId(part.vm), NodeContent.Tool(part.vm), agent))
+            is RenderPart.ToolGroup ->
+                listOf(TimelineNode(groupRowId(part, base), NodeContent.ToolGroup(part.items, part.streaming), agent))
             is RenderPart.Image -> listOf(TimelineNode(base, NodeContent.Image(part.image, part.caption), agent))
             is RenderPart.Compaction ->
                 listOf(TimelineNode(base, NodeContent.Compaction(part.before, part.after, part.running), agent))
@@ -449,5 +626,7 @@ private fun LiveToolCallState.toVM(): ToolCallVM {
         isError -> ToolCallState.ERROR
         else -> ToolCallState.DONE
     }
-    return ToolCallVM.of(id, title, kind, state, rawInput, rawOutput, content, isError)
+    // [meta] too, as the persisted path passes it: Grok's plan-mode identity and codex's
+    // search-action mark are read off it.
+    return ToolCallVM.of(id, title, kind, state, rawInput, rawOutput, content, isError, meta)
 }

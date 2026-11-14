@@ -65,6 +65,7 @@ import app.codeg.android.core.designsystem.markdown.MarkdownContent
 import app.codeg.android.core.designsystem.markdown.SingleBlockView
 import app.codeg.android.core.designsystem.markdown.parseMarkdownBlocks
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.feature.sessiondetail.timeline.LocalDisclosures
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -491,11 +492,23 @@ private fun ToolStateIcon(vm: ToolCallVM) {
 
 /** A summary card for 2+ consecutive tool calls. Port of iOS `ToolGroupCard`. */
 @Composable
-fun ToolGroupCard(items: List<ToolCallVM>, modifier: Modifier = Modifier, streaming: Boolean = false) {
+fun ToolGroupCard(
+    items: List<ToolCallVM>,
+    modifier: Modifier = Modifier,
+    streaming: Boolean = false,
+    /** Its row's id: with a [LocalDisclosures] store above, the open state lives there. */
+    disclosureKey: String? = null,
+) {
     val colors = CodegTheme.colors
+    val store = LocalDisclosures.current
     // Key on the stable first-tool id, not the items' value: live grouped tools rebuild
     // their VMs every flush, and remember(items) would reset the expand state each time.
-    var expanded by remember(items.firstOrNull()?.id) { mutableStateOf(false) }
+    var ownExpanded by remember(items.firstOrNull()?.id) { mutableStateOf(false) }
+    val shared = if (store != null && disclosureKey != null) disclosureKey else null
+    val expanded = if (shared != null) store?.get(shared) == true else ownExpanded
+    fun setExpanded(open: Boolean) {
+        if (shared != null) store?.set(shared, open) else ownExpanded = open
+    }
     val errorCount = items.count { it.state == ToolCallState.ERROR }
 
     Column(
@@ -508,7 +521,7 @@ fun ToolGroupCard(items: List<ToolCallVM>, modifier: Modifier = Modifier, stream
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable { expanded = !expanded }
+                .clickable { setExpanded(!expanded) }
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),

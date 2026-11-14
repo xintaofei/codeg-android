@@ -98,13 +98,15 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
             }
         is NodeContent.Reasoning -> ReasoningBlock(c.text, modifier, initiallyExpanded = c.streaming)
         is NodeContent.Tool -> ToolCallCard(c.vm, modifier)
-        is NodeContent.ToolGroup -> ToolGroupCard(c.items, modifier, streaming = c.streaming)
+        is NodeContent.ToolGroup -> ToolGroupCard(c.items, modifier, streaming = c.streaming, disclosureKey = node.id)
         is NodeContent.Image -> InlineImage(c.image, c.caption, modifier)
         is NodeContent.Compaction -> ContextCompactionDivider(c.before, c.after, c.running, modifier)
         is NodeContent.Footer -> TurnFooter(c.turn, c.questionId, modifier)
         is NodeContent.Plan -> LivePlanView(c.entries, modifier)
         is NodeContent.Thinking -> ThinkingShimmer(modifier)
         is NodeContent.Error -> InlineTurnError(c.message, c.details, modifier)
+        is NodeContent.ReplyHeader -> ReplyHeaderBody(c, modifier)
+        is NodeContent.ReplyFoot -> ReplyFootBody(c, modifier)
         is NodeContent.Unsupported -> Text(
             stringResource(R.string.timeline_unsupported_block, c.type),
             fontSize = 11.sp,
@@ -152,7 +154,7 @@ private fun SystemNodeBody(turn: MessageTurn, modifier: Modifier) {
     )
 }
 
-/** Per-reply action + metadata row: Copy · jump-to-question · model · time/tokens/duration. */
+/** Per-reply action + metadata row: Copy · jump-to-question · model · time/tokens. */
 @Composable
 private fun TurnFooter(turn: MessageTurn, questionId: String?, modifier: Modifier) {
     val colors = CodegTheme.colors
@@ -167,7 +169,7 @@ private fun TurnFooter(turn: MessageTurn, questionId: String?, modifier: Modifie
         add(RelativeTime.compact(turn.completedAt ?: turn.timestamp))
         val tokens = turn.usage?.total ?: 0
         if (tokens > 0) add(compactTokens(tokens))
-        turn.durationMs?.let { if (it > 0) add(compactDuration(it)) }
+        // The time the reply took is its header's (see [ReplyHeaderBody]).
     }.joinToString(" · ")
 
     Row(
@@ -420,11 +422,3 @@ private fun compactTokens(n: Int): String = when {
 
 private fun trimNum(v: Double): String = if (v >= 100) v.roundToInt().toString() else String.format("%.1f", v)
 
-private fun compactDuration(ms: Int): String {
-    val seconds = ms / 1000.0
-    if (seconds < 60) return String.format("%.1fs", seconds)
-    val whole = seconds.roundToInt()
-    val m = whole / 60
-    val s = whole % 60
-    return if (s == 0) "${m}m" else "${m}m ${s}s"
-}

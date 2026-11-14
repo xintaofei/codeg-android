@@ -55,11 +55,14 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -88,9 +91,15 @@ import app.codeg.android.core.model.FeedbackNote
 import app.codeg.android.feature.sessiondetail.interactive.AskQuestionCard
 import app.codeg.android.feature.sessiondetail.interactive.PermissionRequestCard
 import app.codeg.android.feature.sessiondetail.interactive.PlanApprovalCard
+import app.codeg.android.feature.sessiondetail.timeline.LocalDisclosures
+import app.codeg.android.feature.sessiondetail.timeline.LocalReplyFoldActions
 import app.codeg.android.feature.sessiondetail.timeline.LocalTimelineScroll
 import app.codeg.android.feature.sessiondetail.timeline.NodeBody
 import app.codeg.android.feature.sessiondetail.timeline.NodeContent
+import app.codeg.android.feature.sessiondetail.timeline.ReplyFoldActions
+import app.codeg.android.feature.sessiondetail.timeline.ReplyFoldInput
+import app.codeg.android.feature.sessiondetail.timeline.ReplyFolds
+import app.codeg.android.feature.sessiondetail.timeline.ThreadEntry
 import app.codeg.android.feature.sessiondetail.timeline.TimelineRow
 import app.codeg.android.feature.sessiondetail.timeline.TranscriptTimeline
 import kotlinx.coroutines.launch
@@ -162,13 +171,26 @@ fun SessionDetailScreen(
     // On reattach the live turn (rebuilt from the snapshot) owns the in-flight reply, so
     // hide the partial copy the server persists into `turns` to avoid a doubled reply.
     val hideReattachDup = ui.liveFromReattach && ui.live != null
-    val persistedNodes = remember(ui.turns, ui.localTurns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId) {
-        TranscriptTimeline.buildPersisted(
+    val persistedEntries = remember(ui.turns, ui.localTurns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId) {
+        TranscriptTimeline.persistedEntries(
             ui.turns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId, ui.localTurns,
         )
     }
-    val nodes = remember(persistedNodes, ui.live, ui.agent) {
-        TranscriptTimeline.withLive(persistedNodes, ui.live, ui.agent)
+    val entries = remember(persistedEntries, ui.live, ui.agent) {
+        persistedEntries + TranscriptTimeline.liveEntries(ui.live, ui.agent)
+    }
+    // Which replies show their steps (ReplyFold.kt): observed here, stored after the frame
+    // that draws it, so a send and the fold it causes land together.
+    val folds = remember { ReplyFolds() }
+    val disclosures = remember { mutableStateMapOf<String, Boolean>() }
+    val newestReply = remember(entries) { entries.lastOrNull { it is ThreadEntry.Reply } as ThreadEntry.Reply? }
+    val foldView = folds.observe(
+        ReplyFoldInput(ui.sendSignal, running = newestReply?.rows?.completed == false, runId = ui.live?.id),
+        newestReply?.rows?.id,
+    )
+    SideEffect { folds.commit(foldView) }
+    val nodes = remember(entries, foldView, folds.version) {
+        TranscriptTimeline.terminate(TranscriptTimeline.flatten(entries) { folds.isOpen(foldView, it) })
     }
     val hasContent = nodes.isNotEmpty()
     // The "load older" row sits at the head of the list, so every list index the
@@ -210,6 +232,40 @@ fun SessionDetailScreen(
                 stick = false // unpin so the stream doesn't immediately yank us back down
                 jumped = true
                 scope.launch { listState.animateScrollToItem(idx + headerCount) }
+            }
+        }
+    }
+    // A row a fold action wants in view, scrolled to once the fold has drawn it.
+    var pendingScroll by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(nodes, pendingScroll) {
+        val id = pendingScroll ?: return@LaunchedEffect
+        val idx = nodes.indexOfFirst { it.id == id }
+        if (idx < 0) return@LaunchedEffect
+        // Cleared here, which restarts this effect: the scroll runs in the screen's scope, or
+        // that restart would cancel it.
+        pendingScroll = null
+        stick = false
+        jumped = true
+        scope.launch { listState.animateScrollToItem(idx + headerCount) }
+    }
+    val latestFoldView by rememberUpdatedState(foldView)
+    val foldActions = remember(folds) {
+        object : ReplyFoldActions {
+            override fun setOpen(replyId: String, open: Boolean) {
+                // Opening a reply is reading it: the stream mustn't pull the view away.
+                if (open) stick = false
+                folds.setOpen(latestFoldView, replyId, open)
+            }
+
+            override fun foldBack(replyId: String) {
+                folds.setOpen(latestFoldView, replyId, false)
+                pendingScroll = "$replyId#header"
+            }
+
+            override fun showFailure(replyId: String, rowId: String) {
+                folds.setOpen(latestFoldView, replyId, true)
+                if (rowId.startsWith("toolgroup-")) disclosures[rowId] = true
+                pendingScroll = rowId
             }
         }
     }
@@ -457,7 +513,11 @@ fun SessionDetailScreen(
                         )
                     }
 
-                else -> CompositionLocalProvider(LocalTimelineScroll provides scrollToId) {
+                else -> CompositionLocalProvider(
+                    LocalTimelineScroll provides scrollToId,
+                    LocalReplyFoldActions provides foldActions,
+                    LocalDisclosures provides disclosures,
+                ) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),

@@ -655,6 +655,14 @@
     <string name="timeline_question">问题</string>
     <string name="timeline_error_details">详细信息</string>
     <string name="timeline_error_generic">智能体报告了一个错误。</string>
+    <string name="activity_label">执行过程</string>
+    <string name="activity_working">进行中</string>
+    <string name="activity_reply">回复</string>
+    <string name="activity_separator">" · "</string>
+    <string name="activity_interrupted">%1$d 次中断</string>
+    <string name="activity_show_failure">查看失败的步骤</string>
+    <string name="activity_expand">展开执行过程</string>
+    <string name="activity_collapse">收起</string>
 
     <!-- ===== Projects · Clone / Browse / Branch ===== -->
     <string name="clone_close">关闭</string>
@@ -744,6 +752,15 @@
     <string name="tool_summary_todos">更新了待办事项</string>
     <plurals name="queue_images">
         <item quantity="other">%d 张图片</item>
+    </plurals>
+    <plurals name="activity_steps">
+        <item quantity="other">%d 步</item>
+    </plurals>
+    <plurals name="activity_failed">
+        <item quantity="other">%d 次失败</item>
+    </plurals>
+    <plurals name="activity_failed_recovered">
+        <item quantity="other">%d 次失败，已恢复</item>
     </plurals>
     <plurals name="tool_summary_read">
         <item quantity="other">读取了 %d 个文件</item>

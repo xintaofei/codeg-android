@@ -84,11 +84,22 @@ data class ToolCallVM(
             // file it as a file read and route the envelope through the Read-file
             // body. Every other call keeps the hint's precedence.
             val bucket = ToolDerive.bucket(resolvedName, if (action != null) "" else kind)
+            // A search that found nothing, which codex reports as failed, settles as a success
+            // (web `isGrepNoMatchResult`) — for its marker, its group and its reply's header
+            // alike. [isError] stays as sent: the card body still reads it to say "No matches".
+            val settled = if (
+                state == ToolCallState.ERROR &&
+                GrepNoMatch.settles(resolvedName, bucket, effectiveInput, output?.takeIf { it.isNotBlank() } ?: content, meta)
+            ) {
+                ToolCallState.DONE
+            } else {
+                state
+            }
             return ToolCallVM(
                 id = id,
                 rawName = resolvedName,
                 kind = kind,
-                state = state,
+                state = settled,
                 input = effectiveInput,
                 output = output,
                 content = content,
@@ -141,7 +152,11 @@ object MessageRender {
      * round's, see `inFlightToolCallIds`). Any other `tool_use` without a result is settled
      * history: the round it belonged to has ended.
      */
-    fun adaptTurn(turn: MessageTurn, runningToolIds: Set<String> = emptySet()): List<RenderPart> {
+    fun adaptTurn(turn: MessageTurn, runningToolIds: Set<String> = emptySet()): List<RenderPart> =
+        groupConsecutiveTools(adaptParts(turn, runningToolIds))
+
+    /** [adaptTurn] before its calls are grouped: one part per call, for [summarizeActivity]. */
+    fun adaptParts(turn: MessageTurn, runningToolIds: Set<String> = emptySet()): List<RenderPart> {
         val blocks = turn.blocks
         val consumed = mutableSetOf<Int>()
         val parts = mutableListOf<RenderPart>()
@@ -210,7 +225,7 @@ object MessageRender {
                 is ContentBlock.Unknown -> parts.add(RenderPart.Unknown(block.type))
             }
         }
-        return groupConsecutiveTools(parts)
+        return parts
     }
 
     /**

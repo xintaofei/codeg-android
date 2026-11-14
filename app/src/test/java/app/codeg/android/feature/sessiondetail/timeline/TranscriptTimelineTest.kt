@@ -306,9 +306,10 @@ class TranscriptTimelineTest {
 
     @Test
     fun `local turns follow the server window, untouched by the in-flight hiding`() {
-        val nodes = TranscriptTimeline.buildPersisted(
+        val nodes = TranscriptTimeline.build(
             listOf(user("u1", "q"), assistant("a1", listOf(ContentBlock.Text("partial")))),
             emptyList(),
+            null,
             agent,
             hideTrailingAssistantReply = true,
             inFlightUserTurnId = "u1",
@@ -324,7 +325,7 @@ class TranscriptTimelineTest {
         b.appendText("before")
         b.appendSteer("n1", "also do this")
         b.appendText("after")
-        val nodes = TranscriptTimeline.withLive(emptyList(), b.snapshot(), agent)
+        val nodes = TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent)
         val steerAt = nodes.indexOfFirst { it.id == "steer-n1" }
         assertTrue(nodes[steerAt].content is NodeContent.User)
         assertTrue(nodes.take(steerAt).all { it.id.startsWith("live-1#") })
@@ -337,7 +338,105 @@ class TranscriptTimelineTest {
         val b = LiveTurnBuilder("live-1")
         b.appendText("before")
         b.appendSteer("n1", "also do this")
-        val nodes = TranscriptTimeline.withLive(emptyList(), b.snapshot(), agent)
+        val nodes = TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent)
         assertEquals(NodeContent.Thinking, nodes.last().content)
     }
+
+    private fun call(id: String, name: String, input: String = """{"file_path":"$id"}""", error: Boolean = false) = listOf(
+        ContentBlock.ToolUse(id, name, input),
+        ContentBlock.ToolResult(id, if (error) "boom" else "ok", error),
+    )
+
+    /** A reply that looked around, then answered. */
+    private fun worked(id: String) = assistant(
+        id,
+        listOf(ContentBlock.Text("let me look")) + call("$id-r1", "Read") + call("$id-r2", "Grep") + ContentBlock.Text("the answer"),
+    )
+
+    private fun entries(turns: List<MessageTurn>, live: LiveTurnState? = null) =
+        TranscriptTimeline.persistedEntries(turns, emptyList(), agent) + TranscriptTimeline.liveEntries(live, agent)
+
+    @Test
+    fun `a reply is headed by what it did, and folded keeps only its answer`() {
+        val entries = entries(listOf(user("u1", "q"), worked("a1")))
+        val open = TranscriptTimeline.flatten(entries) { true }.map { it.id }
+        assertEquals(
+            listOf("u1", "a1#header", "a1#0", "toolgroup-a1-r1", "a1#foot", "a1#2", "a1#footer"),
+            open,
+        )
+        val folded = TranscriptTimeline.flatten(entries) { false }.map { it.id }
+        assertEquals(listOf("u1", "a1#header", "a1#2", "a1#footer"), folded)
+        val header = TranscriptTimeline.flatten(entries) { false }[1].content as NodeContent.ReplyHeader
+        assertEquals(2, header.summary.steps)
+        assertTrue(header.foldable)
+        assertFalse(header.open)
+    }
+
+    @Test
+    fun `a reply with nothing to trade away doesn't fold`() {
+        // Words alone: a header, nothing to fold.
+        val wordsOnly = entries(listOf(user("u1", "q"), assistant("a1", listOf(ContentBlock.Text("hi")))))
+        val rows = TranscriptTimeline.flatten(wordsOnly) { false }
+        assertEquals(listOf("u1", "a1#header", "a1#0", "a1#footer"), rows.map { it.id })
+        assertFalse((rows[1].content as NodeContent.ReplyHeader).foldable)
+        // Stopped on a call: no answer to keep, so its steps stay in view.
+        val stopped = entries(listOf(user("u1", "q"), assistant("a1", call("c1", "Bash", """{"command":"ls"}"""))))
+        assertEquals(listOf("u1", "a1#header", "tool-c1", "a1#footer"), TranscriptTimeline.flatten(stopped) { false }.map { it.id })
+        // An empty placeholder reply gets no header.
+        val blank = entries(listOf(user("u1", "q"), assistant("a1", emptyList())))
+        assertEquals(listOf("u1", "a1#footer"), TranscriptTimeline.flatten(blank) { false }.map { it.id })
+    }
+
+    @Test
+    fun `show the failure points at the row holding it`() {
+        val reply = assistant(
+            "a1",
+            call("r1", "Read") + call("r2", "Read", error = true) + call("e1", "Edit", error = true) + ContentBlock.Text("sorry"),
+        )
+        val rows = TranscriptTimeline.flatten(entries(listOf(user("u1", "q"), reply))) { true }
+        val header = rows.first { it.content is NodeContent.ReplyHeader }.content as NodeContent.ReplyHeader
+        assertEquals(2, header.summary.unrecovered)
+        // Folded into the exploration group.
+        assertEquals("toolgroup-r1", header.failureRowId)
+        assertTrue(rows.any { it.id == header.failureRowId })
+    }
+
+    @Test
+    fun `a sub-agent still running stays in view when its reply is folded`() {
+        val turns = listOf(
+            user("u1", "q"),
+            assistant("a1", listOf(ContentBlock.ToolUse("t1", "Task", """{"description":"dig"}"""), ContentBlock.Text("waiting"))),
+            user("u2", "q2"),
+        )
+        val rows = TranscriptTimeline.flatten(
+            TranscriptTimeline.persistedEntries(turns, emptyList(), agent, inFlightUserTurnId = "u1"),
+        ) { false }.map { it.id }
+        assertTrue("tool-t1" in rows)
+    }
+
+    @Test
+    fun `the reply being written reads as working, and a steered note heads a reply of its own`() {
+        val b = LiveTurnBuilder("live-1")
+        b.appendText("before")
+        b.appendSteer("n1", "also do this")
+        b.appendText("after")
+        val rows = TranscriptTimeline.flatten(entries(emptyList(), b.snapshot())) { true }
+        val headers = rows.mapNotNull { it.content as? NodeContent.ReplyHeader }
+        assertEquals(listOf("live-1", "live-1-1"), headers.map { it.replyId })
+        // The part before the note is done; the part after is being written.
+        assertEquals(listOf(true, false), headers.map { it.completed })
+        assertTrue(rows.indexOfFirst { it.id == "steer-n1" } < rows.indexOfFirst { it.id == "live-1-1#header" })
+    }
+
+    @Test
+    fun `a reply the transcript holds mid-round is still being written`() {
+        val turns = listOf(user("u1", "q"), worked("a1"), user("u2", "q2"), worked("a2"))
+        val headers = TranscriptTimeline.flatten(
+            TranscriptTimeline.persistedEntries(turns, emptyList(), agent, inFlightUserTurnId = "u2"),
+        ) { true }.mapNotNull { it.content as? NodeContent.ReplyHeader }
+        assertEquals(listOf(true, false), headers.map { it.completed })
+        // A settled reply carries the time it took; one being written doesn't show it.
+        assertNull(headers[1].durationMs)
+    }
 }
+

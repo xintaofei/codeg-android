@@ -85,6 +85,12 @@ sealed interface MarkerKind {
      *  an event hanging off it — the divider body carries the glyph and the label, so
      *  the gutter just marks the point. */
     data object Compaction : MarkerKind
+
+    /** A note of the agent's on the rail: the reply's [Assistant] marker is on its header. */
+    data object Prose : MarkerKind
+
+    /** The foot folding a reply's steps back: like [Compaction], a mark ON the spine. */
+    data object Fold : MarkerKind
 }
 
 /**
@@ -129,7 +135,7 @@ fun TimelineRow(
                 // reply; marker'd rows carve a clear disc around the glyph. A compaction
                 // is a marker ON the spine, not an event hanging off it, so the rail runs
                 // straight through it too.
-                val runsThrough = continuation || marker is MarkerKind.Compaction
+                val runsThrough = continuation || marker is MarkerKind.Compaction || marker is MarkerKind.Fold
                 val gap = if (runsThrough) 0f else TimelineMetrics.markerSize.toPx() / 2f + TimelineMetrics.markerGap.toPx()
                 val w = TimelineMetrics.lineWidth.toPx()
                 if (connectTop) {
@@ -188,8 +194,10 @@ fun NodeMarker(kind: MarkerKind, modifier: Modifier = Modifier) {
             is MarkerKind.Error -> FilledDisc(Icons.Rounded.PriorityHigh, colors.danger)
             // The divider body already carries the archive glyph and the label; the
             // gutter just marks the point on the spine.
-            is MarkerKind.Compaction ->
+            is MarkerKind.Compaction, is MarkerKind.Fold ->
                 Box(Modifier.size(size * 0.34f).clip(CircleShape).background(colors.rail))
+            is MarkerKind.Prose ->
+                Box(Modifier.size(size * 0.28f).clip(CircleShape).background(colors.textTertiary.copy(alpha = 0.75f)))
             is MarkerKind.Footer ->
                 Box(
                     Modifier.size(size * 0.34f).clip(CircleShape)

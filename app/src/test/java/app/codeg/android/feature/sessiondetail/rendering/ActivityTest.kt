@@ -97,4 +97,101 @@ class ActivityTest {
         assertTrue(stepFamily(vm("f", "Read")) != stepFamily(vm("g", "Bash")))
         assertFalse(isBlankInterruption(vm("h", "Bash", input = null)))
     }
+
+    private fun failed(id: String, name: String, input: String, output: String = "exit 1") =
+        tool(id, name, input, ToolCallState.ERROR, output)
+
+    @Test
+    fun `a failure redone successfully later is recovered`() {
+        val parts = listOf(
+            failed("b1", "Bash", """{"command":"npm  test"}"""),
+            tool("r", "Read", """{"file_path":"a"}"""),
+            // The same command line, however it is spaced.
+            tool("b2", "Bash", """{"command":"npm test"}"""),
+        )
+        val summary = summarizeActivity(parts)
+        assertEquals(3, summary.steps)
+        assertEquals(1, summary.failed)
+        assertEquals(0, summary.unrecovered)
+        assertEquals(null, summary.firstUnrecoveredId)
+    }
+
+    @Test
+    fun `a failure nothing redid names the first one`() {
+        val parts = listOf(
+            tool("b0", "Bash", """{"command":"make"}"""),
+            failed("e1", "Edit", """{"file_path":"a.kt"}"""),
+            failed("b1", "Bash", """{"command":"make"}"""),
+            // Another command is not a retry.
+            tool("b2", "Bash", """{"command":"make clean"}"""),
+        )
+        val summary = summarizeActivity(parts)
+        assertEquals(2, summary.unrecovered)
+        assertEquals("e1", summary.firstUnrecoveredId)
+    }
+
+    @Test
+    fun `a stopped call is interrupted, a todo list no step`() {
+        val parts = listOf(
+            tool("t", "TodoWrite", """{"todos":[]}"""),
+            failed("x", "Bash", "{}", "[Request interrupted by user for tool use]"),
+            tool("b", "Bash", """{"command":"ls"}"""),
+        )
+        val summary = summarizeActivity(parts)
+        // Counted though grouping drops it: it is still something the reply did.
+        assertEquals(2, summary.steps)
+        assertEquals(1, summary.interrupted)
+        assertEquals(0, summary.failed)
+    }
+
+    @Test
+    fun `the answer is what follows the last step`() {
+        val text = RenderPart.Text("done")
+        assertEquals(2, answerStart(listOf(RenderPart.Text("looking"), tool("r", "Read"), text)))
+        // Prose between steps stays with them.
+        assertEquals(3, answerStart(listOf(RenderPart.Text("a"), tool("r", "Read"), RenderPart.Reasoning("hm"))))
+        // Words alone are all answer.
+        assertEquals(0, answerStart(listOf(text)))
+    }
+
+    @Test
+    fun `an MCP tool stands alone, whatever its bare name says`() {
+        val parts = listOf(tool("r1", "Read"), tool("m", "mcp__filesystem__read_file"), tool("r2", "Read"))
+        assertEquals(listOf("r1", "m", "r2"), rows(parts))
+        assertEquals(listOf("g", "m2", "g2"), rows(listOf(tool("g", "Grep"), tool("m2", "github/search_code"), tool("g2", "Grep"))))
+        // A host's own namespaced built-in is not an MCP server's.
+        assertFalse(isMcpCall(vm("f", "functions.exec_command")))
+        // Nor a live call its host titled by a file name, having said what kind of call it is.
+        assertFalse(isMcpCall(ToolCallVM.of("t", "README.md", "read", ToolCallState.DONE, null, null, null, false)))
+    }
+
+    @Test
+    fun `only the same call redone recovers a failure`() {
+        // An MCP read of the same path with other arguments is another call.
+        val mcp = listOf(
+            failed("m1", "mcp__fs__read_file", """{"path":"a","line":1}"""),
+            tool("m2", "mcp__fs__read_file", """{"path":"a","line":9}"""),
+        )
+        assertEquals(1, summarizeActivity(mcp).unrecovered)
+        // Two scripts of different source share the title "Script", not a signature.
+        val scripts = listOf(
+            failed("s1", "codex_script", """{"source":"await tools.a()"}"""),
+            tool("s2", "codex_script", """{"source":"await tools.b()"}"""),
+        )
+        assertEquals("s1", summarizeActivity(scripts).firstUnrecoveredId)
+        val rerun = scripts.take(1) + tool("s3", "codex_script", """{"source":"await  tools.a()"}""")
+        assertEquals(0, summarizeActivity(rerun).unrecovered)
+        // A command persisted as its bare text is retried by that text.
+        val bare = listOf(failed("b1", "exec_command", "make  test"), tool("b2", "exec_command", "make test"))
+        assertEquals(0, summarizeActivity(bare).unrecovered)
+    }
+
+    @Test
+    fun `a search that found nothing is no failure in the header`() {
+        val parts = listOf(
+            RenderPart.Tool(ToolCallVM.of("g", "grep", "", ToolCallState.ERROR, """{"pattern":"x"}""", """{"formatted_output":"","exit_code":1}""", null, true)),
+        )
+        assertEquals(0, summarizeActivity(parts).failed)
+    }
 }
+

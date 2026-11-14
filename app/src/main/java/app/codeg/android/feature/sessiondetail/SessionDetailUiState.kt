@@ -48,6 +48,8 @@ data class SessionDetailUiState(
     val pendingUserTurns: List<MessageTurn> = emptyList(),
     /** Messages waiting for the running turn to end, oldest first. See SendQueue.kt. */
     val queue: List<QueuedPrompt> = emptyList(),
+    /** Bumped by every prompt this client sends: folds every reply above it (ReplyFold.kt). */
+    val sendSignal: Int = 0,
     val live: LiveTurnState? = null,
     /** The live turn was rebuilt from a reattach snapshot (owns the in-flight reply). */
     val liveFromReattach: Boolean = false,

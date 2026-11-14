@@ -491,6 +491,7 @@ class SessionDetailViewModel @Inject constructor(
         _ui.update {
             it.copy(
                 pendingUserTurns = it.pendingUserTurns + userTurn,
+                sendSignal = it.sendSignal + 1,
                 live = builder.snapshot(),
                 liveFromReattach = false,
                 isInFlight = true,

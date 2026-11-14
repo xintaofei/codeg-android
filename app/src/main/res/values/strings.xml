@@ -664,6 +664,15 @@
     <!-- Headline for a failure recovered from the connection snapshot rather than from the
          live event: the server records the message, but an empty one is possible. -->
     <string name="timeline_error_generic">The agent reported an error.</string>
+    <!-- A reply's activity header (web `Folder.chat.activity.header`). -->
+    <string name="activity_label">Activity</string>
+    <string name="activity_working">Working</string>
+    <string name="activity_reply">Reply</string>
+    <string name="activity_separator">" · "</string>
+    <string name="activity_interrupted">%1$d interrupted</string>
+    <string name="activity_show_failure">Show the failure</string>
+    <string name="activity_expand">Show the steps</string>
+    <string name="activity_collapse">Collapse</string>
 
     <!-- ===== Projects · Clone / Browse / Branch ===== -->
     <string name="clone_close">Close</string>
@@ -754,6 +763,18 @@
     <plurals name="queue_images">
         <item quantity="one">%d image</item>
         <item quantity="other">%d images</item>
+    </plurals>
+    <plurals name="activity_steps">
+        <item quantity="one">%d step</item>
+        <item quantity="other">%d steps</item>
+    </plurals>
+    <plurals name="activity_failed">
+        <item quantity="one">%d failed</item>
+        <item quantity="other">%d failed</item>
+    </plurals>
+    <plurals name="activity_failed_recovered">
+        <item quantity="one">%d failed, recovered</item>
+        <item quantity="other">%d failed, recovered</item>
     </plurals>
     <plurals name="tool_summary_read">
         <item quantity="one">Read %d file</item>
