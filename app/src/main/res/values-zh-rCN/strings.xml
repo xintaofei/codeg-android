@@ -1154,4 +1154,16 @@
     <string name="cc_test_message_sent">测试消息已发送。</string>
     <string name="cc_token_removed">令牌已移除。</string>
     <string name="mcp_spec_invalid_json">规格不是有效的 JSON</string>
+
+    <!-- ===== Options-button summary, searchable option lists, question-card fold ===== -->
+    <string name="agentopts_mode_name">模式</string>
+    <string name="agentopts_value_on">开</string>
+    <string name="agentopts_value_off">关</string>
+    <string name="agentopts_recommended">推荐</string>
+    <string name="agentopts_search_models">搜索模型</string>
+    <string name="agentopts_search_options">搜索选项</string>
+    <string name="agentopts_no_models_found">没有找到模型</string>
+    <string name="agentopts_no_options_found">没有找到选项</string>
+    <string name="ask_fold">收起</string>
+    <string name="ask_unfold">展开</string>
 </resources>

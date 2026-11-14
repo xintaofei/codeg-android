@@ -105,6 +105,9 @@ internal class AgentOptionsController(
     /** Monotonic counter stamped onto every selector push. Never reset — see [LiveSelectors]. */
     private var selectorRevision = 0
 
+    /** What the options button summarizes, kept past the sheet's own copy. See [OptionsSummary]. */
+    val summary = OptionsSummaryState()
+
     /**
      * Drop pushed selector state belonging to a connection other than the one about to be
      * attached.
@@ -150,6 +153,7 @@ internal class AgentOptionsController(
         selectorRevision += 1
         val revision = selectorRevision
         updateSelectors { update(it, revision) }
+        ui.value.liveSelectors?.let { summary.pushed(agent, it, revision) }
     }
 
     /**
@@ -293,6 +297,17 @@ internal class AgentOptionsController(
      *  A live session that advertises neither modes nor config options therefore takes the
      *  probe path too. iOS parity. */
     suspend fun loadAgentOptions(): AgentOptionsData {
+        // Where the pushes stood as the load began, as the sheet captures it: the ones landing
+        // while it runs are newer than what it reads, and are folded over it.
+        val forAgent = agent
+        val since = SelectorRevisions.of(ui.value.liveSelectors?.takeIf { it.agent == forAgent })
+        val data = readAgentOptions()
+        if (agent == forAgent) summary.loaded(forAgent, data, ui.value.liveSelectors, since)
+        return data
+    }
+
+    /** [loadAgentOptions]' read. */
+    private suspend fun readAgentOptions(): AgentOptionsData {
         val c = client ?: return AgentOptionsData()
         // Let any apply still running for THIS agent finish first. Its change is on its way to
         // the agent, so a snapshot taken now would show the pre-apply value and the sheet would
@@ -445,7 +460,7 @@ internal class AgentOptionsController(
      * value the save actually replaced in the store, which the sheet may never have shown.
      */
     fun applyMode(modeId: String, previous: String?): Deferred<ApplyOutcome> =
-        startApply(SelectorKey.Mode) { ctx ->
+        startApply(SelectorKey.Mode, modeId) { ctx ->
             val stored = saveForApply(ctx) { selectorPrefs.saveMode(ctx.agent, modeId) }
             val undo: suspend () -> Unit = {
                 selectorPrefs.restoreMode(ctx.agent, expected = modeId, previous = stored.replaced)
@@ -464,7 +479,7 @@ internal class AgentOptionsController(
 
     /** Apply a config-option pick. Same contract as [applyMode]. */
     fun applyConfig(configId: String, valueId: String, previous: String?): Deferred<ApplyOutcome> =
-        startApply(SelectorKey.Config(configId)) { ctx ->
+        startApply(SelectorKey.Config(configId), valueId) { ctx ->
             val stored = saveForApply(ctx) { selectorPrefs.saveConfig(ctx.agent, configId, valueId) }
             val undo: suspend () -> Unit = {
                 selectorPrefs.restoreConfig(ctx.agent, configId, expected = valueId, previous = stored.replaced)
@@ -557,6 +572,7 @@ internal class AgentOptionsController(
      */
     private fun startApply(
         selector: SelectorKey,
+        value: String,
         body: suspend (ApplyContext) -> ApplyOutcome,
     ): Deferred<ApplyOutcome> {
         val key = ApplyRegistry.Key(agent, selector)
@@ -568,7 +584,17 @@ internal class AgentOptionsController(
             token = applyRegistry.begin(key),
             hadObservedValue = applyRegistry.isObserved(key),
         )
-        val deferred = scope.async { body(ctx) }
+        // The button shows the pick at once too, and learns how it ended here rather than from
+        // the sheet, whose await a dismissal cancels.
+        val summaryTicket = summary.beginApply(ctx.agent, selector, value)
+        val deferred = scope.async {
+            var outcome: ApplyOutcome? = null
+            try {
+                body(ctx).also { outcome = it }
+            } finally {
+                summary.settleApply(ctx.agent, selector, value, summaryTicket, outcome)
+            }
+        }
         // Keyed by token, not selector: two applies for the same selector can genuinely overlap
         // once a context switch has released the row lock, and a map keyed by selector would let
         // whichever finished first deregister the other.

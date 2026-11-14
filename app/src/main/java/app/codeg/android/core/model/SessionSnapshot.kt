@@ -72,6 +72,14 @@ data class SessionConfigOption(
     val description: String? = null,
     val category: String? = null,
     val kind: SessionConfigKind = SessionConfigKind(),
+    /**
+     * The value the AGENT recommends (`recommended_value`: JetBrains AIR's `recommendedValue`,
+     * which codex-acp 1.11.0+ and claude-agent-acp 0.76.0+ use to name their default model and
+     * that model's default effort). A hint only: [SessionConfigKind.currentValue] still says
+     * what is selected, and a recommendation that names no option marks nothing. Absent on
+     * servers that predate the field.
+     */
+    val recommendedValue: String? = null,
 )
 
 @Serializable

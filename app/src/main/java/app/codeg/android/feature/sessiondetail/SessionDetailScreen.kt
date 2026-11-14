@@ -89,7 +89,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -98,7 +97,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.codeg.android.R
-import app.codeg.android.core.designsystem.component.AgentAvatar
 import app.codeg.android.core.designsystem.component.EmptyState
 import app.codeg.android.core.designsystem.component.InlineError
 import app.codeg.android.core.designsystem.component.LoadingView
@@ -424,19 +422,16 @@ fun SessionDetailScreen(
                         }
                     },
                     actions = {
-                        // The agent avatar is the options button (mode / config / folder / branch).
-                        Box(
-                            Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .clickable(
-                                    onClickLabel = stringResource(R.string.session_agent_options),
-                                    role = Role.Button,
-                                ) { showOptions = true },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            AgentAvatar(ui.agent, size = 28.dp)
-                        }
+                        // The agent avatar is the options button (mode / config / folder / branch),
+                        // with the session's model, effort and mode beside it.
+                        AgentOptionsButton(
+                            viewModel = viewModel,
+                            agent = ui.agent,
+                            isInFlight = ui.isInFlight,
+                            sheetOpen = showOptions,
+                            conversationId = ui.summary?.id,
+                            onClick = { showOptions = true },
+                        )
                         // Message navigation: once there is a message to go to.
                         if (!ui.isNew && (ui.window?.hasOlder == true || ui.turns.any { it.role == TurnRole.USER })) {
                             IconButton(onClick = { viewModel.loadOutline(); showNav = true }) {
@@ -478,6 +473,7 @@ fun SessionDetailScreen(
                 }
                 ui.pendingQuestion?.let { q ->
                     AskQuestionCard(
+                        questionId = q.questionId,
                         questions = q.questions,
                         onSubmit = viewModel::answerQuestion,
                         onSkip = viewModel::dismissQuestion,

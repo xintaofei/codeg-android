@@ -1,5 +1,6 @@
 package app.codeg.android.feature.sessiondetail.interactive
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,6 +19,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -29,6 +32,7 @@ import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +44,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -55,9 +62,17 @@ import app.codeg.android.core.model.QuestionSpec
 
 private const val OTHER_KEY = "__codeg_other__"
 
-/** A multiple-choice / free-text question card. Port of iOS `AskQuestionCard`. */
+/**
+ * A multiple-choice / free-text question card. Port of iOS `AskQuestionCard`.
+ *
+ * Its header row folds the card down to that row (codeg 0.44's collapsible question card):
+ * folded, only the icon, the title, the answered counter (multi-question sets) and a chevron
+ * remain, so the transcript gets its space back while the question stays pending and in view.
+ * See [AskQuestionFold] for when it opens on its own.
+ */
 @Composable
 fun AskQuestionCard(
+    questionId: String,
     questions: List<QuestionSpec>,
     onSubmit: (QuestionAnswer) -> Unit,
     onSkip: () -> Unit,
@@ -67,9 +82,15 @@ fun AskQuestionCard(
     val selections = remember(questions) { mutableStateMapOf<String, Set<String>>() }
     val otherText = remember(questions) { mutableStateMapOf<String, String>() }
     var submitting by remember(questions) { mutableStateOf(false) }
+    var fold by remember { mutableStateOf(AskQuestionFold()) }
+    // A replacement set renders into the same card: it opens (and stays open if the old one ever
+    // comes back). Reading the fold by id already shows it open from its first frame.
+    LaunchedEffect(questionId) { fold = fold.present(questionId) }
+    val collapsed = fold.isCollapsed(questionId)
 
     val canSubmit = questions.all { isAnswered(it, selections[it.id].orEmpty(), otherText[it.id].orEmpty()) } &&
         !submitting
+    val answeredCount = questions.count { isAnswered(it, selections[it.id].orEmpty(), otherText[it.id].orEmpty()) }
 
     Column(
         modifier
@@ -77,16 +98,43 @@ fun AskQuestionCard(
             .clip(RoundedCornerShape(14.dp))
             .background(colors.bgElevated.copy(alpha = 0.96f))
             .border(0.5.dp, colors.surfaceStroke, RoundedCornerShape(14.dp))
-            .padding(14.dp),
+            .animateContentSize()
+            .padding(if (collapsed) 10.dp else 14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // The whole header row is the fold toggle, not just the chevron.
+        val state = stringResource(if (collapsed) R.string.common_collapsed else R.string.common_expanded)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable(
+                    onClickLabel = stringResource(if (collapsed) R.string.ask_unfold else R.string.ask_fold),
+                    role = Role.Button,
+                ) { fold = fold.toggle(questionId) }
+                .semantics { stateDescription = state },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Icon(Icons.Rounded.Forum, contentDescription = null, tint = colors.accent, modifier = Modifier.size(20.dp))
             Column(Modifier.weight(1f)) {
                 Text(stringResource(R.string.ask_needs_input_title), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.textPrimary)
-                Text(stringResource(R.string.ask_needs_input_subtitle), fontSize = 12.sp, color = colors.textSecondary)
+                if (!collapsed) Text(stringResource(R.string.ask_needs_input_subtitle), fontSize = 12.sp, color = colors.textSecondary)
             }
+            // Kept while folded: the row still says how far along the set is, so a folded blocking
+            // question never reads as a dismissed one.
+            if (questions.size > 1) {
+                Text("$answeredCount/${questions.size}", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.textTertiary)
+            }
+            Icon(
+                if (collapsed) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                contentDescription = null,
+                tint = colors.textTertiary,
+                modifier = Modifier.size(18.dp),
+            )
         }
+
+        // Folded, the header row IS the card.
+        if (collapsed) return@Column
 
         Column(
             Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),

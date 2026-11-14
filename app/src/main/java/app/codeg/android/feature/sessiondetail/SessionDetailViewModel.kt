@@ -2905,6 +2905,9 @@ class SessionDetailViewModel @Inject constructor(
     /** See [AgentOptionsController.refreshLiveSelectors]. */
     suspend fun refreshLiveSelectors() = options.refreshLiveSelectors()
 
+    /** What the options button summarizes. See [OptionsSummary]. */
+    internal val optionsSummary: StateFlow<OptionsSummary?> get() = options.summary.state
+
     // endregion
 }
 

@@ -16,7 +16,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -62,6 +65,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -76,13 +80,13 @@ import app.codeg.android.core.model.AgentChoice
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.FolderDetail
 import app.codeg.android.core.model.GitBranchList
-import app.codeg.android.core.model.SessionConfigKind
 import app.codeg.android.core.model.SessionConfigOption
 import app.codeg.android.core.model.SessionConfigSelectOption
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class SheetPage { Main, Branch }
+/** The sheet's pages: [Choice] is a long setting's searchable value list ([SessionChoice.searchable]). */
+private enum class SheetPage { Main, Branch, Choice }
 
 /** The `applying` key for the mode selector (config options key by their own id). Keying by
  *  the logical selector — not the specific value — lets us lock every row of that selector
@@ -160,6 +164,8 @@ fun AgentOptionsSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var page by remember { mutableStateOf(SheetPage.Main) }
+    /** The setting [SheetPage.Choice] lists, by [SessionSetting.key]. */
+    var choiceKey by remember { mutableStateOf<String?>(null) }
 
     var loading by remember { mutableStateOf(true) }
     var data by remember { mutableStateOf(AgentOptionsData()) }
@@ -267,6 +273,59 @@ fun AgentOptionsSheet(
         viewModel.markSelectorsObserved(observed)
     }
 
+    val modeTitle = stringResource(R.string.agentopts_mode_name)
+
+    fun pickMode(modeId: String) {
+        // Move the checkmark instantly (iOS parity); the apply runs in the background and
+        // reverts to the previous pick only when it reports failure. It is owned by the
+        // ViewModel, so dismissing the sheet cancels this await, not the apply.
+        val previous = currentMode
+        val epoch = contextEpoch
+        currentMode = modeId
+        applying = applying + MODE_APPLY
+        note = null
+        scope.launch {
+            val outcome = viewModel.applyMode(modeId, previous).await()
+            if (epoch != contextEpoch) return@launch
+            applying = applying - MODE_APPLY
+            // Adopt the reconciled/normalized value; on failure revert + notice.
+            when (outcome) {
+                is ApplyOutcome.Applied -> currentMode = outcome.value
+                is ApplyOutcome.Failed -> currentMode = previous
+            }
+            note = outcome.note(applyFailedNote, notRememberedNote, staleNote)
+        }
+    }
+
+    fun pickConfig(optionId: String, valueId: String) {
+        // Optimistic: move the checkmark now, revert only if the apply reports failure
+        // (ViewModel-owned, so a dismiss cancels the await, not it).
+        val previous = currentValues[optionId]
+        val epoch = contextEpoch
+        currentValues = currentValues + (optionId to valueId)
+        applying = applying + optionId
+        note = null
+        scope.launch {
+            val outcome = viewModel.applyConfig(optionId, valueId, previous).await()
+            // A switch reloaded the options under us — this result describes the agent/folder
+            // we left, and `optionId` is very likely the same id over there.
+            if (epoch != contextEpoch) return@launch
+            applying = applying - optionId
+            currentValues = when (outcome) {
+                is ApplyOutcome.Applied -> currentValues + (optionId to outcome.value)
+                is ApplyOutcome.Failed ->
+                    if (previous != null) currentValues + (optionId to previous)
+                    else currentValues - optionId
+            }
+            note = outcome.note(applyFailedNote, notRememberedNote, staleNote)
+        }
+    }
+
+    fun pick(target: SelectorKey, value: String) = when (target) {
+        SelectorKey.Mode -> pickMode(value)
+        is SelectorKey.Config -> pickConfig(target.id, value)
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -275,8 +334,29 @@ fun AgentOptionsSheet(
         // the branch page returns to the main page, the main page dismisses.
         properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
     ) {
-        BackHandler { if (page == SheetPage.Branch) page = SheetPage.Main else onDismiss() }
+        BackHandler { if (page != SheetPage.Main) page = SheetPage.Main else onDismiss() }
+        // Every setting in the button's order — model, effort, mode, the rest, then the
+        // switches — with the values on screen laid over the catalog.
+        val settings = remember(data, currentMode, currentValues, modeTitle) {
+            SessionSettings.forCatalog(data.modes, data.configOptions, currentMode, currentValues, modeTitle)
+        }
         when (page) {
+            SheetPage.Choice -> {
+                val setting = settings.firstOrNull { it.key == choiceKey }
+                // A reload (agent/folder/connection switch) or a catalog that dropped the
+                // setting leaves nothing to list.
+                LaunchedEffect(setting == null, loading) { if (setting == null || loading) page = SheetPage.Main }
+                if (setting != null) {
+                    SettingListPage(
+                        setting = setting,
+                        applying = setting.applyKey in applying,
+                        locked = ui.isInFlight,
+                        onBack = { page = SheetPage.Main },
+                        onPick = { value -> pick(setting.target, value) },
+                    )
+                }
+            }
+
             SheetPage.Branch -> BranchPickerContent(
                 viewModel = viewModel,
                 onBack = { page = SheetPage.Main },
@@ -284,8 +364,6 @@ fun AgentOptionsSheet(
             )
 
             SheetPage.Main -> {
-                val hasConfig = data.configOptions.isNotEmpty()
-                val showModes = data.modes?.availableModes?.isNotEmpty() == true && !hasConfig
                 Column(
                     Modifier
                         .fillMaxWidth()
@@ -320,66 +398,14 @@ fun AgentOptionsSheet(
                         loading -> Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(color = colors.accent)
                         }
-                        showModes -> {
-                            Text(stringResource(R.string.agentopts_mode), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.textTertiary)
-                            val modeApplying = MODE_APPLY in applying
-                            OptionGroup {
-                                data.modes!!.availableModes.forEachIndexed { i, mode ->
-                                    if (i > 0) GroupDivider()
-                                    // Lock every mode row while a mode apply is in flight; also while a
-                                    // turn is running (options can't change mid-response — and an apply
-                                    // that failed then could null the live turn's connection). Spinner on
-                                    // the optimistically-selected row.
-                                    OptionRow(mode.name.ifEmpty { mode.id }, mode.description, selected = currentMode == mode.id, busy = modeApplying && currentMode == mode.id, enabled = !modeApplying && !ui.isInFlight) {
-                                        // Move the checkmark instantly (iOS parity); the apply runs in the
-                                        // background and reverts to the previous pick only when it reports
-                                        // failure. It is owned by the ViewModel, so dismissing the sheet
-                                        // cancels this await, not the apply.
-                                        val previous = currentMode
-                                        val epoch = contextEpoch
-                                        currentMode = mode.id
-                                        applying = applying + MODE_APPLY
-                                        note = null
-                                        scope.launch {
-                                            val outcome = viewModel.applyMode(mode.id, previous).await()
-                                            if (epoch != contextEpoch) return@launch
-                                            applying = applying - MODE_APPLY
-                                            // Adopt the reconciled/normalized value; on failure revert + notice.
-                                            when (outcome) {
-                                                is ApplyOutcome.Applied -> currentMode = outcome.value
-                                                is ApplyOutcome.Failed -> currentMode = previous
-                                            }
-                                            note = outcome.note(applyFailedNote, notRememberedNote, staleNote)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        hasConfig -> data.configOptions.forEach { option ->
-                            ConfigOptionSection(option, currentValues[option.id], optionApplying = option.id in applying, locked = ui.isInFlight) { valueId ->
-                                // Optimistic: move the checkmark now, revert only if the apply reports
-                                // failure (ViewModel-owned, so a dismiss cancels the await, not it).
-                                val previous = currentValues[option.id]
-                                val epoch = contextEpoch
-                                currentValues = currentValues + (option.id to valueId)
-                                applying = applying + option.id
-                                note = null
-                                scope.launch {
-                                    val outcome = viewModel.applyConfig(option.id, valueId, previous).await()
-                                    // A switch reloaded the options under us — this result describes
-                                    // the agent/folder we left, and `option.id` is very likely the
-                                    // same id over there.
-                                    if (epoch != contextEpoch) return@launch
-                                    applying = applying - option.id
-                                    currentValues = when (outcome) {
-                                        is ApplyOutcome.Applied -> currentValues + (option.id to outcome.value)
-                                        is ApplyOutcome.Failed ->
-                                            if (previous != null) currentValues + (option.id to previous)
-                                            else currentValues - option.id
-                                    }
-                                    note = outcome.note(applyFailedNote, notRememberedNote, staleNote)
-                                }
-                            }
+                        settings.isNotEmpty() -> settings.forEach { setting ->
+                            SettingSection(
+                                setting = setting,
+                                applying = setting.applyKey in applying,
+                                locked = ui.isInFlight,
+                                onPick = { value -> pick(setting.target, value) },
+                                onOpenList = { choiceKey = setting.key; page = SheetPage.Choice },
+                            )
                         }
                         else -> Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
                             Text(stringResource(R.string.agentopts_no_options), fontSize = 13.sp, color = colors.textTertiary)
@@ -730,30 +756,209 @@ private fun BranchSectionLabel(text: String) {
 
 // region Mode / config selectors (shared)
 
-@Composable
-private fun ConfigOptionSection(option: SessionConfigOption, currentValue: String?, optionApplying: Boolean, locked: Boolean, onSelect: (String) -> Unit) {
-    val colors = CodegTheme.colors
-    if (option.kind.isBoolean) {
-        BooleanOptionSection(option, currentValue, optionApplying, locked, onSelect)
-        return
+/** The `applying` key of the selector a setting targets — see [MODE_APPLY]. */
+private val SessionSetting.applyKey: String
+    get() = when (val target = target) {
+        SelectorKey.Mode -> MODE_APPLY
+        is SelectorKey.Config -> target.id
     }
-    val flat: List<SessionConfigSelectOption> = if (option.kind.groups.isNotEmpty()) option.kind.groups.flatMap { it.options } else option.kind.options
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(option.name.uppercase().ifEmpty { option.id.uppercase() }, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.textTertiary)
-        OptionGroup {
-            // A kind this build can't render (a newer server's, or a select the agent
-            // advertised with no values) would otherwise be an empty box with nothing to
-            // tap — say what it's set to instead, so the option at least reads as
-            // "exists, not settable here" rather than as a broken control.
-            if (flat.isEmpty()) UnsupportedOptionRow(currentValue)
-            flat.forEachIndexed { i, opt ->
-                if (i > 0) GroupDivider()
-                // Lock every row of this option while its apply is in flight, or while a turn is
-                // running ([locked]); spinner on the pick.
-                OptionRow(opt.name.ifEmpty { opt.value }, opt.description, selected = currentValue == opt.value, busy = optionApplying && currentValue == opt.value, enabled = !optionApplying && !locked) { onSelect(opt.value) }
+
+/** The section label above a setting: "MODE" for the legacy list, the agent's own name for a
+ *  config option. */
+@Composable
+private fun SettingLabel(setting: SessionSetting) {
+    Text(
+        if (setting.target == SelectorKey.Mode) stringResource(R.string.agentopts_mode) else setting.title.uppercase(),
+        fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CodegTheme.colors.textTertiary,
+    )
+}
+
+/**
+ * One setting. A switch is one row; a searchable list (more than
+ * [SessionSettings.SEARCH_THRESHOLD] values — a provider's model catalog can run to hundreds) is a
+ * row that opens its own page ([SettingListPage]), so a long list never renders inline; anything
+ * shorter lists its values in place, under group headers when it has named groups — never the
+ * groups AND the flat list (the source of duplicate rows when both were drawn).
+ *
+ * The web's segmented control for a short select is not ported: radio rows with descriptions
+ * read better at phone width.
+ *
+ * Every row of the setting is locked while its apply is in flight ([applying]) or a turn runs
+ * ([locked]); the spinner sits on the pick.
+ */
+@Composable
+private fun SettingSection(
+    setting: SessionSetting,
+    applying: Boolean,
+    locked: Boolean,
+    onPick: (String) -> Unit,
+    onOpenList: () -> Unit,
+) {
+    when (val control = setting.control) {
+        is SettingControl.Toggle -> ToggleSection(setting, control, applying, locked, onPick)
+        // A kind this build can't render (a newer server's, or a select the agent advertised
+        // with no values) would otherwise be an empty box with nothing to tap — say what it's
+        // set to instead, so the option at least reads as "exists, not settable here".
+        is SettingControl.Unsupported -> if (control.isBoolean) {
+            // No label above a switch's row to fall back on, so the row carries the name.
+            OptionGroup { UnsupportedOptionRow(control.currentValue, title = setting.title) }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                SettingLabel(setting)
+                OptionGroup { UnsupportedOptionRow(control.currentValue) }
+            }
+        }
+        is SettingControl.Choice -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val choice = control.choice
+            SettingLabel(setting)
+            OptionGroup {
+                if (choice.searchable) {
+                    ListLinkRow(choice, applying, onOpenList)
+                } else {
+                    choice.groups.forEachIndexed { groupIndex, group ->
+                        if (groupIndex > 0) GroupDivider()
+                        group.name?.let { OptionGroupHeader(it) }
+                        group.options.forEachIndexed { i, opt ->
+                            if (i > 0) GroupDivider()
+                            ChoiceValueRow(choice, opt, applying, locked, onPick)
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/** A value row of a select setting: checked when it is the current value, spinning while that
+ *  selector applies, badged when the agent recommends it — a claim independent of the check, so
+ *  both can land on one row or on different ones. */
+@Composable
+private fun ChoiceValueRow(
+    choice: SessionChoice,
+    option: SessionConfigSelectOption,
+    applying: Boolean,
+    locked: Boolean,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val selected = option.value == choice.currentValue
+    OptionRow(
+        title = option.name.ifEmpty { option.value },
+        description = option.description,
+        selected = selected,
+        busy = applying && selected,
+        enabled = !applying && !locked,
+        recommended = option.value == choice.recommendedValue,
+        modifier = modifier,
+    ) { onPick(option.value) }
+}
+
+/** A long list's row: the current value, opening the searchable page. */
+@Composable
+private fun ListLinkRow(choice: SessionChoice, applying: Boolean, onOpen: () -> Unit) {
+    val colors = CodegTheme.colors
+    Row(
+        Modifier.fillMaxWidth().clickable(role = Role.Button) { onOpen() }.padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(choice.currentLabel, fontSize = 15.sp, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            choice.currentDescription?.let {
+                Text(it, fontSize = 12.sp, lineHeight = 16.sp, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (applying) CircularProgressIndicator(color = colors.accent, modifier = Modifier.size(16.dp))
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
+    }
+}
+
+/**
+ * A long setting's values — the model list, or any select past [SessionSettings.SEARCH_THRESHOLD]
+ * values — on their own page with a search field (the web's `ModelOptionList`). Matches the
+ * display name OR the value id ([ModelOptionGroups.filter]), so a provider prefix stripped from
+ * the labels still finds its models. Lazy, and opened on the current value. A pick applies at
+ * once and the page stays, as the web's popover does.
+ *
+ * [setting] is re-derived by the sheet on every change, so the check follows a pick (and its
+ * reconciliation) live.
+ */
+@Composable
+private fun SettingListPage(
+    setting: SessionSetting,
+    applying: Boolean,
+    locked: Boolean,
+    onBack: () -> Unit,
+    onPick: (String) -> Unit,
+) {
+    val colors = CodegTheme.colors
+    val choice = setting.choice ?: return
+    var query by remember { mutableStateOf("") }
+    val rows = remember(choice.groups, query) { ModelOptionGroups.flatten(ModelOptionGroups.filter(choice.groups, query)) }
+    // Open on the row the user came to change: a long list opened at its top would hide it. Two
+    // items (the title and the search field) sit above the rows; keep a little context above it.
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = remember {
+            val index = rows.indexOfFirst { it is ModelOptionRow.Option && it.option.value == choice.currentValue }
+            if (index < 4) 0 else HEADER_ITEMS + index - 2
+        },
+    )
+    LazyColumn(
+        Modifier.fillMaxWidth().heightIn(max = 600.dp).padding(horizontal = 16.dp).padding(bottom = 28.dp),
+        state = listState,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        item("title") {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = stringResource(R.string.common_back), tint = colors.textPrimary)
+                }
+                Text(setting.title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        item("search") {
+            Box(Modifier.padding(bottom = 8.dp)) {
+                CodegTextField(
+                    query, { query = it },
+                    label = stringResource(if (choice.isModel) R.string.agentopts_search_models else R.string.agentopts_search_options),
+                )
+            }
+        }
+        if (rows.isEmpty()) {
+            item("empty") {
+                Text(
+                    stringResource(if (choice.isModel) R.string.agentopts_no_models_found else R.string.agentopts_no_options_found),
+                    fontSize = 13.sp, color = colors.textSecondary,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+        // Keyed by position too: the keys are namespaced by group, but an agent listing the same
+        // value twice in one group would otherwise crash the list on a duplicate key.
+        itemsIndexed(rows, key = { i, row -> "$i:${row.key}" }) { _, row ->
+            when (row) {
+                is ModelOptionRow.Header -> OptionGroupHeader(row.name, Modifier.padding(top = 8.dp))
+                is ModelOptionRow.Option -> ChoiceValueRow(
+                    choice, row.option, applying, locked, onPick,
+                    modifier = Modifier.clip(RoundedCornerShape(10.dp)),
+                )
+            }
+        }
+    }
+}
+
+/** The title and search items above [SettingListPage]'s rows. */
+private const val HEADER_ITEMS = 2
+
+/** A provider / server group's label above its rows. */
+@Composable
+private fun OptionGroupHeader(name: String, modifier: Modifier = Modifier) {
+    Text(
+        name,
+        fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CodegTheme.colors.textTertiary,
+        maxLines = 1, overflow = TextOverflow.Ellipsis,
+        modifier = modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 2.dp),
+    )
 }
 
 /** A config option this build can't offer a control for: what it's set to (if the server
@@ -772,54 +977,46 @@ private fun UnsupportedOptionRow(currentValue: String?, title: String? = null) {
 }
 
 /**
- * An on/off config option (ACP's boolean kind — cline 3.0.50's "Auto-approve tools").
+ * An on/off setting: ACP's boolean kind (cline 3.0.50's "Auto-approve tools"), or a two-value
+ * on/off select (Claude's and Codex's "Fast mode").
  *
- * A switch rather than a two-row value list: a binary choice doesn't need a list, and
- * this one changes what the agent may do *without asking*, so the state has to read at a
- * glance. Unlike the select sections there's no separate uppercase label — it would
- * repeat the row title verbatim.
+ * A switch rather than a two-row value list: a binary choice doesn't need a list, and a
+ * permission-shaped one changes what the agent may do *without asking*, so the state has to read
+ * at a glance. Unlike the select sections there's no separate uppercase label — it would repeat
+ * the row title verbatim.
  *
- * What goes back out is the string `"true"`/`"false"`: codeg's set call takes config
- * values as opaque text and only its ACP egress re-encodes them as a real JSON boolean.
- * (The value read *in* is a JSON boolean — the two directions are not symmetric.)
+ * What goes back out is the agent's own value for the position: `"true"`/`"false"` for a boolean
+ * (codeg's set call takes config values as opaque text and only its ACP egress re-encodes them as
+ * a real JSON boolean), the select's own on/off value otherwise.
  */
 @Composable
-private fun BooleanOptionSection(option: SessionConfigOption, currentValue: String?, optionApplying: Boolean, locked: Boolean, onSelect: (String) -> Unit) {
+private fun ToggleSection(setting: SessionSetting, toggle: SettingControl.Toggle, applying: Boolean, locked: Boolean, onPick: (String) -> Unit) {
     val colors = CodegTheme.colors
-    // A value that isn't one of the two positions is a payload this build can't read, NOT an
-    // off toggle — `current_value` is required server-side, so its absence means something is
-    // wrong, and for a permission-shaped option guessing "off" would show the agent as more
-    // restricted than it may be. Fall back to the read-only row.
-    val on = SessionConfigKind.booleanState(currentValue)
-    val enabled = !optionApplying && !locked
+    val enabled = !applying && !locked
     OptionGroup {
-        if (on == null) {
-            // Carries the name because the toggle layout has no uppercase section label
-            // above it to fall back on.
-            UnsupportedOptionRow(currentValue, title = option.name.ifEmpty { option.id })
-            return@OptionGroup
-        }
         Row(
             Modifier
                 .fillMaxWidth()
                 // One merged toggleable node for the whole row (title, description, switch)
                 // rather than a tap target the size of the thumb.
-                .toggleable(value = on, enabled = enabled, role = Role.Switch) { next -> onSelect(SessionConfigKind.booleanValue(next)) }
+                .toggleable(value = toggle.isOn, enabled = enabled, role = Role.Switch) { next ->
+                    onPick(if (next) toggle.onValue else toggle.offValue)
+                }
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(option.name.ifEmpty { option.id }, fontSize = 15.sp, color = colors.textPrimary)
-                option.description?.takeIf { it.isNotEmpty() }?.let { Text(it, fontSize = 12.sp, lineHeight = 16.sp, color = colors.textTertiary) }
+                Text(setting.title, fontSize = 15.sp, color = colors.textPrimary)
+                setting.description?.let { Text(it, fontSize = 12.sp, lineHeight = 16.sp, color = colors.textTertiary) }
             }
             // The switch already animates to the optimistic position, so the spinner sits
-            // beside it instead of replacing it — swapping it out would hide the very
-            // feedback the tap just produced.
-            if (optionApplying) CircularProgressIndicator(color = colors.accent, modifier = Modifier.size(16.dp))
+            // beside it instead of replacing it — swapping it out would hide the very feedback
+            // the tap just produced.
+            if (applying) CircularProgressIndicator(color = colors.accent, modifier = Modifier.size(16.dp))
             Switch(
-                checked = on,
-                // Handled by the row's `toggleable`; a second handler here would give the
-                // switch its own semantics node and read out twice.
+                checked = toggle.isOn,
+                // Handled by the row's `toggleable`; a second handler here would give the switch
+                // its own semantics node and read out twice.
                 onCheckedChange = null,
                 enabled = enabled,
                 colors = SwitchDefaults.colors(checkedTrackColor = colors.accent, checkedThumbColor = colors.onAccent),
@@ -839,14 +1036,39 @@ private fun GroupDivider() {
 }
 
 @Composable
-private fun OptionRow(title: String, description: String?, selected: Boolean, busy: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun OptionRow(
+    title: String,
+    description: String?,
+    selected: Boolean,
+    busy: Boolean,
+    enabled: Boolean,
+    recommended: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     val colors = CodegTheme.colors
     Row(
-        Modifier.fillMaxWidth().clickable(enabled = enabled) { onClick() }.padding(horizontal = 14.dp, vertical = 12.dp),
+        modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, fontSize = 15.sp, color = colors.textPrimary)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(title, fontSize = 15.sp, color = colors.textPrimary, modifier = Modifier.weight(1f, fill = false))
+                if (recommended) {
+                    // Sized to its text, so a long model name wraps instead of squeezing it away.
+                    Text(
+                        stringResource(R.string.agentopts_recommended),
+                        fontSize = 10.sp, fontWeight = FontWeight.Medium, color = colors.textSecondary,
+                        maxLines = 1, softWrap = false,
+                        modifier = Modifier
+                            .border(0.5.dp, colors.surfaceStroke, RoundedCornerShape(50))
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+            }
             description?.takeIf { it.isNotEmpty() }?.let { Text(it, fontSize = 12.sp, lineHeight = 16.sp, color = colors.textTertiary) }
         }
         if (busy) CircularProgressIndicator(color = colors.accent, modifier = Modifier.size(16.dp))

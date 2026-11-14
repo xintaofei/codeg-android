@@ -1194,4 +1194,16 @@
     <string name="cc_test_message_sent">Test message sent.</string>
     <string name="cc_token_removed">Token removed.</string>
     <string name="mcp_spec_invalid_json">Spec is not valid JSON</string>
+
+    <!-- ===== Options-button summary, searchable option lists, question-card fold ===== -->
+    <string name="agentopts_mode_name">Mode</string>
+    <string name="agentopts_value_on">On</string>
+    <string name="agentopts_value_off">Off</string>
+    <string name="agentopts_recommended">Recommended</string>
+    <string name="agentopts_search_models">Search models</string>
+    <string name="agentopts_search_options">Search options</string>
+    <string name="agentopts_no_models_found">No models found</string>
+    <string name="agentopts_no_options_found">No options found</string>
+    <string name="ask_fold">Collapse</string>
+    <string name="ask_unfold">Expand</string>
 </resources>
