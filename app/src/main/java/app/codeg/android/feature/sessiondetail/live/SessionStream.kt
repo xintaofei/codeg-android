@@ -58,8 +58,10 @@ class SessionStream(
 ) {
     interface Listener {
         /** The subscription is confirmed with a full snapshot. [cause] says which attach it
-         *  answers: the caller's own [attach], or a silent re-attach after a drop. */
-        fun onSnapshot(snapshot: LiveSessionSnapshot, cause: AttachCause)
+         *  answers: the caller's own [attach], or a silent re-attach after a drop.
+         *  [missedEvents]: a re-attach whose snapshot is past the cursor — events happened
+         *  in the gap and won't be delivered. */
+        fun onSnapshot(snapshot: LiveSessionSnapshot, cause: AttachCause, missedEvents: Boolean)
 
         /** A new event, in order. Replayed events arrive here too, one by one. */
         fun onEvent(event: AcpEvent, seq: Long)
@@ -109,6 +111,20 @@ class SessionStream(
     private var generation = 0
     /** Consecutive failed re-attaches; reset by a confirmed attach. */
     private var reconnects = 0
+    /** The caller's [attach] still awaiting the server. */
+    private var pendingConfirm: CompletableDeferred<Unit>? = null
+    /** [pause] arrived while an [attach] was awaiting: honoured once it is answered, so the
+     *  caller's handshake isn't failed (which would make it connect afresh). */
+    private var pauseRequested = false
+
+    /** The connection whose subscription the server has confirmed and is still streaming.
+     *  Null while attaching, re-attaching, paused or stopped. */
+    private var confirmedConnectionId: String? = null
+
+    /** Whether events for [connectionId] are flowing right now, so a caller can skip a
+     *  redundant [attach]. */
+    fun isAttachedTo(connectionId: String): Boolean =
+        confirmedConnectionId == connectionId && consumer?.isActive == true
 
     /** Whether a consumer is running or a re-attach is pending. */
     val isActive: Boolean get() = connectionId != null
@@ -120,12 +136,17 @@ class SessionStream(
      * or doesn't answer in time; the stream is then stopped.
      */
     suspend fun attach(connectionId: String, sinceSeq: Long? = null) {
+        // A previous attach still waiting is superseded: fail it now rather than leaving it
+        // to time out, so its caller doesn't mistake this attach's connection for a dead one.
+        pendingConfirm?.takeIf { !it.isCompleted }?.completeExceptionally(StreamAttachFailed(REASON_SUPERSEDED))
         stopConsumer()
         reconnects = 0
+        pauseRequested = false
         this.connectionId = connectionId
         cursorConnectionId = connectionId
         lastSeq = sinceSeq ?: 0
         val confirmed = CompletableDeferred<Unit>()
+        pendingConfirm = confirmed
         startConsumer(connectionId, AttachCause.ATTACH, confirmed)
         val ok = withTimeoutOrNull(attachTimeoutMs) { confirmed.await() }
         if (ok == null) {
@@ -140,6 +161,7 @@ class SessionStream(
      */
     fun resume() {
         val conn = connectionId ?: return
+        pauseRequested = false
         if (consumer?.isActive == true || reconnectJob?.isActive == true) return
         reconnects = 0
         startConsumer(conn, AttachCause.RECONNECT, null)
@@ -152,6 +174,10 @@ class SessionStream(
 
     /** Close the socket but keep the connection and cursor, for a later [resume]. */
     fun pause() {
+        if (pendingConfirm?.isCompleted == false) {
+            pauseRequested = true
+            return
+        }
         stopConsumer()
     }
 
@@ -162,6 +188,7 @@ class SessionStream(
     }
 
     private fun stopConsumer() {
+        confirmedConnectionId = null
         generation += 1
         reconnectJob?.cancel()
         reconnectJob = null
@@ -191,8 +218,10 @@ class SessionStream(
                     StreamFrame.Ready -> source.attach(subscriptionId, conn, lastSeq.takeIf { it > 0 })
                     is StreamFrame.Snapshot -> {
                         reconnects = 0
+                        val previous = lastSeq
                         frame.snapshot.eventSeq?.let { lastSeq = it }
-                        listener.onSnapshot(frame.snapshot, cause)
+                        val missed = cause == AttachCause.RECONNECT && (frame.snapshot.eventSeq ?: 0) > previous
+                        listener.onSnapshot(frame.snapshot, cause, missed)
                         confirm(gen, cause, confirmed)
                     }
                     is StreamFrame.Replay -> {
@@ -217,7 +246,13 @@ class SessionStream(
      *  itself succeeded. */
     private fun confirm(gen: Int, cause: AttachCause, confirmed: CompletableDeferred<Unit>?) {
         if (confirmed != null && !confirmed.isCompleted) confirmed.complete(Unit)
-        if (gen == generation) listener.onAttached(cause)
+        if (gen != generation) return
+        confirmedConnectionId = connectionId
+        listener.onAttached(cause)
+        if (pauseRequested && gen == generation) {
+            pauseRequested = false
+            stopConsumer()
+        }
     }
 
     /** Apply an event unless the cursor already covers it. A seq of 0 means unsequenced:
@@ -232,9 +267,11 @@ class SessionStream(
 
     private fun ended(gen: Int, reason: String?, confirmed: CompletableDeferred<Unit>?) {
         if (gen != generation) return
+        confirmedConnectionId = null
         // Ended before the attach was confirmed: the server rejected this connection
         // (stale/unknown). Fail the caller's handshake instead of reconnecting to a dead id.
         if (confirmed != null && !confirmed.isCompleted) {
+            pauseRequested = false
             stopConsumer()
             connectionId = null
             confirmed.completeExceptionally(StreamAttachFailed(reason))
@@ -278,6 +315,9 @@ class SessionStream(
 
     companion object {
         const val MAX_RECONNECTS = 6
+
+        /** [StreamAttachFailed.reason] for an attach replaced by a newer one. */
+        const val REASON_SUPERSEDED = "superseded"
         const val ATTACH_TIMEOUT_MS = 12_000L
 
         /** 0.5s, 1s, 2s, … capped at 8s. */

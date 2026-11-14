@@ -231,6 +231,30 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         for (call in snapshot.activeToolCalls) if (call.id !in toolIndex) seedTool(call)
     }
 
+    /**
+     * Rebuild this turn from [snapshot], replacing what it held: the snapshot answers a
+     * re-attach whose gap was too wide to replay, so the events in between are lost and only
+     * the server's copy is whole.
+     *
+     * One thing is kept: the server trims older FINISHED calls' input/output out of a large
+     * snapshot (a 2 MiB budget), so a call it sent bare keeps the payload this turn already
+     * had for it. The builder's identity is kept too ([id], [isStreaming]); a parked
+     * plan follow-up is bound to it.
+     */
+    fun reseedFrom(snapshot: LiveSessionSnapshot) {
+        val previous = toolIndex.toMap()
+        segments.clear()
+        toolIndex.clear()
+        livePlan = emptyList()
+        seedFrom(snapshot)
+        for ((id, call) in toolIndex) {
+            val held = previous[id] ?: continue
+            if (call.rawInput.isNullOrEmpty() && !held.rawInput.isNullOrEmpty()) call.rawInput = held.rawInput
+            if (call.rawOutput.isEmpty() && held.rawOutput.isNotEmpty()) call.rawOutput.append(held.rawOutput)
+            if (call.content.isNullOrEmpty() && !held.content.isNullOrEmpty()) call.content = held.content
+        }
+    }
+
     private fun seedTool(call: ToolCallStateSnapshot) {
         upsertToolCall(
             id = call.id,

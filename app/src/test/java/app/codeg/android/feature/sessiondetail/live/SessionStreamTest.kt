@@ -39,8 +39,8 @@ class SessionStreamTest {
 
     private class Recorder(var reconnect: Boolean = true) : SessionStream.Listener {
         val log = mutableListOf<String>()
-        override fun onSnapshot(snapshot: LiveSessionSnapshot, cause: SessionStream.AttachCause) {
-            log += "snapshot:${cause.name}"
+        override fun onSnapshot(snapshot: LiveSessionSnapshot, cause: SessionStream.AttachCause, missedEvents: Boolean) {
+            log += "snapshot:${cause.name}" + if (missedEvents) ":missed" else ""
         }
         override fun onEvent(event: AcpEvent, seq: Long) {
             log += "event:$seq"
@@ -149,7 +149,7 @@ class SessionStreamTest {
         runCurrent()
         sockets[1].push(StreamFrame.Ready, snapshot(seq = 40))
         runCurrent()
-        assertEquals("snapshot:RECONNECT", rec.log.last())
+        assertEquals("snapshot:RECONNECT:missed", rec.log.last())
         assertEquals(40, stream.lastSeq)
     }
 
@@ -230,5 +230,57 @@ class SessionStreamTest {
         assertEquals(9L, stream.cursorFor("c1"))
         assertNull(stream.cursorFor("c2"))
         if (stream.isActive) fail("stopped stream is still active")
+    }
+
+    @Test
+    fun `a confirmed stream reports itself attached, and a drop clears that`() = runTest {
+        val stream = newStream(Recorder())
+        val attach = async { stream.attach("c1") }
+        runCurrent()
+        assertFalse(stream.isAttachedTo("c1"))
+        sockets[0].push(StreamFrame.Ready, snapshot(seq = 1))
+        attach.await()
+        assertTrue(stream.isAttachedTo("c1"))
+        assertFalse(stream.isAttachedTo("c2"))
+        sockets[0].push(StreamFrame.Closed("lagged"))
+        runCurrent()
+        assertFalse(stream.isAttachedTo("c1"))
+    }
+
+    @Test
+    fun `a newer attach fails the one still waiting as superseded`() = runTest {
+        val stream = newStream(Recorder())
+        val first = async { runCatching { stream.attach("c1") } }
+        runCurrent()
+        val second = async { stream.attach("c1") }
+        runCurrent()
+        val failure = first.await().exceptionOrNull() as? StreamAttachFailed
+        assertEquals(SessionStream.REASON_SUPERSEDED, failure?.reason)
+        sockets[1].push(StreamFrame.Ready, snapshot(seq = 2))
+        second.await()
+        assertTrue(stream.isAttachedTo("c1"))
+    }
+
+    @Test
+    fun `a pause during an attach waits for its answer instead of failing it`() = runTest {
+        val rec = Recorder()
+        val stream = newStream(rec)
+        val attach = async { stream.attach("c1") }
+        runCurrent()
+        stream.pause()
+        sockets[0].push(StreamFrame.Ready, snapshot(seq = 3))
+        attach.await()
+        runCurrent()
+        // Answered, then paused: nothing more flows until resume.
+        assertEquals(listOf("snapshot:ATTACH"), rec.log)
+        assertFalse(stream.isAttachedTo("c1"))
+        sockets[0].push(StreamFrame.Event(event(4)))
+        runCurrent()
+        assertTrue(rec.log.none { it == "event:4" })
+        stream.resume()
+        runCurrent()
+        sockets[1].push(StreamFrame.Ready)
+        runCurrent()
+        assertEquals(listOf("c1" to 3L), sockets[1].attaches)
     }
 }

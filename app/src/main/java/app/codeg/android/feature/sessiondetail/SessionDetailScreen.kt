@@ -74,6 +74,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.codeg.android.R
 import app.codeg.android.core.designsystem.component.AgentAvatar
@@ -114,6 +115,12 @@ fun SessionDetailScreen(
     viewModel: SessionDetailViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
+    // The live stream follows the screen: paused while it's stopped (backgrounded, or covered
+    // by another destination), picked back up from its cursor when it starts again.
+    LifecycleStartEffect(viewModel) {
+        viewModel.setScreenVisible(true)
+        onStopOrDispose { viewModel.setScreenVisible(false) }
+    }
     val colors = CodegTheme.colors
     var draft by remember { mutableStateOf("") }
     var showInsert by remember { mutableStateOf(false) }

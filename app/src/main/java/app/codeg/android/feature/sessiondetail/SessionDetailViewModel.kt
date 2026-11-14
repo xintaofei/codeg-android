@@ -85,6 +85,12 @@ import javax.inject.Inject
  * backward to a user-round boundary — though only within its own walk-back cap,
  * so a window CAN still open mid-reply. See [TurnWindow.Tail].
  */
+/** Stop reason recorded for a turn whose `turn_complete` was lost in a reconnect gap. */
+private const val STOP_REASON_UNSEEN = "end_turn"
+
+/** [verifyUnseenTurn]: transcript checks before leaving the turn to its live events. */
+private const val VERIFY_UNSEEN_ATTEMPTS = 5
+
 private const val INITIAL_TAIL_TURNS = 120
 private const val OLDER_TURNS_PAGE_SIZE = 120
 
@@ -158,6 +164,22 @@ class SessionDetailViewModel @Inject constructor(
      * running turn from the start.
      */
     private var ownTurnStarted = true
+
+    /** This send's optimistic user turn: what [verifyUnseenTurn] looks for in the transcript. */
+    private var ownPendingTurn: MessageTurn? = null
+
+    /** The [verifyUnseenTurn] poll in flight. */
+    private var verifyJob: Job? = null
+
+    /** Whether the session screen is showing. The stream is paused while it isn't. */
+    private var screenVisible = true
+
+    /** The live turn is another client's (or an agent's own), observed on the stream rather
+     *  than started by a send here. */
+    private var observedTurn = false
+
+    /** The next stream snapshot answers [observeIfConnected]'s attach. */
+    private var pendingObserve = false
 
     /** The `clientMessageId` of the latest send. The server stamps it on that turn's
      *  `user_message`, which proves the turn started even when a reconnect snapshot skipped
@@ -308,8 +330,8 @@ class SessionDetailViewModel @Inject constructor(
         scope = viewModelScope,
         open = { profile?.let { repository.eventStream(it) }?.asFrameSource() },
         listener = object : SessionStream.Listener {
-            override fun onSnapshot(snapshot: LiveSessionSnapshot, cause: SessionStream.AttachCause) =
-                onStreamSnapshot(snapshot, cause)
+            override fun onSnapshot(snapshot: LiveSessionSnapshot, cause: SessionStream.AttachCause, missedEvents: Boolean) =
+                onStreamSnapshot(snapshot, cause, missedEvents)
 
             override fun onEvent(event: AcpEvent, seq: Long) = applyEvent(event, seq)
 
@@ -319,21 +341,25 @@ class SessionDetailViewModel @Inject constructor(
                 pendingReattachSeed = false
             }
 
-            // The stream only lives for a turn: once it is over, a drop is a normal close.
-            override fun shouldReconnect(): Boolean = _ui.value.isInFlight
+            // The stream follows the connection while the screen is up, between turns too:
+            // out-of-turn permission cards, another client's turns and late events all arrive
+            // on it. A hidden screen pauses it instead ([setScreenVisible]).
+            override fun shouldReconnect(): Boolean = screenVisible
 
             override fun onReconnecting(attempt: Int) {
                 _ui.update { if (it.isInFlight) it.copy(sendStatus = "Reconnecting…") else it }
             }
 
-            // Terminal: the ACP connection itself is gone, so no socket reopen recovers it.
+            // Terminal: the ACP connection itself is gone, so no socket reopen recovers it, and
+            // the next send must connect afresh.
             override fun onConnectionGone() {
+                connectionId = null
                 if (_ui.value.isInFlight) reconcileAfterTurn()
             }
 
             // Reconnecting kept failing: fall back to the transcript so the reply isn't lost.
             override fun onGaveUp() {
-                reconcileAfterTurn()
+                if (_ui.value.isInFlight) reconcileAfterTurn()
             }
         },
     )
@@ -382,7 +408,11 @@ class SessionDetailViewModel @Inject constructor(
                     }
                     // Reattach when the server reports the turn live — via an explicit
                     // in-flight user turn id or the conversation status (iOS parity).
-                    if (detail.inFlightUserTurnId != null || detail.summary.status.isLive) reattachIfLive()
+                    if (detail.inFlightUserTurnId != null || detail.summary.status.isLive) {
+                        reattachIfLive()
+                    } else {
+                        observeIfConnected()
+                    }
                 } else {
                     // New task: load the draft pickers' sources (top-level open folders +
                     // installed/enabled agents) and pick sensible defaults — honoring a
@@ -473,6 +503,9 @@ class SessionDetailViewModel @Inject constructor(
         // Not this send's turn yet: whatever the connection streams until the server starts
         // it (`prompting`) belongs to the turn before. See [ownTurnStarted].
         ownTurnStarted = false
+        observedTurn = false
+        ownPendingTurn = userTurn
+        verifyJob?.cancel()
         turnBaseline = _ui.value.globalTurnCount
         // Steering notes belong to the turn that was running when they were written; the
         // server drops them on this send's `user_message` and so do we. `isInFlight` above
@@ -652,6 +685,10 @@ class SessionDetailViewModel @Inject constructor(
      *  subscription (or [SessionStream]'s safety timeout: [StreamAttachFailed]).
      *  [seedOnAttach] rebuilds an in-flight turn from the attach snapshot (reattach). */
     private suspend fun openStream(conn: String, seedOnAttach: Boolean = false) {
+        // Already streaming this connection (kept attached since an earlier turn, or observing
+        // it since the screen opened): a send needs nothing more. A reattach still re-attaches,
+        // for the snapshot it seeds from.
+        if (!seedOnAttach && attachCursor == null && stream.isAttachedTo(conn)) return
         resetSelectorsForConnection(conn)
         pendingReattachSeed = seedOnAttach
         val since = when (val cursor = attachCursor) {
@@ -665,7 +702,7 @@ class SessionDetailViewModel @Inject constructor(
 
     /** A snapshot answering an attach ([SessionStream.AttachCause.ATTACH]) or a silent
      *  re-attach after a drop ([SessionStream.AttachCause.RECONNECT]). */
-    private fun onStreamSnapshot(snapshot: LiveSessionSnapshot, cause: SessionStream.AttachCause) {
+    private fun onStreamSnapshot(snapshot: LiveSessionSnapshot, cause: SessionStream.AttachCause, missedEvents: Boolean) {
         val isReconnect = cause == SessionStream.AttachCause.RECONNECT
         // Owed until a snapshot seeds it — so a socket that dropped mid-handshake has the
         // reconnect's snapshot seed the reattach instead of streaming blind.
@@ -687,17 +724,69 @@ class SessionDetailViewModel @Inject constructor(
         // current ones whichever branch we take next, and an idle connection is exactly when
         // an open sheet has no other source.
         adoptSnapshotSelectors(snapshot)
+        if (pendingObserve && cause == SessionStream.AttachCause.ATTACH) {
+            pendingObserve = false
+            // A turn that started between the transcript load and this attach is shown as it
+            // runs, like any other observed turn.
+            if (liveBuilder?.isStreaming != true && snapshotTurnRunning(snapshot)) {
+                beginObservedTurn()
+                seedLiveFromSnapshot(snapshot)
+            }
+            // Unlike a send's pre-prompt handshake, this snapshot IS the session's current
+            // state: a permission card waiting out of turn has to show.
+            restorePending(snapshot)
+            return
+        }
         if (seed && !seedLiveFromSnapshot(snapshot)) {
             // Idle connection — nothing in flight; abort the reattach. Deliberately does NOT
             // surface the snapshot's `last_error` here: an idle snapshot cannot say whether
             // that failure is the last turn's or the previous one's — see [applySnapshotError].
-            abortIdleReattach()
+            abortIdleReattach(attached = true)
             return
         }
         // Only adopt a snapshot's pending permission/question on a reattach or a mid-turn
         // reconnect — the initial send handshake snapshot is pre-prompt state and could
         // surface a stale card (iOS skips it there).
+        //
+        // A reconnect first settles the live turn against the snapshot: ending a turn clears
+        // the cards, and the snapshot's are restored after it.
+        if (isReconnect && !seed) recoverFromReconnectSnapshot(snapshot, missedEvents)
         if (seed || isReconnect) restorePending(snapshot)
+    }
+
+    /**
+     * A silent re-attach (a socket drop, or the screen coming back) was answered with a
+     * snapshot: the gap was too wide to replay, so the events in it are gone for good. The
+     * snapshot is the only account of what happened meanwhile.
+     */
+    private fun recoverFromReconnectSnapshot(snapshot: LiveSessionSnapshot, missedEvents: Boolean) {
+        val builder = liveBuilder?.takeIf { it.isStreaming }
+        val recovery = reconnectRecovery(
+            snapshot,
+            turnRunning = builder != null,
+            ownTurnStarted = ownTurnStarted,
+            missedEvents = missedEvents,
+        )
+        when (recovery) {
+            ReconnectRecovery.RESEED -> {
+                builder?.reseedFrom(snapshot)
+                emitLiveNow()
+            }
+            // The turn finished while nothing was listening, so its `turn_complete` is among
+            // the lost events. End it the way that event would have: the reconcile fetches
+            // the reply as persisted.
+            ReconnectRecovery.ENDED_UNSEEN -> finalizeTurn(STOP_REASON_UNSEEN)
+            ReconnectRecovery.VERIFY -> verifyUnseenTurn()
+            ReconnectRecovery.OBSERVE -> {
+                beginObservedTurn()
+                liveBuilder?.seedFrom(snapshot)
+                emitLiveNow()
+            }
+            // A whole turn may have come and gone in the gap (another client's, the agent's
+            // own) with nothing running here to finalize: the transcript is the only record.
+            ReconnectRecovery.REFRESH -> reconcileAfterMissedLive()
+            ReconnectRecovery.NONE -> Unit
+        }
     }
 
     fun cancel() {
@@ -709,7 +798,8 @@ class SessionDetailViewModel @Inject constructor(
         }
         sendJob?.cancel()
         reconcileJob?.cancel()
-        closeStream()
+        // The stream stays: the server answers the cancel with the turn's `turn_complete`,
+        // which reconciles it, and the connection lives on for the next turn.
         val conn = connectionId
         if (conn != null) viewModelScope.launch { runCatching { client?.cancel(conn) } }
         clearInteractivePrompts()
@@ -995,6 +1085,7 @@ class SessionDetailViewModel @Inject constructor(
             liveBuilder = builder
             // Reattaching to the running turn: what streams IS that turn.
             ownTurnStarted = true
+            observedTurn = true
             turnBaseline = _ui.value.globalTurnCount
             _ui.update { it.copy(isInFlight = true, sendStatus = "Reattaching…", live = builder.snapshot()) }
             try {
@@ -1005,9 +1096,112 @@ class SessionDetailViewModel @Inject constructor(
             } catch (e: StreamAttachFailed) {
                 // The live connection vanished before we could attach — the turn has ended;
                 // clear the placeholder and refetch the final transcript.
-                abortIdleReattach()
+                abortIdleReattach(attached = false)
             }
         }
+    }
+
+    /**
+     * This send's turn hasn't been seen to start, and a reconnect snapshot shows the
+     * connection idle. Either the prompt is still on its way or queued (the server buffers a
+     * prompt while the agent initializes, reporting `connected` meanwhile), or the whole turn
+     * ran and ended while the stream was paused. The snapshot can't tell these apart; the
+     * transcript can.
+     *
+     * Polls it a few times for this send's prompt past the turn's baseline ([sentPromptAt]),
+     * with the transcript's last round ended, and only then ends the turn, through the usual reconcile. Anything else leaves
+     * the turn alone: if it starts, its live events open it as usual, which also ends this
+     * poll.
+     */
+    private fun verifyUnseenTurn() {
+        val c = client ?: return
+        val id = conversationId ?: return
+        val builder = liveBuilder ?: return
+        val sent = ownPendingTurn ?: return
+        val baseline = turnBaseline
+        verifyJob?.cancel()
+        verifyJob = viewModelScope.launch {
+            repeat(VERIFY_UNSEEN_ATTEMPTS) { attempt ->
+                delay(if (attempt == 0) 300L else 1_000L)
+                if (liveBuilder !== builder || ownTurnStarted || !builder.isStreaming) return@launch
+                // Read from the baseline on: a tail could miss the prompt entirely behind one
+                // long round (the server's window alignment walks back only so far).
+                val fromBaseline = orNull { c.conversationDetail(id, TurnWindow.FromIndex(baseline)) } ?: return@repeat
+                if (!sentPromptAt(fromBaseline, baseline, sent)) return@repeat
+                // The window is capped, so it may stop short of the end; the round's end is
+                // then read off the tail.
+                val ended = if (reachesEnd(fromBaseline)) {
+                    endsRound(fromBaseline.turns)
+                } else {
+                    orNull { c.conversationDetail(id, TurnWindow.Tail(1)) }?.let { endsRound(it.turns) } == true
+                }
+                if (liveBuilder !== builder || ownTurnStarted || !builder.isStreaming) return@launch
+                if (ended) {
+                    finalizeTurn(STOP_REASON_UNSEEN)
+                    return@launch
+                }
+            }
+        }
+    }
+
+    /**
+     * Attach to the session's connection, if the server has one, without starting anything:
+     * no agent is spawned for a session that is merely being looked at. The stream then
+     * carries what happens on it while the screen is up — a permission card waiting out of
+     * turn, a turn another client starts.
+     */
+    private fun observeIfConnected() {
+        val c = client ?: return
+        val convId = conversationId ?: return
+        viewModelScope.launch {
+            val info = orNull { c.findConnection(convId, externalId, agent) } ?: return@launch
+            // A send got there first and owns the connection now.
+            if (connectionId != null || _ui.value.isInFlight) return@launch
+            connectionId = info.connectionId
+            attachCursor = 0
+            pendingObserve = true
+            try {
+                openStream(info.connectionId)
+            } catch (e: StreamAttachFailed) {
+                pendingObserve = false
+                // Superseded means a send took the stream over for this same connection.
+                if (e.reason != SessionStream.REASON_SUPERSEDED && connectionId == info.connectionId) {
+                    connectionId = null
+                }
+            }
+        }
+    }
+
+    /**
+     * Start showing a turn this client didn't send: another client's, or one the agent
+     * started itself. Mirrors what a send sets up, minus the optimistic prompt.
+     */
+    private fun beginObservedTurn() {
+        reconcileJob?.cancel()
+        // The previous turn ended but was never reconciled: fold it in before reusing the slot.
+        liveBuilder?.takeIf { !it.isStreaming && !it.isEmpty }?.let { promoteUnreconciled() }
+        val builder = LiveTurnBuilder()
+        liveBuilder = builder
+        ownTurnStarted = true
+        observedTurn = true
+        turnBaseline = _ui.value.globalTurnCount
+        clearNotes()
+        _ui.update {
+            it.copy(
+                live = builder.snapshot(),
+                liveFromReattach = false,
+                isInFlight = true,
+                sendStatus = STATUS_THINKING,
+            )
+        }
+    }
+
+    /** Show or hide the session screen: a hidden one keeps no socket open, and picks the
+     *  stream back up from its cursor when shown again. */
+    fun setScreenVisible(visible: Boolean) {
+        if (visible == screenVisible) return
+        screenVisible = visible
+        if (visible) stream.resume() else stream.pause()
     }
 
     private fun applyEvent(event: AcpEvent, @Suppress("UNUSED_PARAMETER") seq: Long) {
@@ -1015,7 +1209,16 @@ class SessionDetailViewModel @Inject constructor(
         // only optimistic, and what arrives is the previous turn's tail, so none of its content
         // is folded in.
         if (opensOwnTurn(event, ownClientMessageId)) ownTurnStarted = true
-        val builder = liveBuilder?.takeIf { ownTurnStarted }
+        // A turn starting with none running here is another client's, or the agent's own:
+        // show it as it runs instead of only after the fact.
+        if (liveBuilder?.isStreaming != true && event is AcpEvent.StatusChanged &&
+            event.status == ConnectionStatus.PROMPTING
+        ) {
+            beginObservedTurn()
+        }
+        // Only a running turn takes content: what arrives after it ended (late frames after a
+        // cancel, a turn not yet observed) must not grow a finished reply.
+        val builder = liveBuilder?.takeIf { ownTurnStarted && it.isStreaming }
         when (event) {
             // `append` drops a subagent-attributed chunk and reports false; only then is
             // there nothing to redraw. A null builder (no live turn) keeps the emit it
@@ -1115,6 +1318,16 @@ class SessionDetailViewModel @Inject constructor(
             is AcpEvent.UserMessage -> {
                 clearNotes()
                 _ui.update { it.copy(noteTurnOpen = true) }
+                // Another client's prompt: show it above the reply it starts. The transcript
+                // takes over when the turn is reconciled.
+                if (observedTurn && liveBuilder?.isStreaming == true && event.messageId != ownClientMessageId) {
+                    observedUserTurn(event)?.let { turn ->
+                        _ui.update { st ->
+                            if (st.pendingUserTurns.any { it.id == turn.id }) st
+                            else st.copy(pendingUserTurns = st.pendingUserTurns + turn)
+                        }
+                    }
+                }
             }
             is AcpEvent.SessionConfigOptions, AcpEvent.SelectorsReady,
             is AcpEvent.SessionModes, is AcpEvent.ModeChanged,
@@ -1247,7 +1460,7 @@ class SessionDetailViewModel @Inject constructor(
         //
         // The caller reads this as a connection change and abandons the attempt it is on; its
         // retry is what folds the replacement in.
-        if (found != cached && connectionId == cached && !_ui.value.isInFlight) connectionId = null
+        if (found != cached && connectionId == cached && !_ui.value.isInFlight) forgetConnection()
         return found to snapshot
     }
 
@@ -1436,12 +1649,7 @@ class SessionDetailViewModel @Inject constructor(
      *  the server has persisted. Mirrors the iOS `buildLiveTurn(from:)` nil check. */
     private fun seedLiveFromSnapshot(snap: app.codeg.android.core.model.LiveSessionSnapshot): Boolean {
         val builder = liveBuilder ?: return false
-        val inFlight = !snap.liveMessage?.content.isNullOrEmpty() ||
-            snap.activeToolCalls.isNotEmpty() ||
-            snap.pendingPermission != null || snap.pendingQuestion != null ||
-            snap.pendingPlanApproval != null ||
-            snap.status == app.codeg.android.core.model.ConnectionStatus.PROMPTING
-        if (!inFlight) return false
+        if (!snapshotShowsTurn(snap)) return false
         pendingReattachSeed = false
         if (builder.isEmpty) builder.seedFrom(snap)
         // Read BEFORE the reply is claimed below: `liveFromReattach` keys off `builder.isEmpty`,
@@ -1474,12 +1682,18 @@ class SessionDetailViewModel @Inject constructor(
     /** The reattach snapshot showed an idle connection — nothing is in flight. Clear the
      *  placeholder live turn, drop the connection, tear the stream down, and reconcile in
      *  case the turn just finished (leaving the loaded transcript a beat stale). */
-    private fun abortIdleReattach() {
+    /**
+     * The reattach found nothing running. [attached] says whether the stream did attach (an
+     * idle connection, kept for observing) or not (the connection vanished first).
+     */
+    private fun abortIdleReattach(attached: Boolean) {
         pendingReattachSeed = false
-        connectionId = null
         liveBuilder = null
         _ui.update { it.copy(isInFlight = false, sendStatus = null, live = null, liveFromReattach = false) }
-        closeStream()
+        if (!attached) {
+            connectionId = null
+            closeStream()
+        }
         reconcileAfterMissedLive()
     }
 
@@ -1682,7 +1896,9 @@ class SessionDetailViewModel @Inject constructor(
     }
 
     private fun finalizeTurn(stopReason: String) {
-        val builder = liveBuilder ?: return
+        // Once per turn: a cancel is answered by the server's own `turn_complete`, and the
+        // agent may send a second one afterwards.
+        val builder = liveBuilder?.takeIf { it.stopReason == null } ?: return
         builder.isStreaming = false
         builder.stopReason = stopReason
         emitLiveNow()
@@ -1700,7 +1916,6 @@ class SessionDetailViewModel @Inject constructor(
         if (parked != null && planFollowUp == null) {
             _ui.update { it.copy(notice = appContext.getString(R.string.plan_approval_notes_dropped)) }
         }
-        closeStream()
         reconcileAfterTurn()
         // The keep-planning turn just ended — deliver the revision notes as the follow-up
         // prompt Grok expects (it discards them on the reply itself). `send` supersedes
@@ -1713,13 +1928,16 @@ class SessionDetailViewModel @Inject constructor(
      *  It stays off `sendStatus` and every notice — those are one-line surfaces, and this is
      *  a multi-line stderr tail that belongs in the card's disclosure alone. */
     private fun failLive(message: String, details: String? = null) {
-        val builder = liveBuilder
-        if (builder != null) {
-            builder.error = LiveTurnError(message, details?.trim()?.ifEmpty { null })
-            builder.isStreaming = false
-            emitLiveNow()
+        // No turn running: an error between turns (the stream now stays attached for them)
+        // belongs to no reply. Say it once instead of stamping it on a finished one.
+        val builder = liveBuilder?.takeIf { it.isStreaming }
+        if (builder == null) {
+            _ui.update { it.copy(notice = message) }
+            return
         }
-        closeStream()
+        builder.error = LiveTurnError(message, details?.trim()?.ifEmpty { null })
+        builder.isStreaming = false
+        emitLiveNow()
         clearInteractivePrompts()
     }
 
@@ -1798,6 +2016,11 @@ class SessionDetailViewModel @Inject constructor(
                     // for whatever turn finalizes next.
                     val orphanedNotes = builder?.let { pendingPlanFollowUp?.notesFor(it.id) }
                     if (orphanedNotes != null) pendingPlanFollowUp = null
+                    // While the stream is attached it owns the cards: the turn's own were
+                    // cleared when it ended, and one shown since is a live, out-of-turn
+                    // request the server is still waiting on. Only with no stream left to
+                    // correct them are leftovers cleared here.
+                    val streamOwnsCards = stream.isActive
                     _ui.update {
                         it.copy(
                             turns = detail.turns,
@@ -1810,9 +2033,9 @@ class SessionDetailViewModel @Inject constructor(
                             liveFromReattach = false,
                             isInFlight = false,
                             sendStatus = null,
-                            pendingPermission = null,
-                            pendingQuestion = null,
-                            pendingPlanApproval = null,
+                            pendingPermission = if (streamOwnsCards) it.pendingPermission else null,
+                            pendingQuestion = if (streamOwnsCards) it.pendingQuestion else null,
+                            pendingPlanApproval = if (streamOwnsCards) it.pendingPlanApproval else null,
                             notice = if (orphanedNotes != null) {
                                 appContext.getString(R.string.plan_approval_notes_dropped)
                             } else {
@@ -1943,6 +2166,13 @@ class SessionDetailViewModel @Inject constructor(
 
     private fun closeStream() {
         stream.stop()
+    }
+
+    /** Forget [connectionId]. The stream goes with it: kept attached between turns now, it
+     *  would otherwise go on reporting a connection this session no longer uses. */
+    private fun forgetConnection() {
+        connectionId = null
+        closeStream()
     }
 
     override fun onCleared() {
@@ -2078,7 +2308,7 @@ class SessionDetailViewModel @Inject constructor(
     fun selectAgent(newAgent: AgentType) {
         if (!_ui.value.isDraftEditable || newAgent == agent) return
         agent = newAgent
-        connectionId = null
+        forgetConnection()
         // Drop any pushed selector state with the connection it described — an option id the
         // old agent reported very likely exists on the new one too, meaning something else
         // entirely.
@@ -2091,7 +2321,7 @@ class SessionDetailViewModel @Inject constructor(
         if (!_ui.value.isDraftEditable || newFolder.id == folder?.id) return
         folder = newFolder
         currentBranch = newFolder.gitBranch
-        connectionId = null
+        forgetConnection()
         _ui.update {
             it.copy(
                 folderName = FolderVisibility.displayName(newFolder, allFolders),
@@ -2583,7 +2813,7 @@ class SessionDetailViewModel @Inject constructor(
      *  this connection after the apply began from having its live turn's connection nulled (Stop /
      *  stream reconnect need it). Mirrors iOS re-validating the connection between applies. */
     private fun dropStaleOptionsConnection(conn: String) {
-        if (connectionId == conn && !_ui.value.isInFlight) connectionId = null
+        if (connectionId == conn && !_ui.value.isInFlight) forgetConnection()
     }
 
     /**
@@ -2807,6 +3037,116 @@ data class AgentOptionsData(
  * still sitting on [previous] — or no readable snapshot at all — means nothing was observed,
  * and the optimistic pick is the better guess (see the caller for why).
  */
+/**
+ * Whether [detail] holds a user turn matching the prompt [sent] at or past [baseline] (the
+ * full transcript's length when it was sent).
+ *
+ * Matched on content, as the web does while it waits for a batch to persist: parser turn ids
+ * aren't the client's. Text must contain what was sent (agents may wrap it); an image-only
+ * prompt needs as many images. Not an identity, but scoped past the baseline it would take
+ * the same prompt sent again by another client in the same gap to fool it.
+ */
+internal fun sentPromptAt(detail: ConversationDetail, baseline: Int, sent: MessageTurn): Boolean {
+    val offset = detail.window?.offset ?: 0
+    val sentText = sent.blocks.mapNotNull { (it as? ContentBlock.Text)?.text }.joinToString("\n").trim()
+    val sentImages = sent.blocks.count { it is ContentBlock.Image }
+    return detail.turns.withIndex().any { (i, turn) ->
+        if (offset + i < baseline || turn.role != TurnRole.USER) return@any false
+        val text = turn.blocks.mapNotNull { (it as? ContentBlock.Text)?.text }.joinToString("\n")
+        val images = turn.blocks.count { it is ContentBlock.Image }
+        if (sentText.isNotEmpty()) text.contains(sentText) else images >= sentImages && sentImages > 0
+    }
+}
+
+/** Whether [detail]'s turns run to the end of the transcript (a legacy full response does). */
+internal fun reachesEnd(detail: ConversationDetail): Boolean =
+    detail.window?.let { it.offset + detail.turns.size >= it.total } ?: true
+
+/** What a reconnect snapshot means for the live turn. See [reconnectRecovery]. */
+internal enum class ReconnectRecovery {
+    /** The turn still runs: rebuild it from the snapshot, which holds what the gap lost. */
+    RESEED,
+
+    /** The turn ended inside the gap: finalize it. */
+    ENDED_UNSEEN,
+
+    /** A send's turn not yet seen to start, on an idle connection: ask the transcript
+     *  whether it already ran ([sentPromptAt]). */
+    VERIFY,
+
+    /** A turn started inside the gap with none running here: observe it. */
+    OBSERVE,
+
+    /** Nothing runs either side, but events were missed: refresh the transcript. */
+    REFRESH,
+
+    /** Nothing to recover. */
+    NONE,
+}
+
+/**
+ * Classify a reconnect snapshot against the local turn.
+ *
+ * [ownTurnStarted] false means a send whose turn this client hasn't seen start. A running
+ * turn is then the one before it. An idle connection is ambiguous: the prompt may still be
+ * on its way or queued, or its whole turn may have passed in the gap; only the transcript
+ * can tell, so that case is VERIFY.
+ *
+ * [missedEvents] is the stream's report that the snapshot skipped events.
+ */
+internal fun reconnectRecovery(
+    snapshot: LiveSessionSnapshot,
+    turnRunning: Boolean,
+    ownTurnStarted: Boolean,
+    missedEvents: Boolean = false,
+): ReconnectRecovery {
+    val running = snapshotTurnRunning(snapshot)
+    return when {
+        turnRunning && !ownTurnStarted ->
+            if (running) ReconnectRecovery.NONE else ReconnectRecovery.VERIFY
+        turnRunning && running -> ReconnectRecovery.RESEED
+        turnRunning -> ReconnectRecovery.ENDED_UNSEEN
+        running -> ReconnectRecovery.OBSERVE
+        missedEvents -> ReconnectRecovery.REFRESH
+        else -> ReconnectRecovery.NONE
+    }
+}
+
+/**
+ * Whether the snapshot's connection is running a turn right now. Only `prompting` says so: a
+ * pending card or a leftover live message can outlast the turn (a permission the server
+ * publishes after `turn_complete` as the out-of-turn request it then is).
+ */
+internal fun snapshotTurnRunning(snap: LiveSessionSnapshot): Boolean =
+    snap.status == ConnectionStatus.PROMPTING
+
+/**
+ * Whether a snapshot shows anything of a turn: a live message, running tools, a pending card,
+ * or the connection prompting. Looser than [snapshotTurnRunning], for a reattach the server
+ * has already reported live. a live message, running tools, a pending card,
+ * or the connection prompting.
+ */
+internal fun snapshotShowsTurn(snap: LiveSessionSnapshot): Boolean =
+    snapshotTurnRunning(snap) ||
+        !snap.liveMessage?.content.isNullOrEmpty() ||
+        snap.activeToolCalls.isNotEmpty() ||
+        snap.pendingPermission != null || snap.pendingQuestion != null ||
+        snap.pendingPlanApproval != null
+
+/** Another client's prompt as a user turn, or null when it carries nothing renderable. */
+internal fun observedUserTurn(event: AcpEvent.UserMessage, now: Instant = Instant.now()): MessageTurn? {
+    val blocks = event.blocks.mapNotNull {
+        when (it) {
+            is app.codeg.android.core.model.UserMessageBlock.Text ->
+                it.text.takeIf(String::isNotBlank)?.let(ContentBlock::Text)
+            is app.codeg.android.core.model.UserMessageBlock.Image -> ContentBlock.Image(it.image)
+            app.codeg.android.core.model.UserMessageBlock.Unknown -> null
+        }
+    }
+    if (blocks.isEmpty()) return null
+    return MessageTurn(id = "observed-${event.messageId}", role = TurnRole.USER, blocks = blocks, timestamp = now)
+}
+
 /**
  * Whether [event] shows the send's own turn has started: `prompting`, or the turn's
  * `user_message` carrying the send's [ownClientMessageId]. The second case matters when a
