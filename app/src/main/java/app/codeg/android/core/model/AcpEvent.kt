@@ -206,6 +206,27 @@ sealed interface AcpEvent {
      */
     data object SelectorsReady : AcpEvent
 
+    /**
+     * A transient error the agent is retrying on its own, keeping the turn alive — NOT a turn
+     * failure. Two sources share it: `turn_retrying` (codex `_meta.codex.error` with
+     * `willRetry`, and pi's retry announcements, which carry no text — then [message] is
+     * empty), and Claude Code's `system/api_retry` SDK message (`claude_sdk_message`). The
+     * counters are null when the agent reports none (codex never does).
+     */
+    data class ApiRetry(
+        val message: String?,
+        val errorStatus: Long?,
+        val attempt: Long?,
+        val maxRetries: Long?,
+        val retryDelayMs: Long?,
+        /** Whether this source reports a cause at all: a Claude retry missing one is a gap in
+         *  that message (the line names a fallback); pi never says, and the line says nothing. */
+        val reportsError: Boolean,
+    ) : AcpEvent
+
+    /** A JetBrains AIR typed session-failure upsert (see [SessionFailureRecord]). */
+    data class SessionFailure(val record: SessionFailureRecord) : AcpEvent
+
     data class Unknown(val type: String) : AcpEvent
 
     companion object {
@@ -320,6 +341,36 @@ sealed interface AcpEvent {
                     json, obj["config_options"], SessionConfigOption.serializer(),
                 )?.let(::SessionConfigOptions) ?: Unknown(type)
                 "selectors_ready" -> SelectorsReady
+                "turn_retrying" -> {
+                    val message = obj.stringOrNull("message").orEmpty()
+                    ApiRetry(
+                        message = message.takeIf { it.isNotEmpty() },
+                        errorStatus = obj.longOrNull("error_status"),
+                        attempt = obj.longOrNull("attempt"),
+                        maxRetries = obj.longOrNull("max_retries"),
+                        retryDelayMs = obj.longOrNull("retry_delay_ms"),
+                        reportsError = message.isNotBlank(),
+                    )
+                }
+                // Only Claude's `api_retry` is read off the raw SDK stream; the rest of it is
+                // the transcript's business.
+                "claude_sdk_message" -> obj.objectOrNull("message")
+                    ?.takeIf { it.stringOrNull("type") == "system" && it.stringOrNull("subtype") == "api_retry" }
+                    ?.let { m ->
+                        ApiRetry(
+                            message = m.stringOrNull("error"),
+                            errorStatus = m.numberOrNull("error_status"),
+                            attempt = m.numberOrNull("attempt"),
+                            maxRetries = m.numberOrNull("max_retries"),
+                            retryDelayMs = m.numberOrNull("retry_delay_ms"),
+                            reportsError = true,
+                        )
+                    }
+                    ?: Unknown(type)
+                "session_failure" -> decodeOrNull(json, obj["record"], SessionFailureRecord.serializer())
+                    ?.takeIf { it.id.isNotEmpty() && it.revision >= 1 }
+                    ?.let(::SessionFailure)
+                    ?: Unknown(type)
                 "session_modes" -> decodeOrNull(json, obj["modes"], SessionModeState.serializer())
                     ?.let(::SessionModes)
                     ?: Unknown(type)
@@ -331,6 +382,13 @@ sealed interface AcpEvent {
                     ?: Unknown(type)
                 else -> Unknown(type)
             }
+        }
+
+        /** A finite number, also when sent as a numeric string (web `asFiniteNumber`). */
+        private fun JsonObject.numberOrNull(key: String): Long? {
+            val p = this[key] as? JsonPrimitive ?: return null
+            val d = p.content.trim().takeIf { it.isNotEmpty() }?.toDoubleOrNull() ?: return null
+            return if (d.isFinite()) d.toLong() else null
         }
 
         private fun JsonObject.intOrZero(key: String): Int =
@@ -473,6 +531,9 @@ data class LiveSessionSnapshot(
      * it (see `ToolApprovals.merge`).
      */
     val toolApprovals: List<ToolApprovalInfo> = emptyList(),
+    /** The AIR session-failure table, resolved entries and revision watermarks included —
+     *  seeded into the client's own by the same monotonic merge live events take. */
+    val sessionFailures: List<SessionFailureRecord> = emptyList(),
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -520,6 +581,9 @@ data class LiveSessionSnapshot(
                 toolApprovals = obj.arrayOrNull("tool_approvals")
                     ?.mapNotNull { AcpEvent.decodeOrNull(json, it, ToolApprovalInfo.serializer()) }
                     ?.filter { it.toolCallId.isNotEmpty() }
+                    ?: emptyList(),
+                sessionFailures = obj.arrayOrNull("session_failures")
+                    ?.mapNotNull { AcpEvent.decodeOrNull(json, it, SessionFailureRecord.serializer()) }
                     ?: emptyList(),
             )
 

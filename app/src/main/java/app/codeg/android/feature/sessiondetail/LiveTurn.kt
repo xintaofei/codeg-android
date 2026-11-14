@@ -70,7 +70,9 @@ internal const val STEER_TURN_PREFIX = "steer-"
  * unlabelled expander. Only errors codeg *inferred* (the `turn_failed_empty*` family) carry
  * evidence; every other failure leaves it null.
  */
-data class LiveTurnError(val message: String, val details: String? = null)
+/** [fromAgent]: the agent's own account of the failure (an AIR record's title), which a later
+ *  verdict of codeg's doesn't replace. */
+data class LiveTurnError(val message: String, val details: String? = null, val fromAgent: Boolean = false)
 
 /** Immutable snapshot of the streaming assistant reply, emitted to the UI. */
 data class LiveTurnState(

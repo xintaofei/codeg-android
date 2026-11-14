@@ -74,6 +74,11 @@ data class SessionDetailUiState(
      * `ToolApprovals.merge`; a reopened transcript's calls carry their own stamps besides.
      */
     val toolApprovals: Map<String, app.codeg.android.core.model.ToolApprovalInfo> = emptyMap(),
+    /** The agent is retrying a transient error on its own (`turn_retrying`, Claude's
+     *  `api_retry`). Cleared as soon as the turn makes progress again, and at its end. */
+    val apiRetry: app.codeg.android.core.model.AcpEvent.ApiRetry? = null,
+    /** The connection's AIR session-failure table, watermarks included ([SessionFailures]). */
+    val sessionFailures: List<app.codeg.android.core.model.SessionFailureRecord> = emptyList(),
     /** Steering notes sent during the turn running now, oldest first. Turn-scoped — a new
      *  turn empties this. */
     val feedbackNotes: List<FeedbackNote> = emptyList(),

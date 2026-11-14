@@ -419,6 +419,12 @@ fun SessionDetailScreen(
                 ) {
                     NoticeBanner(lastNotice, onDismiss = viewModel::dismissNotice)
                 }
+                ComposerStatusStrips(
+                    retry = ui.apiRetry,
+                    failures = ui.sessionFailures,
+                    running = ui.isInFlight,
+                    onDismissFailures = viewModel::dismissSessionFailures,
+                )
                 AnimatedVisibility(
                     visible = ui.sendStatus != null && ui.isInFlight,
                     enter = fadeIn(tween(160)),

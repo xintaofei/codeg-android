@@ -427,3 +427,46 @@ class AcpEventApprovalTest {
         assertEquals(listOf("t"), snap.toolApprovals.map { it.toolCallId })
     }
 }
+
+/** The retry line's two sources and the AIR failure upsert. */
+class AcpEventRetryTest {
+
+    private val json: Json = CodegJson.response
+
+    private fun event(raw: String): AcpEvent = AcpEvent.fromWire(json.parseToJsonElement(raw).jsonObject, json)
+
+    @Test
+    fun `codex reports a cause, pi only counters`() {
+        val codex = event("""{"type":"turn_retrying","message":"stream disconnected","error_status":503}""") as AcpEvent.ApiRetry
+        assertEquals("stream disconnected", codex.message)
+        assertEquals(503L, codex.errorStatus)
+        assertTrue(codex.reportsError)
+        assertNull(codex.attempt)
+        val pi = event("""{"type":"turn_retrying","message":"","attempt":2,"max_retries":5,"retry_delay_ms":4000}""") as AcpEvent.ApiRetry
+        assertNull(pi.message)
+        assertFalse(pi.reportsError)
+        assertEquals(2L, pi.attempt)
+        assertEquals(4000L, pi.retryDelayMs)
+    }
+
+    @Test
+    fun `claude's api_retry is read off the SDK stream, nothing else is`() {
+        val retry = event(
+            """{"type":"claude_sdk_message","session_id":"s","message":{"type":"system","subtype":"api_retry","attempt":"1","max_retries":10,"error":"overloaded","error_status":529,"retry_delay_ms":1200}}""",
+        ) as AcpEvent.ApiRetry
+        assertEquals(1L, retry.attempt)
+        assertEquals("overloaded", retry.message)
+        assertTrue(retry.reportsError)
+        assertTrue(event("""{"type":"claude_sdk_message","session_id":"s","message":{"type":"system","subtype":"init"}}""") is AcpEvent.Unknown)
+    }
+
+    @Test
+    fun `a failure record decodes, and one without an id or revision is dropped`() {
+        val failure = event(
+            """{"type":"session_failure","record":{"id":"f","revision":3,"category":"limit","severity":"error","title":"Rate limited","actions":["retry"],"resolved":false}}""",
+        ) as AcpEvent.SessionFailure
+        assertEquals(SessionFailureRecord("f", 3, "limit", "error", "Rate limited", null, listOf("retry")), failure.record)
+        assertTrue(event("""{"type":"session_failure","record":{"id":"f","revision":0}}""") is AcpEvent.Unknown)
+        assertTrue(event("""{"type":"session_failure","record":{"revision":1}}""") is AcpEvent.Unknown)
+    }
+}

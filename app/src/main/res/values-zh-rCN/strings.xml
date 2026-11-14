@@ -672,6 +672,22 @@
     <string name="approval_rejected">已拒绝</string>
     <string name="approval_via_chat_channel">来自聊天频道</string>
     <string name="approval_by_policy">由运行的权限策略决定</string>
+    <string name="retry_retrying_with_max">正在重试 %1$d/%2$d</string>
+    <string name="retry_retrying_attempt">正在重试（第 %1$d 次）</string>
+    <string name="retry_retrying">正在重试</string>
+    <string name="retry_next_in">%1$s 秒后重试</string>
+    <string name="retry_http_status">（HTTP %1$d）</string>
+    <string name="retry_line">%1$s · %2$s</string>
+    <string name="retry_with_delay">%1$s，%2$s</string>
+    <string name="failure_category_connection">连接异常</string>
+    <string name="failure_category_access">访问受限</string>
+    <string name="failure_category_limit">已达限制</string>
+    <string name="failure_category_request">请求被拒绝</string>
+    <string name="failure_category_service">服务异常</string>
+    <string name="failure_category_unknown">会话异常</string>
+    <string name="failure_recovered">已恢复</string>
+    <string name="failure_more_incidents">另 %1$d 条</string>
+    <string name="failure_notice_title">%1$s：%2$s</string>
     <string name="activity_expand">展开执行过程</string>
     <string name="activity_collapse">收起</string>
 

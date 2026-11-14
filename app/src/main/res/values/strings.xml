@@ -682,6 +682,23 @@
     <string name="approval_rejected">declined</string>
     <string name="approval_via_chat_channel">via a chat channel</string>
     <string name="approval_by_policy">by the run\'s permission policy</string>
+    <string name="retry_fallback_error" translatable="false">authentication_failed</string>
+    <string name="retry_retrying_with_max">retrying %1$d/%2$d</string>
+    <string name="retry_retrying_attempt">retrying attempt %1$d</string>
+    <string name="retry_retrying">retrying</string>
+    <string name="retry_next_in">next in %1$ss</string>
+    <string name="retry_http_status">" (HTTP %1$d)"</string>
+    <string name="retry_line">%1$s · %2$s</string>
+    <string name="retry_with_delay">%1$s, %2$s</string>
+    <string name="failure_category_connection">Connection issue</string>
+    <string name="failure_category_access">Access issue</string>
+    <string name="failure_category_limit">Limit reached</string>
+    <string name="failure_category_request">Request rejected</string>
+    <string name="failure_category_service">Service issue</string>
+    <string name="failure_category_unknown">Session issue</string>
+    <string name="failure_recovered">Recovered</string>
+    <string name="failure_more_incidents">+%1$d more</string>
+    <string name="failure_notice_title">%1$s: %2$s</string>
     <string name="activity_expand">Show the steps</string>
     <string name="activity_collapse">Collapse</string>
 

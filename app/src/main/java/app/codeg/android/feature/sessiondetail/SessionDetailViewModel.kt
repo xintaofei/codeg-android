@@ -978,6 +978,7 @@ class SessionDetailViewModel @Inject constructor(
         ) {
             beginObservedTurn()
         }
+        applyConnectionState(event)
         // Only a running turn takes content: what arrives after it ended (late frames after a
         // cancel, a turn not yet observed) must not grow a finished reply.
         val builder = liveBuilder?.takeIf { ownTurnStarted && it.isStreaming }
@@ -1113,6 +1114,79 @@ class SessionDetailViewModel @Inject constructor(
     }
 
     /**
+     * What an event does to the connection's state beyond the reply's content (web reducer):
+     * the retry line and the AIR failure table.
+     *
+     * - Progress — a token, a thought, a new call — proves a retry recovered: the line goes,
+     *   and so does every in-flight retry incident. A call update or a plan update clears the
+     *   line too.
+     * - A new prompt acknowledges every failure (a still-real one comes back with a higher
+     *   revision); a clean turn end settles the warnings left. Any other exit keeps them, since
+     *   the incident didn't recover.
+     */
+    private fun applyConnectionState(event: AcpEvent) {
+        when (event) {
+            is AcpEvent.ContentDelta, is AcpEvent.Thinking, is AcpEvent.ToolCall -> _ui.update {
+                val failures = SessionFailures.settle(it.sessionFailures, SessionFailures.SettleScope.RETRY_INCIDENTS)
+                if (it.apiRetry == null && failures === it.sessionFailures) it else it.copy(apiRetry = null, sessionFailures = failures)
+            }
+            is AcpEvent.ToolCallUpdate, is AcpEvent.PlanUpdate, is AcpEvent.Error -> _ui.update {
+                if (it.apiRetry == null) it else it.copy(apiRetry = null)
+            }
+            is AcpEvent.StatusChanged -> if (event.status == ConnectionStatus.PROMPTING) {
+                _ui.update {
+                    val failures = SessionFailures.settle(it.sessionFailures, SessionFailures.SettleScope.ALL)
+                    if (it.apiRetry == null && failures === it.sessionFailures) it else it.copy(apiRetry = null, sessionFailures = failures)
+                }
+            }
+            is AcpEvent.TurnComplete -> _ui.update {
+                val failures = if (event.stopReason == "end_turn") {
+                    SessionFailures.settle(it.sessionFailures, SessionFailures.SettleScope.WARNINGS)
+                } else {
+                    it.sessionFailures
+                }
+                if (it.apiRetry == null && failures === it.sessionFailures) it else it.copy(apiRetry = null, sessionFailures = failures)
+            }
+            is AcpEvent.ApiRetry -> _ui.update { it.copy(apiRetry = event) }
+            is AcpEvent.SessionFailure -> onSessionFailure(event.record)
+            else -> Unit
+        }
+    }
+
+    /**
+     * An AIR failure upsert. A retry incident is progress, drawn live above the composer; an
+     * advisory or a terminal failure is news, told once. A terminal one also closes the
+     * running reply with the agent's own account of it — the line its transcript keeps too.
+     */
+    private fun onSessionFailure(record: app.codeg.android.core.model.SessionFailureRecord) {
+        val stored = _ui.value.sessionFailures.firstOrNull { it.id == record.id }
+        _ui.update {
+            val merged = SessionFailures.merge(it.sessionFailures, listOf(record))
+            if (merged === it.sessionFailures) it else it.copy(sessionFailures = merged)
+        }
+        val kind = SessionFailures.notice(stored, record) ?: return
+        val own = record.title.trim()
+        val label = appContext.getString(failureCategoryLabel(record.category))
+        if (kind == SessionFailures.Notice.TERMINAL) {
+            val builder = liveBuilder?.takeIf { ownTurnStarted && it.isStreaming }
+            val current = builder?.error
+            // One account per turn: the agent's own words win over codeg's verdict.
+            if (builder != null && !(current?.fromAgent == true && own.isEmpty())) {
+                builder.error = LiveTurnError(own.ifEmpty { label }, record.details?.trim()?.ifEmpty { null }, fromAgent = own.isNotEmpty())
+                emitLiveNow()
+            }
+        }
+        val headline = own.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: label
+        _ui.update { it.copy(notice = appContext.getString(R.string.failure_notice_title, agent.displayName, headline)) }
+    }
+
+    /** The user closed a failure strip: every record it stood for (client-local). */
+    fun dismissSessionFailures(ids: List<String>) = _ui.update {
+        val dismissed = SessionFailures.dismiss(it.sessionFailures, ids)
+        if (dismissed === it.sessionFailures) it else it.copy(sessionFailures = dismissed)
+    }
+
+    /**
      * A blocked permission / question / plan-approval can't outlive its turn: clear any
      * pending card when the turn finalizes, fails, or is cancelled, and return the
      * composer to Send.
@@ -1132,6 +1206,8 @@ class SessionDetailViewModel @Inject constructor(
                 pendingPermission = null,
                 pendingQuestion = null,
                 pendingPlanApproval = null,
+                // Nothing can be retrying once the turn is over.
+                apiRetry = null,
                 // Nothing left to steer. The notes themselves stay until the next turn
                 // clears them; this only closes the channel.
                 noteTurnOpen = false,
@@ -1481,8 +1557,13 @@ class SessionDetailViewModel @Inject constructor(
      */
     private fun adoptSnapshotConnectionState(snapshot: LiveSessionSnapshot) {
         _ui.update {
-            val merged = ToolApprovals.merge(it.toolApprovals, snapshot.toolApprovals)
-            if (merged === it.toolApprovals) it else it.copy(toolApprovals = merged)
+            val approvals = ToolApprovals.merge(it.toolApprovals, snapshot.toolApprovals)
+            val failures = SessionFailures.merge(it.sessionFailures, snapshot.sessionFailures)
+            if (approvals === it.toolApprovals && failures === it.sessionFailures) {
+                it
+            } else {
+                it.copy(toolApprovals = approvals, sessionFailures = failures)
+            }
         }
     }
 
@@ -1560,7 +1641,8 @@ class SessionDetailViewModel @Inject constructor(
             _ui.update { it.copy(notice = message) }
             return
         }
-        builder.error = LiveTurnError(message, details?.trim()?.ifEmpty { null })
+        // The agent's own account of the failure (an AIR record) outranks codeg's verdict.
+        builder.error = builder.error?.takeIf { it.fromAgent } ?: LiveTurnError(message, details?.trim()?.ifEmpty { null })
         builder.isStreaming = false
         emitLiveNow()
         clearInteractivePrompts()
