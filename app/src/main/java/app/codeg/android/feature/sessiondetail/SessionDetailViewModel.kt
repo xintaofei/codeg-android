@@ -153,6 +153,21 @@ class SessionDetailViewModel @Inject constructor(
     private var connectionId: String? = null
     private var folder: FolderDetail? = null
     private var allFolders: List<FolderDetail> = emptyList()
+    /**
+     * Whether the server has started the turn [liveBuilder] stands for. A send creates the
+     * builder optimistically, before its prompt reaches the connection. When an agent is
+     * running a turn of its own at that moment (Grok's agent-initiated turns, codeg 0.4x),
+     * that turn's tail and its `turn_complete(cancelled)` arrive first and must not be
+     * taken as this send's. Set by `prompting`, by this send's own `user_message`, or by a
+     * reconnect snapshot showing the turn ([snapshotStartsOwnTurn]); a reattach owns the
+     * running turn from the start.
+     */
+    private var ownTurnStarted = true
+
+    /** The `clientMessageId` of the latest send. The server stamps it on that turn's
+     *  `user_message`, which proves the turn started even when a reconnect snapshot skipped
+     *  its `prompting` (see [opensOwnTurn]). */
+    private var ownClientMessageId: String? = null
     private var agent: AgentType = AgentType.CLAUDE_CODE
     private var externalId: String? = null
     private var lastSeq: Long = 0
@@ -427,6 +442,9 @@ class SessionDetailViewModel @Inject constructor(
         )
         val builder = LiveTurnBuilder()
         liveBuilder = builder
+        // Not this send's turn yet: whatever the connection streams until the server starts
+        // it (`prompting`) belongs to the turn before. See [ownTurnStarted].
+        ownTurnStarted = false
         turnBaseline = _ui.value.globalTurnCount
         // Steering notes belong to the turn that was running when they were written; the
         // server drops them on this send's `user_message` and so do we. `isInFlight` above
@@ -459,6 +477,8 @@ class SessionDetailViewModel @Inject constructor(
         val c = client ?: return
         // One id for both attempts so the server dedupes if the first prompt actually landed.
         val clientMessageId = UUID.randomUUID().toString()
+        // The server echoes it as this turn's `user_message` id, which proves the turn is ours.
+        ownClientMessageId = clientMessageId
         // The EXACT conversation this send created up front (a first send), so a rollback deletes
         // that row and not whatever conversationId happens to be by the time the failure lands.
         var createdId: Int? = null
@@ -636,6 +656,19 @@ class SessionDetailViewModel @Inject constructor(
                     is StreamFrame.Snapshot -> {
                         streamReconnects = 0
                         frame.snapshot.eventSeq?.let { lastSeq = it }
+                        // A reconnect that fell back to a snapshot may have skipped this send's
+                        // `prompting`, which is what opens [ownTurnStarted]. Without this, the
+                        // turn's content and its `turn_complete` would be ignored for good.
+                        val builder = liveBuilder
+                        if (builder != null && !ownTurnStarted && snapshotStartsOwnTurn(frame.snapshot, isReconnect = !awaitAttach)) {
+                            ownTurnStarted = true
+                            // The server cleared its live message when this turn started, so what
+                            // it holds now is this turn's, which the closed gate dropped.
+                            if (builder.isEmpty) {
+                                builder.seedFrom(frame.snapshot)
+                                scheduleLiveEmit()
+                            }
+                        }
                         // Before any early return below: the snapshot's selectors are this
                         // connection's current ones whichever branch we take next, and an idle
                         // connection is exactly when an open sheet has no other source.
@@ -984,6 +1017,8 @@ class SessionDetailViewModel @Inject constructor(
             // streaming; the snapshot's live message + active tools are seeded on arrival.
             val builder = LiveTurnBuilder()
             liveBuilder = builder
+            // Reattaching to the running turn: what streams IS that turn.
+            ownTurnStarted = true
             turnBaseline = _ui.value.globalTurnCount
             _ui.update { it.copy(isInFlight = true, sendStatus = "Reattaching…", live = builder.snapshot()) }
             try {
@@ -1001,7 +1036,11 @@ class SessionDetailViewModel @Inject constructor(
 
     private fun applyEvent(event: AcpEvent, seq: Long) {
         if (seq > 0) lastSeq = seq
-        val builder = liveBuilder
+        // The server starts this send's turn with `prompting`. Until then the live builder is
+        // only optimistic, and what arrives is the previous turn's tail, so none of its content
+        // is folded in.
+        if (opensOwnTurn(event, ownClientMessageId)) ownTurnStarted = true
+        val builder = liveBuilder?.takeIf { ownTurnStarted }
         when (event) {
             // `append` drops a subagent-attributed chunk and reports false; only then is
             // there nothing to redraw. A null builder (no live turn) keeps the emit it
@@ -1056,7 +1095,11 @@ class SessionDetailViewModel @Inject constructor(
                 // by then we're already past connecting (iOS shows it only from its idle state).
                 else -> Unit
             }
-            is AcpEvent.TurnComplete -> finalizeTurn(event.stopReason)
+            // A `turn_complete` before this send's turn started ends the turn before it: Grok's
+            // own agent-initiated turn, which the server closes as `cancelled` just ahead of
+            // starting a prompt queued behind it. Finalizing on it would end THIS turn as
+            // cancelled and close the stream before its reply arrives.
+            is AcpEvent.TurnComplete -> if (liveBuilder == null || ownTurnStarted) finalizeTurn(event.stopReason)
             is AcpEvent.Error -> failLive(event.message, event.details)
             is AcpEvent.PermissionRequest -> _ui.update {
                 it.copy(pendingPermission = PendingPermissionUi(event.requestId, ParsedPermission.parse(event.toolCall), event.options))
@@ -2846,6 +2889,33 @@ data class AgentOptionsData(
  * still sitting on [previous] — or no readable snapshot at all — means nothing was observed,
  * and the optimistic pick is the better guess (see the caller for why).
  */
+/**
+ * Whether [event] shows the send's own turn has started: `prompting`, or the turn's
+ * `user_message` carrying the send's [ownClientMessageId]. The second case matters when a
+ * reconnect snapshot lands between the two, since the server emits them separately. An
+ * agent-initiated turn (Grok's) has no `user_message`, and another prompt's carries a
+ * different id.
+ */
+internal fun opensOwnTurn(event: AcpEvent, ownClientMessageId: String?): Boolean = when (event) {
+    is AcpEvent.StatusChanged -> event.status == ConnectionStatus.PROMPTING
+    is AcpEvent.UserMessage -> ownClientMessageId != null && event.messageId == ownClientMessageId
+    else -> false
+}
+
+/**
+ * Whether a stream snapshot shows that the send waiting on its own turn ([ownTurnStarted]
+ * still false) has started: the connection is prompting on behalf of a user message. An
+ * agent-initiated turn (Grok's) prompts with no user message, so it never qualifies. The
+ * first attach of a send is excluded ([isReconnect] false): it precedes the prompt, so any
+ * turn it shows is someone else's.
+ */
+internal fun snapshotStartsOwnTurn(
+    snap: app.codeg.android.core.model.LiveSessionSnapshot,
+    isReconnect: Boolean,
+): Boolean = isReconnect &&
+    snap.status == app.codeg.android.core.model.ConnectionStatus.PROMPTING &&
+    snap.hasPendingUserMessage
+
 internal fun reconcileTimeout(lastSeen: String?, desired: String, previous: String?): String {
     val seen = lastSeen ?: return desired
     // No baseline (the option had no value on screen) means no way to tell a value the agent
