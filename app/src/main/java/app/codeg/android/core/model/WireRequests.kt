@@ -574,3 +574,36 @@ data class ForkBody(
     /** The transcript turn to fork at, "up to and including this reply"; absent = the tail. */
     val forkFromTurnId: String?,
 )
+
+@Serializable
+data class CreateConversationTagBody(
+    /** Null (omitted) = a global tag. */
+    val folderId: Int?,
+    val name: String,
+    val color: String,
+)
+
+@Serializable
+data class UpdateConversationTagBody(
+    val tagId: Int,
+    /** Null (omitted) = leave as is. */
+    val name: String?,
+    val color: String?,
+)
+
+@Serializable
+data class ConversationTagIdBody(val tagId: Int)
+
+@Serializable
+data class ReorderConversationTagsBody(val tagIds: List<Int>)
+
+@Serializable
+data class UpdateConversationTagsBody(
+    val conversationId: Int,
+    /** A delta; removals apply first, so an id in both ends up on. */
+    val add: List<Int>,
+    val remove: List<Int>,
+)
+
+@Serializable
+data class UpdateBranchTagBody(val enabled: Boolean, val color: String)

@@ -1,7 +1,10 @@
 package app.codeg.android.feature.sessions
 
 import app.codeg.android.core.model.ConversationSummary
+import app.codeg.android.core.model.ConversationTag
 import app.codeg.android.core.model.FolderDetail
+import app.codeg.android.feature.tags.ConversationTags
+import app.codeg.android.feature.tags.TagFilter
 
 /**
  * One rendered group in the Chats list, fully sorted and filtered.
@@ -40,6 +43,10 @@ data class SessionRowItem(
     /** Dim folder tag shown on cross-folder rows (Pinned/Other); `null` inside a
      * folder group, where the folder is already the header. */
     val folderName: String?,
+    /** Its tags this client knows, in display order (resolved off the main thread too). */
+    val tags: List<ConversationTag> = emptyList(),
+    /** Its branch, when the branch tag is on and it has one. */
+    val branchChip: String? = null,
 )
 
 /**
@@ -55,16 +62,34 @@ data class SessionRowItem(
 fun buildSessionSections(
     folders: List<FolderDetail>,
     conversations: List<ConversationSummary>,
+    tagsById: Map<Int, ConversationTag> = emptyMap(),
+    branchTagEnabled: Boolean = false,
+    /** Narrows every section; folders it leaves empty go too (web `matchesTagFilter`). */
+    filter: TagFilter = TagFilter.NONE,
 ): List<SessionSection> {
     val folderNames = SessionGrouping.folderNames(folders)
     val out = ArrayList<SessionSection>()
+    val shown = if (filter.isActive) conversations.filter(filter::matches) else conversations
+    fun row(c: ConversationSummary, folderName: String?) =
+        SessionRowItem(c, folderName, ConversationTags.resolve(c.tagIds, tagsById), ConversationTags.branchChip(c, branchTagEnabled))
+    buildSections(folders, shown, folderNames, out, ::row)
+    return if (filter.isActive) out.filter { it.count > 0 } else out
+}
+
+private fun buildSections(
+    folders: List<FolderDetail>,
+    conversations: List<ConversationSummary>,
+    folderNames: Map<Int, String>,
+    out: ArrayList<SessionSection>,
+    row: (ConversationSummary, String?) -> SessionRowItem,
+) {
 
     val pinned = SessionGrouping.pinned(conversations)
     if (pinned.isNotEmpty()) {
         out += SessionSection(
             id = "pinned",
             kind = SectionKind.Pinned,
-            rows = pinned.map { SessionRowItem(it, folderNames[it.folderId]) },
+            rows = pinned.map { row(it, folderNames[it.folderId]) },
         )
     }
 
@@ -72,7 +97,7 @@ fun buildSessionSections(
         out += SessionSection(
             id = "folder-${group.folder.id}",
             kind = SectionKind.Folder(group.folder.name, group.folder.color),
-            rows = group.conversations.map { SessionRowItem(it, folderName = null) },
+            rows = group.conversations.map { row(it, null) },
         )
     }
 
@@ -81,9 +106,7 @@ fun buildSessionSections(
         out += SessionSection(
             id = "other",
             kind = SectionKind.Other,
-            rows = other.map { SessionRowItem(it, folderNames[it.folderId]) },
+            rows = other.map { row(it, folderNames[it.folderId]) },
         )
     }
-
-    return out
 }

@@ -71,6 +71,7 @@ import app.codeg.android.feature.settings.SettingsScreen
 import app.codeg.android.feature.server.ServerListScreen
 import app.codeg.android.feature.sessiondetail.SessionDetailScreen
 import app.codeg.android.feature.sessions.SessionListScreen
+import app.codeg.android.feature.tags.TagsManagerScreen
 
 /**
  * Bottom-navigation destinations. Each carries an outlined icon (unselected) and
@@ -93,6 +94,7 @@ enum class HomeTab(
 private const val ROUTE_SERVERS = "servers"
 private const val ROUTE_EDITOR = "editor"
 private const val ROUTE_NEW_TASK = "conversation_new"
+private const val ROUTE_TAGS = "tags"
 
 /**
  * Whether the bottom bar — and, by extension, the New Task FAB — is currently
@@ -267,6 +269,7 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
                         onManageServers = { nav.navigate(ROUTE_SERVERS) },
                         onOpenConversation = { id -> nav.navigate("conversation/$id") },
                         onNewTask = { nav.navigate(ROUTE_NEW_TASK) },
+                        onManageTags = { nav.navigate(ROUTE_TAGS) },
                     )
                 }
             }
@@ -291,6 +294,7 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
                     onBack = { nav.popBackStack() },
                     onOpenSession = { folderId -> nav.navigate("$ROUTE_NEW_TASK?folderId=$folderId") },
                     onOpenConversation = { id -> nav.navigate("conversation/$id") },
+                    onManageTags = { nav.navigate(ROUTE_TAGS) },
                 )
             }
             composable(
@@ -306,6 +310,7 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
                     onBack = { nav.popBackStack() },
                     onOpenSession = { folderId -> nav.navigate("$ROUTE_NEW_TASK?folderId=$folderId") },
                     onOpenConversation = { id -> nav.navigate("conversation/$id") },
+                    onManageTags = { nav.navigate(ROUTE_TAGS) },
                 )
             }
 
@@ -314,6 +319,10 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
                 arguments = listOf(navArgument("folderId") { type = NavType.IntType }),
             ) {
                 ProjectDetailScreen(onBack = { nav.popBackStack() })
+            }
+
+            composable(ROUTE_TAGS) {
+                TagsManagerScreen(onBack = { nav.popBackStack() })
             }
 
             composable(ROUTE_SERVERS) {

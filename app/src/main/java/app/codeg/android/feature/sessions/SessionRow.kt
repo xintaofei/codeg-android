@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DriveFileMove
+import androidx.compose.material.icons.automirrored.rounded.Label
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.DropdownMenu
@@ -39,7 +40,10 @@ import app.codeg.android.core.designsystem.component.AgentAvatar
 import app.codeg.android.core.designsystem.component.LivePulse
 import app.codeg.android.core.designsystem.component.statusColor
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.core.model.BranchTagSetting
 import app.codeg.android.core.model.ConversationSummary
+import app.codeg.android.core.model.ConversationTag
+import app.codeg.android.feature.tags.RowTagChips
 import androidx.compose.ui.res.stringResource
 
 /**
@@ -61,8 +65,13 @@ fun SessionRow(
     selected: Boolean = false,
     onTogglePin: (() -> Unit)? = null,
     onMove: (() -> Unit)? = null,
+    onEditTags: (() -> Unit)? = null,
+    /** Its tags, in display order, and its branch when the branch tag is on. */
+    tags: List<ConversationTag> = emptyList(),
+    branchChip: String? = null,
+    branchColor: String = BranchTagSetting.DEFAULT_COLOR,
 ) {
-    val hasMenu = onTogglePin != null || onMove != null
+    val hasMenu = onTogglePin != null || onMove != null || onEditTags != null
     val colors = CodegTheme.colors
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -99,14 +108,22 @@ fun SessionRow(
                 )
             }
 
-            Text(
-                text = conversation.trimmedTitle ?: stringResource(R.string.session_untitled),
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.textPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+            // The chips follow the title, which gives way first when the row runs short.
+            Row(
+                Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = conversation.trimmedTitle ?: stringResource(R.string.session_untitled),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                RowTagChips(tags, branchChip, branchColor)
+            }
 
             if (folderName != null) {
                 Row(
@@ -157,6 +174,14 @@ fun SessionRow(
                     onClick = {
                         menuOpen = false
                         onTogglePin()
+                    },
+                )
+                if (onEditTags != null) DropdownMenuItem(
+                    text = { Text(stringResource(R.string.tags_menu)) },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Rounded.Label, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onEditTags()
                     },
                 )
                 if (onMove != null) DropdownMenuItem(

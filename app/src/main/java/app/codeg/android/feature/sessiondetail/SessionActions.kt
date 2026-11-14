@@ -46,6 +46,7 @@ import app.codeg.android.core.designsystem.component.statusLabel
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.ConversationStatus
 import app.codeg.android.feature.sessions.MoveConversationSheet
+import app.codeg.android.feature.tags.TagPickerSheet
 
 /**
  * The session detail toolbar's overflow menu: Rename / Pin / Session Details /
@@ -58,6 +59,7 @@ fun SessionActionsMenu(
     ui: SessionDetailUiState,
     viewModel: SessionDetailViewModel,
     onDeleted: () -> Unit,
+    onManageTags: (() -> Unit)? = null,
 ) {
     val colors = CodegTheme.colors
     val summary = ui.summary ?: return
@@ -67,6 +69,7 @@ fun SessionActionsMenu(
     var showDetails by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
     var showMove by remember { mutableStateOf(false) }
+    var showTags by remember { mutableStateOf(false) }
 
     Box {
         IconButton(onClick = { menu = true }) {
@@ -77,6 +80,10 @@ fun SessionActionsMenu(
             DropdownMenuItem(text = { Text(if (summary.isPinned) stringResource(R.string.sessionactions_unpin) else stringResource(R.string.sessionactions_pin)) }, onClick = { menu = false; viewModel.togglePin() })
             DropdownMenuItem(text = { Text(stringResource(R.string.sessionactions_session_details)) }, onClick = { menu = false; showDetails = true })
             DropdownMenuItem(text = { Text(stringResource(R.string.sessionactions_change_status)) }, onClick = { menu = false; showStatus = true })
+            // A sub-session has no tags of its own in the lists.
+            if (summary.parentId == null) {
+                DropdownMenuItem(text = { Text(stringResource(R.string.tags_menu)) }, onClick = { menu = false; showTags = true })
+            }
             // A sub-session moves with its parent; a running turn would only be skipped as busy.
             if (summary.isMovable) {
                 DropdownMenuItem(
@@ -135,6 +142,10 @@ fun SessionActionsMenu(
             confirmButton = {},
             dismissButton = { TextButton(onClick = { showStatus = false }) { Text(stringResource(R.string.common_cancel), color = colors.textSecondary) } },
         )
+    }
+
+    if (showTags) {
+        TagPickerSheet(conversation = summary, onManageTags = onManageTags, onDismiss = { showTags = false })
     }
 
     if (showMove) {

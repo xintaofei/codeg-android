@@ -134,6 +134,7 @@ fun SessionDetailScreen(
     onOpenSession: (Int) -> Unit = {},
     /** Open another conversation by id — a delegated child's session. */
     onOpenConversation: ((Int) -> Unit)? = null,
+    onManageTags: (() -> Unit)? = null,
     viewModel: SessionDetailViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
@@ -405,7 +406,7 @@ fun SessionDetailScreen(
                         ) {
                             AgentAvatar(ui.agent, size = 28.dp)
                         }
-                        if (ui.summary != null) SessionActionsMenu(ui, viewModel, onDeleted = onBack)
+                        if (ui.summary != null) SessionActionsMenu(ui, viewModel, onDeleted = onBack, onManageTags = onManageTags)
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = Color.Transparent,

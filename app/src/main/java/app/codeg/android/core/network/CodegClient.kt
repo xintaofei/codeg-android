@@ -5,6 +5,14 @@ import app.codeg.android.core.model.ConversationConnectionInfo
 import app.codeg.android.core.model.ConversationDetail
 import app.codeg.android.core.model.ConversationDetailBody
 import app.codeg.android.core.model.ConversationIdBody
+import app.codeg.android.core.model.BranchTagSetting
+import app.codeg.android.core.model.ConversationTag
+import app.codeg.android.core.model.ConversationTagIdBody
+import app.codeg.android.core.model.CreateConversationTagBody
+import app.codeg.android.core.model.ReorderConversationTagsBody
+import app.codeg.android.core.model.UpdateBranchTagBody
+import app.codeg.android.core.model.UpdateConversationTagBody
+import app.codeg.android.core.model.UpdateConversationTagsBody
 import app.codeg.android.core.model.ForkBody
 import app.codeg.android.core.model.ForkResult
 import app.codeg.android.core.model.MoveConversationsBody
@@ -380,6 +388,54 @@ class CodegClient(
         decodeCamel(
             send("move_conversations", encode(MoveConversationsBody(conversationIds, targetFolderId))),
             MoveConversationsResult.serializer(),
+        )
+
+    // Conversation tags (all camelCase in, snake_case out).
+
+    /** Every tag: global ones first, then by folder, each scope in its order. */
+    suspend fun listConversationTags(): List<ConversationTag> =
+        decode(send("list_conversation_tags", encode(EmptyBody)), ListSerializer(ConversationTag.serializer()))
+
+    /** A new tag at the end of its scope. Null [folderId] = global; a worktree's folder gives
+     *  its repo's scope. The server trims the name and caps it at 64 characters. */
+    suspend fun createConversationTag(folderId: Int?, name: String, color: String): ConversationTag =
+        decode(
+            send("create_conversation_tag", encode(CreateConversationTagBody(folderId, name, color))),
+            ConversationTag.serializer(),
+        )
+
+    /** Rename and/or recolour a tag; a null field is left alone. */
+    suspend fun updateConversationTag(tagId: Int, name: String?, color: String?): ConversationTag =
+        decode(
+            send("update_conversation_tag", encode(UpdateConversationTagBody(tagId, name, color))),
+            ConversationTag.serializer(),
+        )
+
+    /** Delete a tag, taking it off every conversation that has it. */
+    suspend fun deleteConversationTag(tagId: Int) {
+        send("delete_conversation_tag", encode(ConversationTagIdBody(tagId)))
+    }
+
+    /** One scope's complete order: each id takes its position in [tagIds]. */
+    suspend fun reorderConversationTags(tagIds: List<Int>) {
+        send("reorder_conversation_tags", encode(ReorderConversationTagsBody(tagIds)))
+    }
+
+    /** Put tags on or take them off a conversation; answers with its summary as it now stands. */
+    suspend fun updateConversationTags(conversationId: Int, add: List<Int>, remove: List<Int>): ConversationSummary =
+        decode(
+            send("update_conversation_tags", encode(UpdateConversationTagsBody(conversationId, add, remove))),
+            ConversationSummary.serializer(),
+        )
+
+    suspend fun conversationBranchTag(): BranchTagSetting =
+        decode(send("get_conversation_branch_tag", encode(EmptyBody)), BranchTagSetting.serializer())
+
+    /** Save the whole setting (both fields). */
+    suspend fun updateConversationBranchTag(enabled: Boolean, color: String): BranchTagSetting =
+        decode(
+            send("update_conversation_branch_tag", encode(UpdateBranchTagBody(enabled, color))),
+            BranchTagSetting.serializer(),
         )
 
     /** Permanently delete a conversation (server `delete_conversation`). */

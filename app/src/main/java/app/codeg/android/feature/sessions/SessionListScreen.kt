@@ -22,10 +22,13 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Inbox
 import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -70,6 +73,10 @@ import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.designsystem.theme.colorFromHex
 import app.codeg.android.core.model.ConversationSummary
 import app.codeg.android.feature.main.LocalBarsVisible
+import app.codeg.android.feature.tags.TagFilter
+import app.codeg.android.feature.tags.TagFilterBar
+import app.codeg.android.feature.tags.TagFilterSheet
+import app.codeg.android.feature.tags.TagPickerSheet
 
 /**
  * The Chats tab: the grouped session list for the selected server (Pinned /
@@ -89,6 +96,7 @@ fun SessionListScreen(
     onManageServers: () -> Unit,
     onOpenConversation: (Int) -> Unit,
     onNewTask: () -> Unit,
+    onManageTags: (() -> Unit)? = null,
     viewModel: SessionListViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
@@ -99,6 +107,12 @@ fun SessionListScreen(
     var collapsed by rememberSaveable { mutableStateOf(emptySet<String>()) }
     // The conversation whose "Move to" is open.
     var moving by remember { mutableStateOf<ConversationSummary?>(null) }
+    // The conversation whose tags are being edited, and whether the tag filter is open.
+    var tagging by remember { mutableStateOf<ConversationSummary?>(null) }
+    var filtering by remember { mutableStateOf(false) }
+    val filter = ui.activeFilter
+    // Off the raw list, not the sections (derived off the main thread, so a frame behind).
+    val filteredAway = remember(ui.conversations, filter) { filter.isActive && ui.conversations.none(filter::matches) }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(ui.notice) {
         val notice = ui.notice ?: return@LaunchedEffect
@@ -124,6 +138,18 @@ fun SessionListScreen(
                     )
                 },
                 actions = {
+                    // Only once there are tags to filter by (or a filter still on).
+                    if (ui.tags.isNotEmpty() || filter.isActive) {
+                        IconButton(onClick = { filtering = true }) {
+                            BadgedBox(badge = { if (filter.isActive) Badge(containerColor = colors.accent) { Text("${filter.tagIds.size}") } }) {
+                                Icon(
+                                    Icons.Rounded.FilterList,
+                                    contentDescription = stringResource(R.string.tags_filter_title),
+                                    tint = if (filter.isActive) colors.accent else colors.textSecondary,
+                                )
+                            }
+                        }
+                    }
                     IconButton(onClick = onManageServers) {
                         Icon(
                             Icons.Rounded.Dns,
@@ -171,6 +197,19 @@ fun SessionListScreen(
                     }
                 }
 
+                // Every conversation filtered away: say so, and offer the way back.
+                ui.hasLoaded && !ui.isEmpty && filteredAway -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        EmptyState(
+                            icon = Icons.Rounded.FilterList,
+                            title = stringResource(R.string.tags_filter_no_matches),
+                            message = "",
+                            actionLabel = stringResource(R.string.tags_filter_clear),
+                            onAction = { viewModel.setTagFilter(TagFilter.NONE) },
+                        )
+                    }
+                }
+
                 ui.hasLoaded && ui.isEmpty -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         EmptyState(
@@ -201,6 +240,11 @@ fun SessionListScreen(
                                 viewModel.loadMoveTargets()
                                 moving = conv
                             },
+                            onEditTags = { conv -> tagging = conv },
+                            branchColor = ui.branchTag.color,
+                            filterBar = if (filter.isActive) ({
+                                TagFilterBar(filter, ui.tags, viewModel::setTagFilter, Modifier.padding(horizontal = 4.dp))
+                            }) else null,
                             // A refresh that failed over a still-populated list: surface
                             // it inline above the rows rather than swallowing it.
                             refreshError = ui.error,
@@ -212,6 +256,21 @@ fun SessionListScreen(
             }
             SnackbarHost(snackbar, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
         }
+    }
+
+    tagging?.let { conv ->
+        TagPickerSheet(conversation = conv, onManageTags = onManageTags, onDismiss = { tagging = null })
+    }
+    if (filtering) {
+        TagFilterSheet(
+            tags = ui.tags,
+            conversations = ui.conversations,
+            folders = ui.folders,
+            filter = filter,
+            onChange = viewModel::setTagFilter,
+            onManageTags = onManageTags,
+            onDismiss = { filtering = false },
+        )
     }
 
     moving?.let { conv ->
@@ -234,6 +293,9 @@ private fun SessionList(
     onOpenConversation: (Int) -> Unit,
     onTogglePin: (ConversationSummary) -> Unit,
     onMove: (ConversationSummary) -> Unit,
+    onEditTags: (ConversationSummary) -> Unit,
+    branchColor: String,
+    filterBar: (@Composable () -> Unit)?,
     refreshError: String?,
     onRetry: () -> Unit,
     onDismissError: () -> Unit,
@@ -256,6 +318,10 @@ private fun SessionList(
                     modifier = Modifier.animateItem().padding(horizontal = 4.dp, vertical = 6.dp),
                 )
             }
+        }
+
+        if (filterBar != null) {
+            item(key = "tag-filter", contentType = "filter") { filterBar() }
         }
 
         sections.forEach { section ->
@@ -286,6 +352,10 @@ private fun SessionList(
                         folderName = row.folderName,
                         onTogglePin = { onTogglePin(row.conversation) },
                         onMove = if (row.conversation.isMovable) ({ onMove(row.conversation) }) else null,
+                        onEditTags = { onEditTags(row.conversation) },
+                        tags = row.tags,
+                        branchChip = row.branchChip,
+                        branchColor = branchColor,
                     )
                 }
             }

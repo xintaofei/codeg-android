@@ -6,7 +6,11 @@ import androidx.lifecycle.viewModelScope
 import app.codeg.android.R
 import app.codeg.android.core.data.ServerRepository
 import app.codeg.android.core.datastore.ServerProfile
+import app.codeg.android.core.datastore.TagFilterStore
+import app.codeg.android.core.model.BranchTagSetting
 import app.codeg.android.core.model.ConversationSummary
+import app.codeg.android.core.model.ConversationTag
+import app.codeg.android.feature.tags.TagFilter
 import app.codeg.android.core.model.FolderDetail
 import app.codeg.android.core.model.FolderVisibility
 import app.codeg.android.core.network.CodegClient
@@ -44,6 +48,7 @@ import javax.inject.Inject
 @HiltViewModel
 class SessionListViewModel @Inject constructor(
     private val repository: ServerRepository,
+    private val tagFilterStore: TagFilterStore,
     @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
@@ -60,9 +65,11 @@ class SessionListViewModel @Inject constructor(
      */
     val sections: StateFlow<List<SessionSection>> =
         _ui
-            .map { GroupingInput(it.folders, it.conversations) }
+            .map { GroupingInput(it.folders, it.conversations, it.tags, it.branchTag.enabled, it.activeFilter) }
             .distinctUntilChanged()
-            .map { buildSessionSections(it.folders, it.conversations) }
+            .map { input ->
+                buildSessionSections(input.folders, input.conversations, input.tags.associateBy { it.id }, input.branchTagEnabled, input.filter)
+            }
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -70,9 +77,13 @@ class SessionListViewModel @Inject constructor(
     private data class GroupingInput(
         val folders: List<FolderDetail>,
         val conversations: List<ConversationSummary>,
+        val tags: List<ConversationTag>,
+        val branchTagEnabled: Boolean,
+        val filter: TagFilter,
     )
 
     private var client: CodegClient? = null
+    private var profileId: String? = null
     private var loadedEndpoint: String? = null
     private var fetchGeneration = 0
 
@@ -89,6 +100,7 @@ class SessionListViewModel @Inject constructor(
     private suspend fun onProfile(profile: ServerProfile?) {
         if (profile == null) {
             client = null
+            profileId = null
             loadedEndpoint = null
             _ui.value = SessionListUiState()
             return
@@ -96,6 +108,11 @@ class SessionListViewModel @Inject constructor(
         val endpoint = "${profile.id}|${profile.baseUrl}"
         val changed = endpoint != loadedEndpoint
         loadedEndpoint = endpoint
+        if (profile.id != profileId) {
+            profileId = profile.id
+            val saved = runCatching { tagFilterStore.filter(profile.id) }.getOrDefault(TagFilter.NONE)
+            _ui.update { it.copy(tagFilter = saved) }
+        }
         val resolved = repository.client(profile)
         client = resolved
         if (resolved == null) {
@@ -116,7 +133,7 @@ class SessionListViewModel @Inject constructor(
         fetchGeneration += 1
         val token = fetchGeneration
         if (force) {
-            _ui.update { it.copy(folders = emptyList(), conversations = emptyList(), hasLoaded = false) }
+            _ui.update { it.copy(folders = emptyList(), conversations = emptyList(), tags = emptyList(), branchTag = BranchTagSetting(), hasLoaded = false) }
         }
         _ui.update {
             if (isInitial) it.copy(isLoading = true, error = null)
@@ -126,13 +143,18 @@ class SessionListViewModel @Inject constructor(
             val result = coroutineScope {
                 val folders = async { active.listFolders() }
                 val conversations = async { active.listConversations() }
-                folders.await() to conversations.await()
+                // Tags dress the rows; a server without them (or a failed read) only goes without.
+                val tags = async { runCatching { active.listConversationTags() }.getOrNull() }
+                val branch = async { runCatching { active.conversationBranchTag() }.getOrNull() }
+                Listing(folders.await(), conversations.await(), tags.await(), branch.await())
             }
             if (token != fetchGeneration) return
             _ui.update {
                 it.copy(
-                    folders = result.first,
-                    conversations = result.second,
+                    folders = result.folders,
+                    conversations = result.conversations,
+                    tags = result.tags ?: it.tags,
+                    branchTag = result.branchTag ?: it.branchTag,
                     hasLoaded = true,
                     isLoading = false,
                     isRefreshing = false,
@@ -174,6 +196,13 @@ class SessionListViewModel @Inject constructor(
 
     fun dismissNotice() = _ui.update { it.copy(notice = null) }
 
+    /** Change the tag filter; kept for this server. */
+    fun setTagFilter(filter: TagFilter) {
+        _ui.update { it.copy(tagFilter = filter) }
+        val id = profileId ?: return
+        viewModelScope.launch { runCatching { tagFilterStore.save(id, filter) } }
+    }
+
     /** Read the open folders afresh for a move: one closed since the list loaded is no target. */
     fun loadMoveTargets() {
         val active = client ?: return
@@ -211,6 +240,14 @@ class SessionListViewModel @Inject constructor(
     }
 }
 
+/** One fetch's results; the tag reads are null when they failed. */
+private data class Listing(
+    val folders: List<FolderDetail>,
+    val conversations: List<ConversationSummary>,
+    val tags: List<ConversationTag>?,
+    val branchTag: BranchTagSetting?,
+)
+
 /** Raw list state; the grouped display is derived by [SessionGrouping]. */
 data class SessionListUiState(
     val folders: List<FolderDetail> = emptyList(),
@@ -223,8 +260,21 @@ data class SessionListUiState(
     val notice: String? = null,
     /** The open folders a conversation may move to; null while they load. */
     val moveTargets: List<FolderDetail>? = null,
+    /** Every tag this server has, for the rows' chips and the filter. */
+    val tags: List<ConversationTag> = emptyList(),
+    val branchTag: BranchTagSetting = BranchTagSetting(),
+    /** As saved: it may still name tags since deleted — [activeFilter] is what applies. */
+    val tagFilter: TagFilter = TagFilter.NONE,
 ) {
     val isBusy: Boolean get() = isLoading || isRefreshing
+
+    /**
+     * The filter that applies: only tags that still exist, once the tags have loaded (until
+     * then a saved id can't be told from a deleted one). A dead id would otherwise turn "all"
+     * into "nothing matches" for no visible reason.
+     */
+    val activeFilter: TagFilter
+        get() = if (tags.isEmpty()) TagFilter.NONE else tagFilter.pruned(tags.mapTo(HashSet()) { it.id })
 
     /**
      * Empty ⟺ no conversations: every conversation lands in some section (Pinned, a
