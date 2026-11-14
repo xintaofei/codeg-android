@@ -79,6 +79,27 @@ private const val NO_ACTIVE_TURN_MARKER = "no active turn"
 private const val FEEDBACK_DISABLED_MARKER = "live feedback is disabled"
 
 /**
+ * The server refused a prompt because the conversation was moved to another folder
+ * (`AcpError::ConversationMoved`): the connection was started in the folder it left, and
+ * the turn would run in the old directory. Recoverable — re-point at [folderId] and connect
+ * fresh there.
+ *
+ * Matched on the message, as the web does (`conversation-moved.ts`): over HTTP it arrives as
+ * a 400 `invalid_input` like the other recoverable refusals, and only the Display string
+ * (`conversation moved to another folder (folder <id>)`) carries it — and the folder.
+ */
+data class ConversationMoved(val folderId: Int?)
+
+val ApiError.conversationMoved: ConversationMoved?
+    get() {
+        if (this !is ApiError.Server || !serverMessage.contains(CONVERSATION_MOVED_MARKER)) return null
+        return ConversationMoved(CONVERSATION_MOVED_FOLDER.find(serverMessage)?.groupValues?.get(1)?.toIntOrNull())
+    }
+
+private const val CONVERSATION_MOVED_MARKER = "conversation moved to another folder"
+private val CONVERSATION_MOVED_FOLDER = Regex("""conversation moved to another folder \(folder (\d+)\)""")
+
+/**
  * A **git remote** authentication failure (push/pull/fetch), signalling the
  * credential-retry flow to prompt for a token / username+password and retry.
  * Mirrors iOS `APIError.isAuthFailure`: the `authentication_failed` server code, or

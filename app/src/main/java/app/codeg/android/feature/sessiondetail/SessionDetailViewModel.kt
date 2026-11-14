@@ -45,6 +45,7 @@ import app.codeg.android.core.network.CodegClient
 import app.codeg.android.core.network.EventStream
 import app.codeg.android.core.network.StreamFrame
 import app.codeg.android.core.network.displayMessage
+import app.codeg.android.core.network.conversationMoved
 import app.codeg.android.core.network.isFeedbackDisabled
 import app.codeg.android.core.network.isNoActiveTurn
 import app.codeg.android.core.network.isStaleConnection
@@ -472,7 +473,15 @@ class SessionDetailViewModel @Inject constructor(
                 // A stale connection — a reused id the server has since dropped, or an attach
                 // the server rejected — can't carry the prompt. Drop it, connect fresh, retry
                 // ONCE. A second failure falls through to the outer catch (discard + notice).
+                val moved = (e as? ApiError)?.conversationMoved
                 if (e is StreamAttachFailed || (e is ApiError && e.isStaleConnection)) {
+                    closeStream()
+                    connectionId = null
+                    attemptSend(c, text, attachments, clientMessageId, freshConnection = true)
+                } else if (moved != null && repointFolder(c, moved.folderId)) {
+                    // The session was moved to another project after this connection was
+                    // started; the server refuses to run the turn in the old directory. Follow
+                    // it and connect fresh there — same single retry as a stale connection.
                     closeStream()
                     connectionId = null
                     attemptSend(c, text, attachments, clientMessageId, freshConnection = true)
@@ -486,6 +495,32 @@ class SessionDetailViewModel @Inject constructor(
         } catch (e: Exception) {
             discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = e.displayMessage())
         }
+    }
+
+    /**
+     * Point this session at the folder it was moved to ([movedTo], from the server's refusal;
+     * re-read from the conversation when the message didn't name one). Returns whether the
+     * folder actually changed — if not, a retry would only be refused again.
+     */
+    private suspend fun repointFolder(c: CodegClient, movedTo: Int?): Boolean {
+        val target = movedTo ?: conversationId?.let { id ->
+            orNull { c.conversationDetail(id, TurnWindow.Tail(1)).summary.folderId }
+        } ?: return false
+        if (target == folder?.id) return false
+        val folders = orNull { c.listFolders() } ?: allFolders
+        val next = folders.firstOrNull { it.id == target } ?: return false
+        allFolders = folders
+        folder = next
+        currentBranch = next.gitBranch
+        _ui.update {
+            it.copy(
+                folderName = FolderVisibility.displayName(next, folders),
+                folderPath = next.path,
+                selectedFolderId = next.id,
+                currentBranch = next.gitBranch,
+            )
+        }
+        return true
     }
 
     /** One send attempt: resolve (or force-fresh) a connection, attach, then prompt. */
