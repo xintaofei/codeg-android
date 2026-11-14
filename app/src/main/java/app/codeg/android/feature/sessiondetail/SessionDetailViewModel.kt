@@ -1006,6 +1006,32 @@ class SessionDetailViewModel @Inject constructor(
     private var appliedSeq: Long = 0
     /** The agent session that connection runs, to tell a fork's `session_started` from a replay. */
     private var connectionSessionId: String? = null
+    /** The latest session-level `error` text since the turn started ([AcpErrorRoute.Kind.SESSION]). */
+    private var lastSessionError: String? = null
+
+    /**
+     * An `error` event, routed by its code ([AcpErrorRoute]). It never ends the turn: that is
+     * `turn_complete`'s job, or `status_changed: error`'s when the process dies — ending it here
+     * would drop the rest of a reply that runs on past a dropped image or a failed mode switch.
+     */
+    private fun onAcpError(event: AcpEvent.Error) {
+        val decision = AcpErrorRoute.decide(event.code, event.message)
+        val text = decision.text.trim()
+        if (text.isEmpty()) return
+        if (decision.kind == AcpErrorRoute.Kind.SESSION) lastSessionError = text
+        val builder = liveBuilder?.takeIf { ownTurnStarted && it.isStreaming }
+        if (decision.failsTurn && builder != null) {
+            // One account per turn: the agent's own words win over codeg's verdict, whichever
+            // comes first; otherwise the later account replaces the earlier.
+            if (builder.error?.fromAgent != true || decision.fromAgent) {
+                builder.error = LiveTurnError(text, event.details?.trim()?.ifEmpty { null }, fromAgent = decision.fromAgent)
+                emitLiveNow()
+            }
+            return
+        }
+        if (decision.kind == AcpErrorRoute.Kind.TRANSCRIPT) return
+        _ui.update { it.copy(notice = text) }
+    }
 
     private fun applyEvent(event: AcpEvent, seq: Long) {
         if (seq > appliedSeq) appliedSeq = seq
@@ -1055,11 +1081,16 @@ class SessionDetailViewModel @Inject constructor(
             }
             is AcpEvent.ConversationLinked -> adoptLinkedConversation(event.conversationId)
             is AcpEvent.StatusChanged -> when (event.status) {
-                // A session that failed to load says why, not just that the connection died.
+                // A session that failed to load says why, not just that the connection died; so
+                // does the session's own last error, which the server sends just before.
                 ConnectionStatus.ERROR -> failLive(
-                    _ui.value.sessionLoadError?.message ?: appContext.getString(R.string.live_agent_connection_errored),
+                    _ui.value.sessionLoadError?.message ?: lastSessionError
+                        ?: appContext.getString(R.string.live_agent_connection_errored),
                 )
                 ConnectionStatus.PROMPTING -> {
+                    // A new turn: the last error belonged to the one before (the server clears
+                    // its own `last_error` here too).
+                    lastSessionError = null
                     // Self-heal the note channel. The read in `attemptSend` can beat a fresh
                     // agent's `initialize`, and would then have latched "no channel" for the
                     // whole turn. `prompting` is strictly after session setup, so the flags
@@ -1088,7 +1119,7 @@ class SessionDetailViewModel @Inject constructor(
             // starting a prompt queued behind it. Finalizing on it would end THIS turn as
             // cancelled and close the stream before its reply arrives.
             is AcpEvent.TurnComplete -> if (liveBuilder == null || ownTurnStarted) finalizeTurn(event.stopReason)
-            is AcpEvent.Error -> failLive(event.message, event.details)
+            is AcpEvent.Error -> onAcpError(event)
             is AcpEvent.PermissionRequest -> {
                 val pending = permissionUi(event.requestId, event.toolCall, event.options, event.queued)
                 _ui.update { it.copy(pendingPermission = pending) }
