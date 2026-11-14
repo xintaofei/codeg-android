@@ -167,6 +167,13 @@ data class MessageTurn(
     val model: String? = null,
     @Serializable(with = InstantSerializer::class)
     val completedAt: Instant? = null,
+    /**
+     * Client-only: the transcript's name (`turn-N`) for a turn this client folded in itself
+     * (`live-…`), once a metadata read could place it — what "Fork from here" names. Read a
+     * fork point as `sourceTurnId ?: id`.
+     */
+    @kotlinx.serialization.Transient
+    val sourceTurnId: String? = null,
 )
 
 /**

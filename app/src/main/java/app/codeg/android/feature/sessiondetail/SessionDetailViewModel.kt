@@ -285,7 +285,7 @@ class SessionDetailViewModel @Inject constructor(
             // next prompt; and a turn whose end went unseen is still being read back — a send
             // now would cancel that and keep only the part that streamed. Each re-arms the
             // flush when it clears.
-            !screenVisible || planAnswersInFlight > 0 || reconcileJob?.isActive == true
+            !screenVisible || planAnswersInFlight > 0 || reconcileJob?.isActive == true || connectionOps > 0
         },
         sendQueued = { next -> send(next.text, next.attachments, SendOrigin.QUEUE) },
     )
@@ -335,9 +335,9 @@ class SessionDetailViewModel @Inject constructor(
         load()
     }
 
-    fun load() {
+    fun load(): Job {
         _ui.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
+        return viewModelScope.launch {
             try {
                 val p = repository.selectedProfile.first() ?: throw IllegalStateException("No server selected")
                 profile = p
@@ -440,7 +440,8 @@ class SessionDetailViewModel @Inject constructor(
         val trimmed = text.trim()
         val state = _ui.value
         if (trimmed.isEmpty() && state.attachments.isEmpty()) return
-        if (state.isInFlight || state.queue.isNotEmpty()) {
+        // A move or fork re-points the connection; what is sent meanwhile waits for it.
+        if (state.isInFlight || state.queue.isNotEmpty() || connectionOps > 0) {
             queue.enqueue(QueuedPrompt(UUID.randomUUID().toString(), trimmed, state.attachments), front = false)
             _ui.update { it.copy(attachments = emptyList()) }
             return
@@ -2442,24 +2443,40 @@ class SessionDetailViewModel @Inject constructor(
         val id = conversationId ?: return
         if (_ui.value.isInFlight) return
         val label = FolderVisibility.displayName(target, allFolders.ifEmpty { _ui.value.moveTargets.orEmpty() })
+        // Sends wait until the folder is re-pointed: one going out meanwhile would connect in
+        // whichever folder it caught, and the teardown below would cut its stream.
+        connectionOps += 1
         viewModelScope.launch {
-            val result = try {
-                c.moveConversations(listOf(id), target.id)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _ui.update { it.copy(notice = appContext.getString(R.string.move_conversation_failed, e.displayMessage())) }
-                return@launch
+            try {
+                val result = try {
+                    c.moveConversations(listOf(id), target.id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _ui.update { it.copy(notice = appContext.getString(R.string.move_conversation_failed, e.displayMessage())) }
+                    return@launch
+                }
+                if (id in result.moved) {
+                    // Off the stream first, so the connection's teardown doesn't read as a failure.
+                    forgetConnection()
+                    repointFolder(c, target.id)
+                    _ui.update { it.copy(summary = it.summary?.copy(folderId = target.id)) }
+                    repository.notifyConversationsChanged()
+                }
+                _ui.update { it.copy(notice = moveOutcomeText(appContext, result, label)) }
+            } finally {
+                releaseConnectionOp()
             }
-            if (id in result.moved) {
-                // Off the stream first, so the connection's teardown doesn't read as a failure.
-                forgetConnection()
-                repointFolder(c, target.id)
-                _ui.update { it.copy(summary = it.summary?.copy(folderId = target.id)) }
-                repository.notifyConversationsChanged()
-            }
-            _ui.update { it.copy(notice = moveOutcomeText(appContext, result, label)) }
         }
+    }
+
+    /** Moves and forks in flight: each re-points this conversation's connection or session,
+     *  so sends (and the queue) wait for them. */
+    private var connectionOps = 0
+
+    private fun releaseConnectionOp() {
+        connectionOps = (connectionOps - 1).coerceAtLeast(0)
+        if (connectionOps == 0) queue.schedule()
     }
 
     /** A fork in flight: one at a time, since each re-points this conversation. */
@@ -2481,6 +2498,9 @@ class SessionDetailViewModel @Inject constructor(
         }
         if (forking) return
         forking = true
+        // Sends wait for the fork AND the read after it: the reload replaces what this screen
+        // holds, so a turn sent in between would be wiped from view.
+        connectionOps += 1
         val title = _ui.value.summary?.trimmedTitle?.removePrefix(FORK_TITLE_PREFIX)?.takeIf { it.isNotBlank() }
         viewModelScope.launch {
             try {
@@ -2497,7 +2517,7 @@ class SessionDetailViewModel @Inject constructor(
                     )
                 }
                 repository.notifyConversationsChanged()
-                load()
+                load().join()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiError.TurnInProgress) {
@@ -2506,6 +2526,7 @@ class SessionDetailViewModel @Inject constructor(
                 _ui.update { it.copy(notice = appContext.getString(R.string.fork_failed, e.displayMessage())) }
             } finally {
                 forking = false
+                releaseConnectionOp()
             }
         }
     }

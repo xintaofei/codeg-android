@@ -622,4 +622,17 @@ class TranscriptTimelineTest {
         val f = footers(TranscriptTimeline.persistedEntries(turns, emptyList(), agent, inFlightUserTurnId = "u2"))
         assertEquals(listOf("turn-1", null), f.map { it.forkTurnId })
     }
+
+    @Test
+    fun `a reply folded in here forks at the transcript's name once it has one`() {
+        val turns = listOf(user("u1", "q"))
+        val local = listOf(
+            assistant("live-a", listOf(ContentBlock.Text("a"))).copy(sourceTurnId = "turn-1"),
+            user("p2", "q2"),
+            assistant("live-b", listOf(ContentBlock.Text("b"))),
+        )
+        val f = footers(TranscriptTimeline.persistedEntries(turns, emptyList(), agent, localTurns = local))
+        assertEquals(listOf("turn-1", "live-b"), f.map { it.forkTurnId })
+        assertEquals(listOf(true, true), f.map { it.forkPointNamed })
+    }
 }

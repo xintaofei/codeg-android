@@ -378,7 +378,7 @@ object TranscriptTimeline {
                     val completed = !(inFlightStart >= 0 && i > inFlightStart && i < server.size)
                     // A round's closing records and empty placeholders don't make it not last.
                     val atTail = pending.isEmpty() && source.subList(end, source.size).none { it.role == TurnRole.USER || it.role == TurnRole.ASSISTANT }
-                    val fork = group.last().id.takeIf { completed }
+                    val fork = group.last().let { it.sourceTurnId ?: it.id }.takeIf { completed }
                     entries.add(ThreadEntry.Reply(persistedReply(merged, lastUserId, agent, runningToolIds, completed, fork, atTail)))
                     i = end
                 }

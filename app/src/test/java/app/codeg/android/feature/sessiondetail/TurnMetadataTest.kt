@@ -113,4 +113,27 @@ class TurnMetadataTest {
         // A steer isn't a prompt of the batch: the server may not persist it as one.
         assertEquals(1, promptCount(listOf(user("p1")) + turns))
     }
+
+    @Test
+    fun `turns take the transcript's names only where every round lines up`() {
+        val local = listOf(user("p1"), local("live-1"), user("p2"), local("live-2"))
+        val read = listOf(user("u1"), parsed("turn-1", 1, 1), user("u2"), parsed("turn-3", 1, 1))
+        val named = applyMetadataPatches(local, turnMetadataPatches(local, read))
+        assertEquals(listOf(null, "turn-1", null, "turn-3"), named.map { it.sourceTurnId })
+        // A first write wins: a later read doesn't rename.
+        val again = applyMetadataPatches(named, turnMetadataPatches(named, read.map { if (it.id == "turn-3") it.copy(id = "turn-9") else it }))
+        assertEquals("turn-3", again[3].sourceTurnId)
+    }
+
+    @Test
+    fun `a split round or a turn this client never streamed leaves every turn unnamed`() {
+        val local = listOf(user("p1"), local("live-1"), user("p2"), local("live-2"))
+        // The parser split the first reply in two: the totals no longer line up.
+        val split = listOf(user("u1"), parsed("turn-1", 1, 1), parsed("turn-2", 1, 1), user("u2"), parsed("turn-4", 1, 1))
+        assertTrue(applyMetadataPatches(local, turnMetadataPatches(local, split)).all { it.sourceTurnId == null })
+        // Split one way and short the other: the totals match, but round by round they don't.
+        val three = local + listOf(user("p3"), local("live-3"))
+        val cancel = listOf(user("u1"), parsed("turn-1", 1, 1), parsed("turn-2", 1, 1), user("u2"), user("u3"), parsed("turn-5", 1, 1))
+        assertTrue(applyMetadataPatches(three, turnMetadataPatches(three, cancel)).all { it.sourceTurnId == null })
+    }
 }

@@ -69,6 +69,8 @@ internal data class TurnMetadataPatch(
     val durationMs: Int?,
     val model: String?,
     val completedAt: Instant?,
+    /** The parser's name for the turn, only where its position is proven (see [turnMetadataPatches]). */
+    val sourceTurnId: String? = null,
 )
 
 /**
@@ -148,6 +150,20 @@ internal fun turnMetadataPatches(local: List<MessageTurn>, parsed: List<MessageT
             out[localRound[i]] = TurnMetadataPatch(usage, duration, model, matched.completedAt)
         }
     }
+    // The parser's name for each turn (web `computeTurnMetadataPatches`). Naming is a POSITION
+    // claim, which counts alone can't make: a sub-turn split and a reply not flushed yet can
+    // cancel out, and a surplus may be a turn this client never streamed. Only a parse holding
+    // exactly as many assistant turns as were streamed, in EVERY round, places each one — short
+    // of that a turn stays unnamed, and forking from it waits (a fork one reply off is worse).
+    val localAssistant = local.indices.filter { local[it].role == TurnRole.ASSISTANT }
+    val parsedAssistant = parsed.filter { it.role == TurnRole.ASSISTANT }
+    val linesUp = localRounds.indices.all { r -> parsedRounds.getOrNull(r)?.size == localRounds[r].size }
+    if (linesUp && parsedAssistant.size == localAssistant.size) {
+        localAssistant.forEachIndexed { i, index ->
+            val named = parsedAssistant[i].id
+            out[index] = (out[index] ?: TurnMetadataPatch(null, null, null, null)).copy(sourceTurnId = named)
+        }
+    }
     return out
 }
 
@@ -161,6 +177,7 @@ internal fun applyMetadataPatches(local: List<MessageTurn>, patches: Map<Int, Tu
             durationMs = turn.durationMs ?: p.durationMs,
             model = turn.model ?: p.model,
             completedAt = turn.completedAt ?: p.completedAt,
+            sourceTurnId = turn.sourceTurnId ?: p.sourceTurnId,
         )
     }
 }
