@@ -234,6 +234,11 @@ data class ReplyRows(
     val failureRowId: String?,
     /** Process rows that stay in view folded: a sub-agent still running outlives its turn. */
     val pinned: Set<String> = emptySet(),
+    /** The reply's parts, ungrouped — what its summary counts, kept so a reply joined onto
+     *  this one ([TranscriptTimeline.joinLive]) is counted as one. */
+    val calls: List<RenderPart> = emptyList(),
+    /** Each call's row: its own, or the group it is folded into. */
+    val callRows: Map<String, String> = emptyMap(),
 ) {
     /**
      * Whether folding has anything to trade away. Folding keeps the answer, so a settled
@@ -276,7 +281,7 @@ object TranscriptTimeline {
     ): List<TimelineNode> = terminate(
         flatten(
             dedupeCompactions(
-                persistedEntries(turns, pending, agent, hideTrailingAssistantReply, inFlightUserTurnId, localTurns) + liveEntries(live, agent),
+                joinLive(persistedEntries(turns, pending, agent, hideTrailingAssistantReply, inFlightUserTurnId, localTurns), liveEntries(live, agent)),
             ),
         ) { true },
     )
@@ -548,6 +553,18 @@ object TranscriptTimeline {
         val split = answerStart(parts)
         val summary = summarizeActivity(calls)
         val process = rows.take(split).flatten()
+        val callRows = buildMap {
+            parts.forEachIndexed { idx, part ->
+                when (part) {
+                    is RenderPart.Tool -> put(part.vm.id, toolRowId(part.vm))
+                    is RenderPart.ToolGroup -> {
+                        val row = groupRowId(part, "$id#$idx")
+                        part.items.forEach { put(it.id, row) }
+                    }
+                    else -> Unit
+                }
+            }
+        }
         return ReplyRows(
             id = id,
             agent = agent,
@@ -557,24 +574,57 @@ object TranscriptTimeline {
             summary = summary,
             completed = completed,
             durationMs = durationMs,
-            failureRowId = summary.firstUnrecoveredId?.let { failed -> rowOfCall(parts, id, failed) },
+            failureRowId = summary.firstUnrecoveredId?.let(callRows::get),
             pinned = process.filter { node ->
                 val vm = (node.content as? NodeContent.Tool)?.vm
                 vm != null && vm.bucket == ToolKindBucket.TASK && vm.state == ToolCallState.RUNNING
             }.mapTo(mutableSetOf()) { it.id },
+            calls = calls,
+            callRows = callRows,
         )
     }
 
-    /** The id of the row drawing call [callId]: its own, or the group it is folded into. */
-    private fun rowOfCall(parts: List<RenderPart>, ownerId: String, callId: String): String? {
-        parts.forEachIndexed { idx, part ->
-            when (part) {
-                is RenderPart.Tool -> if (part.vm.id == callId) return toolRowId(part.vm)
-                is RenderPart.ToolGroup -> if (part.items.any { it.id == callId }) return groupRowId(part, "$ownerId#$idx")
-                else -> Unit
-            }
+    /**
+     * [persisted] then [live], with a live reply that follows a persisted one — no prompt
+     * between: a turn the agent began on its own — joined onto it, as the transcript holds the
+     * two once the turn is handed off (web `mergeConsecutiveAssistantTurns`, live included).
+     */
+    fun joinLive(persisted: List<ThreadEntry>, live: List<ThreadEntry>): List<ThreadEntry> {
+        val prev = (persisted.lastOrNull() as? ThreadEntry.Reply)?.rows
+        val next = (live.firstOrNull() as? ThreadEntry.Reply)?.rows
+        if (prev == null || next == null) return persisted + live
+        return persisted.dropLast(1) + ThreadEntry.Reply(joinReplies(prev, next)) + live.drop(1)
+    }
+
+    /**
+     * Two replies as one: its parts in order, so its answer is the trailing run of answer parts
+     * — [next]'s alone once it took a step, [prev]'s and [next]'s together while [next] has only
+     * spoken. Under [prev]'s id, which its persisted merge keeps after the hand-off; [prev]'s
+     * footer gives way to what closes [next].
+     */
+    private fun joinReplies(prev: ReplyRows, next: ReplyRows): ReplyRows {
+        val calls = prev.calls + next.calls
+        val summary = summarizeActivity(calls)
+        val callRows = prev.callRows + next.callRows
+        val (process, answer) = if (next.process.isEmpty()) {
+            prev.process to prev.answer + next.answer
+        } else {
+            prev.process + prev.answer + next.process to next.answer
         }
-        return null
+        return ReplyRows(
+            id = prev.id,
+            agent = next.agent,
+            process = process,
+            answer = answer,
+            trailer = next.trailer,
+            summary = summary,
+            completed = next.completed,
+            durationMs = next.durationMs,
+            failureRowId = summary.firstUnrecoveredId?.let(callRows::get),
+            pinned = prev.pinned + next.pinned,
+            calls = calls,
+            callRows = callRows,
+        )
     }
 
     /**

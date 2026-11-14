@@ -189,7 +189,7 @@ fun SessionDetailScreen(
         )
     }
     val entries = remember(persistedEntries, ui.live, ui.agent) {
-        TranscriptTimeline.dedupeCompactions(persistedEntries + TranscriptTimeline.liveEntries(ui.live, ui.agent))
+        TranscriptTimeline.dedupeCompactions(TranscriptTimeline.joinLive(persistedEntries, TranscriptTimeline.liveEntries(ui.live, ui.agent)))
     }
     // Which replies show their steps (ReplyFold.kt): observed here, stored after the frame
     // that draws it, so a send and the fold it causes land together.

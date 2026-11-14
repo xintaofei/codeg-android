@@ -555,5 +555,32 @@ class TranscriptTimelineTest {
         assertEquals(listOf("Hello world, done."), segments.filterIsInstance<LiveSegment.Text>().map { it.text })
         assertTrue(segments.last() is LiveSegment.Plan)
     }
-}
 
+    @Test
+    fun `a reply the agent began on its own joins the one before it`() {
+        val turns = listOf(user("u1", "q"), worked("a1"))
+        // It speaks first: the earlier answer and the new words are one answer.
+        val talking = LiveTurnBuilder("live-1").apply { appendText("and one more thing") }.snapshot()
+        val spoken = TranscriptTimeline.joinLive(TranscriptTimeline.persistedEntries(turns, emptyList(), agent), TranscriptTimeline.liveEntries(talking, agent))
+        val reply = (spoken.last() as ThreadEntry.Reply).rows
+        assertEquals(2, spoken.size)
+        assertEquals("a1", reply.id)
+        assertEquals(listOf("a1#2", "live-1#0"), reply.answer.map { it.id })
+        assertFalse("still being written", reply.completed)
+        assertTrue("the earlier footer gives way", reply.trailer.none { it.id == "a1#footer" })
+        // It takes a step: everything before it is process, and both replies' steps count.
+        val working = LiveTurnBuilder("live-1").apply {
+            appendText("checking")
+            upsertToolCall("t9", "Bash", "execute", "in_progress", """{"command":"ls"}""", null, null)
+        }.snapshot()
+        val stepped = (TranscriptTimeline.joinLive(TranscriptTimeline.persistedEntries(turns, emptyList(), agent), TranscriptTimeline.liveEntries(working, agent)).last() as ThreadEntry.Reply).rows
+        assertTrue(stepped.process.any { it.id == "a1#2" })
+        assertEquals(3, stepped.summary.steps)
+        // A prompt between keeps them apart.
+        val prompted = TranscriptTimeline.joinLive(
+            TranscriptTimeline.persistedEntries(turns, listOf(user("u2", "more")), agent),
+            TranscriptTimeline.liveEntries(talking, agent),
+        )
+        assertEquals(4, prompted.size)
+    }
+}
