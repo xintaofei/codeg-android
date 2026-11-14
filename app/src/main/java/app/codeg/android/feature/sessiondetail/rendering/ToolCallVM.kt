@@ -57,6 +57,9 @@ data class ToolCallVM(
             content: String?,
             isError: Boolean,
             meta: JsonObject? = null,
+            /** A live call's identity where the wire states one its title doesn't
+             *  ([LiveToolName]); null on the persisted path, whose name is the tool's own. */
+            liveName: String? = null,
         ): ToolCallVM {
             // Grok's plan-mode tools carry their authoritative identity in
             // `meta["x.ai/tool"].kind`, while the `title` we're handed as [rawName]
@@ -88,7 +91,15 @@ data class ToolCallVM(
             // sends as "read" for a directory listing — kind-first bucketing would
             // file it as a file read and route the envelope through the Read-file
             // body. Every other call keeps the hint's precedence.
-            val bucket = ToolDerive.bucket(resolvedName, if (action != null) "" else kind)
+            val titled = ToolDerive.bucket(resolvedName, if (action != null) "" else kind)
+            // A title that names no tool ("Explore the codebase", an MCP sentence) leaves the
+            // category to what the wire stated instead — an Agent launch is then a sub-agent
+            // while it runs, as its persisted copy is. A title that does classify keeps it.
+            val bucket = if (titled == ToolKindBucket.OTHER && planName == null && action == null && liveName != null) {
+                ToolDerive.bucket(liveName, kind)
+            } else {
+                titled
+            }
             // A search that found nothing, which codex reports as failed, settles as a success
             // (web `isGrepNoMatchResult`) — for its marker, its group and its reply's header
             // alike. [isError] stays as sent: the card body still reads it to say "No matches".
@@ -237,8 +248,11 @@ object MessageRender {
                             // Qualify the synthetic fallback with the turn id: a bare positional
                             // "tool-$idx" would collide across replies once it becomes a node key.
                             ToolCallVM.of(
-                                block.id ?: "${turn.id}-tool-$idx", block.name, "", state,
+                                block.id ?: "${turn.id}-tool-$idx", block.name, block.liveKind.orEmpty(), state,
                                 block.inputPreview, output, null, isErr, block.meta,
+                                // A reply handed off locally keeps the live call's title as its
+                                // name: classify it as the live card was, not by that title.
+                                liveName = block.liveKind?.let { LiveToolName.infer(block.name, it, block.inputPreview, block.meta) },
                             ),
                         ),
                     )

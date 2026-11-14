@@ -23,6 +23,7 @@ import app.codeg.android.feature.sessiondetail.rendering.MessageRender
 import app.codeg.android.feature.sessiondetail.rendering.ProposedPlan
 import app.codeg.android.feature.sessiondetail.rendering.RenderPart
 import app.codeg.android.feature.sessiondetail.rendering.Goals
+import app.codeg.android.feature.sessiondetail.rendering.LiveToolName
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallVM
 import app.codeg.android.feature.sessiondetail.rendering.ToolKindBucket
@@ -864,5 +865,8 @@ private fun LiveToolCallState.toVM(): ToolCallVM {
     }
     // [meta] too, as the persisted path passes it: Grok's plan-mode identity and codex's
     // search-action mark are read off it.
-    return ToolCallVM.of(id, title, kind, state, rawInput, rawOutput, content, isError, meta)
+    return ToolCallVM.of(
+        id, title, kind, state, rawInput, rawOutput, content, isError, meta,
+        liveName = LiveToolName.infer(title, kind, rawInput, meta),
+    )
 }

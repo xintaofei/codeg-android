@@ -412,7 +412,7 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
                 is Seg.Text -> if (seg.text.toString().isNotBlank()) blocks.add(ContentBlock.Text(seg.text.toString()))
                 is Seg.Thinking -> if (seg.text.toString().isNotBlank()) blocks.add(ContentBlock.Thinking(seg.text.toString()))
                 is Seg.Tool -> {
-                    blocks.add(ContentBlock.ToolUse(seg.call.id, seg.call.title, seg.call.rawInput, seg.call.meta))
+                    blocks.add(ContentBlock.ToolUse(seg.call.id, seg.call.title, seg.call.rawInput, seg.call.meta, liveKind = seg.call.kind))
                     val output = seg.call.rawOutput.toString().ifEmpty { seg.call.content }
                     blocks.add(ContentBlock.ToolResult(seg.call.id, output, LiveToolCallState(seg.call.id, "", "", seg.call.status, null, "", null).isError))
                 }

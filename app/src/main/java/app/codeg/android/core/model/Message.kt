@@ -88,6 +88,13 @@ sealed interface ContentBlock {
         val name: String,
         val inputPreview: String?,
         val meta: JsonObject? = null,
+        /**
+         * The ACP `kind` of a call this client watched run, when its streamed reply is kept
+         * in place of the transcript's copy (a local hand-off): [name] is then its live
+         * title, and the card classifies as it did live. Null for the transcript's own
+         * calls, which carry the tool's name and no kind.
+         */
+        val liveKind: String? = null,
     ) : ContentBlock
     data class ToolResult(val id: String?, val outputPreview: String?, val isError: Boolean) : ContentBlock
     /**

@@ -5,6 +5,9 @@ import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.LiveSessionSnapshot
 import app.codeg.android.core.model.TurnRole
 import app.codeg.android.core.network.CodegJson
+import app.codeg.android.feature.sessiondetail.rendering.MessageRender
+import app.codeg.android.feature.sessiondetail.rendering.RenderPart
+import app.codeg.android.feature.sessiondetail.rendering.ToolKindBucket
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -112,6 +115,20 @@ class LiveTurnBuilderTest {
         assertTrue(turn.blocks[0] is ContentBlock.Text)
         assertTrue(turn.blocks[1] is ContentBlock.ToolUse)
         assertTrue(turn.blocks[2] is ContentBlock.ToolResult)
+    }
+
+    @Test
+    fun `a call handed off locally classifies as it did live, not by its title`() {
+        val b = LiveTurnBuilder("live-1")
+        val meta = CodegJson.response.parseToJsonElement("""{"claudeCode":{"toolName":"Agent"}}""").jsonObject
+        b.upsertToolCall("a1", "Explore the codebase", "think", "completed", """{"description":"Explore the codebase","prompt":"look"}""", "done", null, meta)
+        b.upsertToolCall("r1", "Run tests", "execute", "completed", null, "ok", null)
+        val tools = MessageRender.adaptParts(b.snapshotAsMessageTurn())
+            .flatMap { p -> (p as? RenderPart.ToolGroup)?.items ?: listOfNotNull((p as? RenderPart.Tool)?.vm) }
+        assertEquals(listOf(ToolKindBucket.TASK, ToolKindBucket.EXECUTE), tools.map { it.bucket })
+        // A call the transcript recorded carries no kind, and is named by the tool itself.
+        val persisted = ContentBlock.ToolUse("a1", "Explore the codebase", null, null)
+        assertEquals(null, persisted.liveKind)
     }
 
     @Test
