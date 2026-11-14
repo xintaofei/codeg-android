@@ -21,6 +21,7 @@ import app.codeg.android.core.model.HermesProviderKind
 import app.codeg.android.core.model.JsonConfig
 import app.codeg.android.core.model.KimiAuthMode
 import app.codeg.android.core.model.KimiManagedConfig
+import app.codeg.android.core.model.ProviderModelsProtocol
 import app.codeg.android.core.model.ModelProviderInfo
 import app.codeg.android.core.model.PiCommandValidation
 import app.codeg.android.core.model.PiConfigProjection
@@ -408,10 +409,10 @@ class AgentsViewModel @Inject constructor(
         }
     }
 
-    /** Probe a Kimi provider's models (also validates the key). Not serialized — a read. */
-    suspend fun fetchKimiModels(baseUrl: String, apiKey: String): List<String> {
+    /** List a Kimi interface's provider models (also validates the key). Not serialized — a read. */
+    suspend fun fetchKimiModels(protocol: ProviderModelsProtocol, baseUrl: String, apiKey: String): List<String> {
         val c = client ?: throw IllegalStateException("Not connected")
-        return c.acpFetchKimiModels(baseUrl, apiKey)
+        return c.listProviderModels(protocol, baseUrl, apiKey).models.map { it.id }
     }
 
     // endregion

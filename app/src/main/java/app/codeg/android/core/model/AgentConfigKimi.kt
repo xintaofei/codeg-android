@@ -78,16 +78,42 @@ data class KimiInterfaceTypeMeta(
     val defaultBaseUrl: String,
     /** vertexai authenticates via GCP ADC, so it exposes no API key field. */
     val usesApiKey: Boolean,
+    /** How the provider lists its models (`list_provider_models` protocol), for a type that
+     *  takes an API key; null when it can't be listed. */
+    val modelsProtocol: ProviderModelsProtocol?,
+    /** Where the type's SDK goes when the base URL is left blank ("" → none: an
+     *  OpenAI-compatible endpoint has no usable default). */
+    val sdkBaseUrl: String,
 )
 
+/** Mirrors the web's `KIMI_INTERFACE_TYPES` (`kimi-code-config-panel.tsx`). */
 val kimiInterfaceTypes: List<KimiInterfaceTypeMeta> = listOf(
-    KimiInterfaceTypeMeta(KimiInterfaceType.KIMI, "Kimi / Moonshot", KIMI_BASE_URL_INTERNATIONAL, true),
-    KimiInterfaceTypeMeta(KimiInterfaceType.OPENAI, "OpenAI (Chat Completions)", "https://api.openai.com/v1", true),
-    KimiInterfaceTypeMeta(KimiInterfaceType.OPENAI_RESPONSES, "OpenAI (Responses)", "https://api.openai.com/v1", true),
-    KimiInterfaceTypeMeta(KimiInterfaceType.ANTHROPIC, "Anthropic", "", true),
-    KimiInterfaceTypeMeta(KimiInterfaceType.GOOGLE_GENAI, "Google Gemini", "", true),
-    KimiInterfaceTypeMeta(KimiInterfaceType.VERTEXAI, "Google Vertex AI", "", false),
+    KimiInterfaceTypeMeta(
+        KimiInterfaceType.KIMI, "Kimi / Moonshot", KIMI_BASE_URL_INTERNATIONAL, true,
+        ProviderModelsProtocol.OPENAI, KIMI_BASE_URL_INTERNATIONAL,
+    ),
+    KimiInterfaceTypeMeta(
+        KimiInterfaceType.OPENAI, "OpenAI (Chat Completions)", "https://api.openai.com/v1", true,
+        ProviderModelsProtocol.OPENAI, "",
+    ),
+    KimiInterfaceTypeMeta(
+        KimiInterfaceType.OPENAI_RESPONSES, "OpenAI (Responses)", "https://api.openai.com/v1", true,
+        ProviderModelsProtocol.OPENAI, "",
+    ),
+    KimiInterfaceTypeMeta(
+        KimiInterfaceType.ANTHROPIC, "Anthropic", "", true,
+        ProviderModelsProtocol.ANTHROPIC, "https://api.anthropic.com",
+    ),
+    KimiInterfaceTypeMeta(
+        KimiInterfaceType.GOOGLE_GENAI, "Google Gemini", "", true,
+        ProviderModelsProtocol.GEMINI, "https://generativelanguage.googleapis.com",
+    ),
+    KimiInterfaceTypeMeta(KimiInterfaceType.VERTEXAI, "Google Vertex AI", "", false, null, ""),
 )
+
+/** Where a model listing goes: the typed endpoint, else the interface SDK's own default. */
+fun KimiInterfaceTypeMeta.modelsBaseUrl(effectiveBaseUrl: String): String =
+    effectiveBaseUrl.trim().ifEmpty { sdkBaseUrl }
 
 fun kimiInterfaceMeta(type: KimiInterfaceType): KimiInterfaceTypeMeta =
     kimiInterfaceTypes.firstOrNull { it.value == type } ?: kimiInterfaceTypes[0]

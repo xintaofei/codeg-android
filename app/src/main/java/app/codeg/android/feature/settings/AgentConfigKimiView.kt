@@ -60,6 +60,7 @@ import app.codeg.android.core.model.kimiBaseUrlForRegion
 import app.codeg.android.core.model.kimiEndpointRegionFromBaseUrl
 import app.codeg.android.core.model.kimiInitialMode
 import app.codeg.android.core.model.kimiInterfaceMeta
+import app.codeg.android.core.model.modelsBaseUrl
 import app.codeg.android.core.model.kimiInterfaceTypes
 import app.codeg.android.core.network.displayMessage
 import kotlinx.coroutines.CancellationException
@@ -177,7 +178,10 @@ fun AgentConfigKimiView(agent: AcpAgentInfo, viewModel: AgentsViewModel) {
     }
 
     fun fetchModels() {
-        val url = effectiveBaseUrl
+        val protocol = meta.modelsProtocol ?: return
+        // A blank endpoint goes where the interface's SDK itself would (Anthropic / Gemini
+        // have a default; an OpenAI-compatible endpoint doesn't).
+        val url = meta.modelsBaseUrl(effectiveBaseUrl)
         val key = apiKey.trim()
         if (url.isEmpty() || key.isEmpty()) {
             banner = KimiBanner(enterKeyMsg, true)
@@ -186,7 +190,7 @@ fun AgentConfigKimiView(agent: AcpAgentInfo, viewModel: AgentsViewModel) {
         fetchingModels = true
         scope.launch {
             try {
-                val list = viewModel.fetchKimiModels(url, key)
+                val list = viewModel.fetchKimiModels(protocol, url, key)
                 models = list
                 banner = KimiBanner(if (list.isEmpty()) modelsNoneMsg else modelsFoundFmt.format(list.size), false)
             } catch (e: CancellationException) {
@@ -282,7 +286,10 @@ fun AgentConfigKimiView(agent: AcpAgentInfo, viewModel: AgentsViewModel) {
             // Model + fetch
             CodegTextField(modelId, { modelId = it }, stringResource(R.string.agents_kimi_model), placeholder = KIMI_MODEL_PLACEHOLDER, mono = true)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { fetchModels() }, enabled = !saving && !fetchingModels) {
+                OutlinedButton(
+                    onClick = { fetchModels() },
+                    enabled = !saving && !fetchingModels && meta.modelsProtocol != null,
+                ) {
                     if (fetchingModels) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = colors.accent)
                     else Text(stringResource(R.string.agents_kimi_fetch), color = colors.accent)
                 }

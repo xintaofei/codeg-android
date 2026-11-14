@@ -2,6 +2,13 @@ package app.codeg.android.core.network
 
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.ConnectBody
+import app.codeg.android.core.model.InlineModelsKeySource
+import app.codeg.android.core.model.KimiInterfaceType
+import app.codeg.android.core.model.ListProviderModelsBody
+import app.codeg.android.core.model.ProviderModelsParams
+import app.codeg.android.core.model.ProviderModelsProtocol
+import app.codeg.android.core.model.kimiInterfaceMeta
+import app.codeg.android.core.model.modelsBaseUrl
 import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.MessageTurn
 import app.codeg.android.core.model.isTurnErrorRecord
@@ -98,6 +105,27 @@ class CodegJsonTest {
         assertEquals(listOf(ContentBlock.TurnError("API Error: 503")), turn.blocks)
         assertTrue(turn.isTurnErrorRecord)
         assertEquals(listOf("API Error: 503"), turn.turnErrors)
+    }
+
+    @Test
+    fun `list_provider_models request matches the server's params shape`() {
+        val body = ListProviderModelsBody(
+            ProviderModelsParams(ProviderModelsProtocol.ANTHROPIC, "https://api.anthropic.com", InlineModelsKeySource("sk")),
+        )
+        assertEquals(
+            """{"params":{"protocol":"anthropic","baseUrl":"https://api.anthropic.com",""" +
+                """"keySource":{"apiKey":"sk","kind":"inline"}}}""",
+            CodegJson.request.encodeToString(body),
+        )
+    }
+
+    @Test
+    fun `kimi model listing falls back to the interface SDK's default endpoint`() {
+        assertEquals("https://api.anthropic.com", kimiInterfaceMeta(KimiInterfaceType.ANTHROPIC).modelsBaseUrl(" "))
+        assertEquals("https://x.test/v1", kimiInterfaceMeta(KimiInterfaceType.OPENAI).modelsBaseUrl("https://x.test/v1"))
+        // OpenAI-compatible endpoints have no usable default, so a blank one stays blank.
+        assertEquals("", kimiInterfaceMeta(KimiInterfaceType.OPENAI).modelsBaseUrl(""))
+        assertEquals(null, kimiInterfaceMeta(KimiInterfaceType.VERTEXAI).modelsProtocol)
     }
 
     @Test

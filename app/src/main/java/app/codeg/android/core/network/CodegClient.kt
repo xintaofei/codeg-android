@@ -17,7 +17,11 @@ import app.codeg.android.core.model.PlanApprovalDecision
 import app.codeg.android.core.model.CreateConversationBody
 import app.codeg.android.core.model.EmptyBody
 import app.codeg.android.core.model.FeedbackNote
-import app.codeg.android.core.model.FetchKimiModelsBody
+import app.codeg.android.core.model.InlineModelsKeySource
+import app.codeg.android.core.model.ListProviderModelsBody
+import app.codeg.android.core.model.ProviderModelList
+import app.codeg.android.core.model.ProviderModelsParams
+import app.codeg.android.core.model.ProviderModelsProtocol
 import app.codeg.android.core.model.FindConnectionBody
 import app.codeg.android.core.model.PiCommandValidation
 import app.codeg.android.core.model.PiConfigProjection
@@ -720,9 +724,20 @@ class CodegClient(
     suspend fun acpUpdateKimiCodeConfig(body: UpdateKimiCodeConfigBody): Int =
         decode(send("acp_update_kimi_code_config", encode(body)), Int.serializer())
 
-    /** Probe a Kimi provider's `/models` endpoint (also validates the key). */
-    suspend fun acpFetchKimiModels(baseUrl: String, apiKey: String): List<String> =
-        decode(send("acp_fetch_kimi_models", encode(FetchKimiModelsBody(baseUrl, apiKey))), ListSerializer(String.serializer()))
+    /** List a provider's models with a typed key (also validates the key). The response is
+     *  camelCase on the wire, unlike most. */
+    suspend fun listProviderModels(
+        protocol: ProviderModelsProtocol,
+        baseUrl: String,
+        apiKey: String,
+    ): ProviderModelList =
+        decodeCamel(
+            send(
+                "list_provider_models",
+                encode(ListProviderModelsBody(ProviderModelsParams(protocol, baseUrl, InlineModelsKeySource(apiKey)))),
+            ),
+            ProviderModelList.serializer(),
+        )
 
     /**
      * Read pi's native config projection (defaults + linked/custom providers). The

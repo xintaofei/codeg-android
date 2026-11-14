@@ -469,9 +469,47 @@ data class UpdateKimiCodeConfigBody(
     val defaultEffort: String? = null,
 )
 
-/** `acp_fetch_kimi_models` — probe the provider's `/models` (doubles as a key test). */
+/** A provider's wire protocol, for listing its models (Rust `ModelsProtocol`, snake_case). */
 @Serializable
-data class FetchKimiModelsBody(val baseUrl: String, val apiKey: String)
+enum class ProviderModelsProtocol {
+    @SerialName("openai") OPENAI,
+    @SerialName("anthropic") ANTHROPIC,
+    @SerialName("gemini") GEMINI,
+}
+
+/**
+ * `list_provider_models` — a provider's models asked the way the agent itself would (doubles
+ * as a key test). Replaced the Kimi-only `acp_fetch_kimi_models` in codeg 0.4x. Only the
+ * typed-key source is modelled (`keySource.kind == "inline"`); the server also takes saved
+ * providers and agent-held keys. Wire: `{params: {protocol, baseUrl, keySource}}`.
+ */
+@Serializable
+data class ListProviderModelsBody(val params: ProviderModelsParams)
+
+@Serializable
+data class ProviderModelsParams(
+    val protocol: ProviderModelsProtocol,
+    val baseUrl: String,
+    val keySource: InlineModelsKeySource,
+)
+
+/** `ModelsKeySource::Inline` — internally tagged by `kind`. */
+@Serializable
+data class InlineModelsKeySource(val apiKey: String, val kind: String = "inline")
+
+/** A provider's list (`ModelList`). The server serializes it camelCase. */
+@Serializable
+data class ProviderModelList(
+    val url: String = "",
+    val models: List<ListedProviderModel> = emptyList(),
+)
+
+@Serializable
+data class ListedProviderModel(
+    val id: String,
+    val displayName: String? = null,
+    val contextWindow: Long? = null,
+)
 
 // MARK: - Pi request bodies
 
