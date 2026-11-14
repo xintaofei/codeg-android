@@ -1647,12 +1647,20 @@ class SessionDetailViewModel @Inject constructor(
             // Current state, like the selectors: the snapshot's prediction (or its absence) is
             // the one that stands.
             val suggestion = snapshot.promptSuggestion
+            // A retry is never on a snapshot: whatever ended or outran it fell in the gap the
+            // snapshot stands for, so the line it left would only go stale.
             if (approvals === it.toolApprovals && failures === it.sessionFailures && stale == it.configStale &&
-                suggestion == it.promptSuggestion
+                suggestion == it.promptSuggestion && it.apiRetry == null
             ) {
                 it
             } else {
-                it.copy(toolApprovals = approvals, sessionFailures = failures, configStale = stale, promptSuggestion = suggestion)
+                it.copy(
+                    toolApprovals = approvals,
+                    sessionFailures = failures,
+                    configStale = stale,
+                    promptSuggestion = suggestion,
+                    apiRetry = null,
+                )
             }
         }
     }
