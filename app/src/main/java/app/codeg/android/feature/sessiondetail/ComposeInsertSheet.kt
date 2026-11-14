@@ -46,8 +46,17 @@ object ComposeInsert {
     fun appendMessage(content: String, draft: String): String =
         if (draft.isBlank()) content else "${draft.trimEnd()} $content"
 
-    fun appendCommand(name: String, draft: String): String =
-        if (draft.isBlank()) "/$name " else "${draft.trimEnd()} /$name "
+    /**
+     * What an advertised command runs as. Codex advertises its skills as commands NAMED
+     * `$<skill>`, where the `$` is the invocation prefix itself; every other command runs as
+     * `/<name>`. Port of the web's `commandInvocationToken`.
+     */
+    fun invocationToken(name: String): String = if (name.startsWith("$")) name else "/$name"
+
+    fun appendCommand(name: String, draft: String): String {
+        val token = invocationToken(name)
+        return if (draft.isBlank()) "$token " else "${draft.trimEnd()} $token "
+    }
 
     /** Prepend `<prefix><id> `, replacing a leading expert mention if its id is known. */
     fun applyExpert(id: String, draft: String, agent: AgentType, knownIds: Set<String>): String {
@@ -120,7 +129,7 @@ fun ComposeInsertSheet(
                     }
                     else -> InsertList(commands.isEmpty(), stringResource(R.string.insert_empty_commands)) {
                         items(commands, key = { it.name }) { cmd ->
-                            InsertRow("/${cmd.name}", cmd.description ?: "", mono = true) {
+                            InsertRow(ComposeInsert.invocationToken(cmd.name), cmd.description ?: "", mono = true) {
                                 onInsert { draft -> ComposeInsert.appendCommand(cmd.name, draft) }; onDismiss()
                             }
                         }

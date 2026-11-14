@@ -2690,15 +2690,12 @@ class SessionDetailViewModel @Inject constructor(
         return runCatching { c.expertsListForAgent(agent) }.getOrDefault(emptyList())
     }
 
-    /** Slash commands from the live snapshot, excluding expert-backed names. Returns
-     *  the commands plus the known-expert id set (so the UI can strip an existing
-     *  expert mention when inserting another). */
+    /** The commands the live session advertises, all of them, as the web lists them. */
     suspend fun loadSlashCommands(): List<AvailableCommandInfo> {
         val c = client ?: return emptyList()
         val id = conversationId ?: return emptyList()
         val snapshot = runCatching { c.sessionSnapshotByConversation(id) }.getOrNull() ?: return emptyList()
-        val knownExperts = runCatching { c.expertsList().map { it.id }.toSet() }.getOrDefault(emptySet())
-        return snapshot.availableCommands.filter { it.name !in knownExperts }
+        return snapshot.availableCommands
     }
 
     suspend fun knownExpertIds(): Set<String> =
