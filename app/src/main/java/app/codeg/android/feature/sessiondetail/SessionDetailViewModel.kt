@@ -17,6 +17,7 @@ import app.codeg.android.core.model.ConnectionStatus
 import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.ExpertListItem
 import app.codeg.android.core.model.FeedbackNote
+import app.codeg.android.core.model.LiveSessionSnapshot
 import app.codeg.android.core.model.PlanApprovalDecision
 import app.codeg.android.core.model.ImageData
 import app.codeg.android.core.model.QuickMessage
@@ -42,8 +43,6 @@ import app.codeg.android.core.model.SessionStats
 import app.codeg.android.core.model.TurnRole
 import app.codeg.android.core.network.ApiError
 import app.codeg.android.core.network.CodegClient
-import app.codeg.android.core.network.EventStream
-import app.codeg.android.core.network.StreamFrame
 import app.codeg.android.core.network.displayMessage
 import app.codeg.android.core.network.conversationMoved
 import app.codeg.android.core.network.isFeedbackDisabled
@@ -52,6 +51,9 @@ import app.codeg.android.core.network.isStaleConnection
 import app.codeg.android.feature.sessiondetail.interactive.ParsedPermission
 import app.codeg.android.feature.sessiondetail.timeline.hideInFlightReply
 import app.codeg.android.feature.sessiondetail.timeline.endsRound
+import app.codeg.android.feature.sessiondetail.live.SessionStream
+import app.codeg.android.feature.sessiondetail.live.StreamAttachFailed
+import app.codeg.android.feature.sessiondetail.live.asFrameSource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -73,13 +75,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
-
-/** WS `detached` reason meaning the ACP connection itself is gone (terminal — a
- *  socket reopen can't recover it). Any other reason is a transient socket drop. */
-private const val REASON_CONNECTION_GONE = "connection_gone"
-
-/** Max consecutive silent re-attaches before falling back to a transcript reconcile. */
-private const val MAX_STREAM_RECONNECTS = 6
 
 /**
  * Turns fetched when a session opens, and per page of older history — both
@@ -170,17 +165,19 @@ class SessionDetailViewModel @Inject constructor(
     private var ownClientMessageId: String? = null
     private var agent: AgentType = AgentType.CLAUDE_CODE
     private var externalId: String? = null
-    private var lastSeq: Long = 0
+    /**
+     * Where the next [openStream] resumes from, when the caller knows better than the stream's
+     * own cursor: a looked-up connection's current seq, or 0 to force a snapshot (a fresh
+     * connection, or a reattach that seeds from it). Null = the stream's cursor for that
+     * connection, if any. Consumed by [openStream].
+     */
+    private var attachCursor: Long? = null
     /** True once a draft's first send begins — locks the agent/folder pickers. */
     private var hasStartedFirstSend = false
     /** The working tree's current branch, shown + checkmarked in the branch picker. */
     private var currentBranch: String? = null
 
-    private var stream: EventStream? = null
-    private var consumerJob: Job? = null
     private var sendJob: Job? = null
-    private var streamGeneration = 0
-    private var reconnectJob: Job? = null
     /** The post-turn transcript reconcile. Tracked so a new send / cancel can cancel it,
      *  preventing an orphaned reconcile from a finished turn wiping a freshly-started one. */
     private var reconcileJob: Job? = null
@@ -277,10 +274,6 @@ class SessionDetailViewModel @Inject constructor(
      * the difference.
      */
     private var noteTurnGeneration = 0
-    /** Stable across reconnects so the server tracks one logical subscription. */
-    private val subscriptionId = UUID.randomUUID().toString()
-    /** Consecutive silent re-attaches for the current turn; reset on a confirmed attach. */
-    private var streamReconnects = 0
     /** True while a reattach still owes its first snapshot seed. If the socket drops
      *  mid-handshake, the reconnect re-requests the seed instead of streaming blind. */
     private var pendingReattachSeed = false
@@ -309,6 +302,41 @@ class SessionDetailViewModel @Inject constructor(
 
     private val _ui = MutableStateFlow(SessionDetailUiState(isNew = conversationIdArg == null))
     val ui: StateFlow<SessionDetailUiState> = _ui.asStateFlow()
+
+    /** The event subscription to [connectionId]. See [streamListener]. */
+    private val stream = SessionStream(
+        scope = viewModelScope,
+        open = { profile?.let { repository.eventStream(it) }?.asFrameSource() },
+        listener = object : SessionStream.Listener {
+            override fun onSnapshot(snapshot: LiveSessionSnapshot, cause: SessionStream.AttachCause) =
+                onStreamSnapshot(snapshot, cause)
+
+            override fun onEvent(event: AcpEvent, seq: Long) = applyEvent(event, seq)
+
+            // A replay can't seed a reattach (only a snapshot carries the live message), and a
+            // snapshot that could has already done so: either way the seed is no longer owed.
+            override fun onAttached(cause: SessionStream.AttachCause) {
+                pendingReattachSeed = false
+            }
+
+            // The stream only lives for a turn: once it is over, a drop is a normal close.
+            override fun shouldReconnect(): Boolean = _ui.value.isInFlight
+
+            override fun onReconnecting(attempt: Int) {
+                _ui.update { if (it.isInFlight) it.copy(sendStatus = "Reconnecting…") else it }
+            }
+
+            // Terminal: the ACP connection itself is gone, so no socket reopen recovers it.
+            override fun onConnectionGone() {
+                if (_ui.value.isInFlight) reconcileAfterTurn()
+            }
+
+            // Reconnecting kept failing: fall back to the transcript so the reply isn't lost.
+            override fun onGaveUp() {
+                reconcileAfterTurn()
+            }
+        },
+    )
 
     init {
         load()
@@ -575,7 +603,7 @@ class SessionDetailViewModel @Inject constructor(
      *  the event cursor so the fresh stream is seeded from its own snapshot (no stale
      *  `since_seq` from the connection we just abandoned). */
     private suspend fun connectFresh(c: CodegClient): String {
-        lastSeq = 0
+        attachCursor = 0
         return connectWithPreferences(c)
     }
 
@@ -613,115 +641,63 @@ class SessionDetailViewModel @Inject constructor(
         val convId = conversationId
         if (convId != null) {
             runCatching { c.findConnection(convId, externalId, agent) }.getOrNull()?.let { info ->
-                lastSeq = info.eventSeq
+                attachCursor = info.eventSeq
                 return info.connectionId
             }
         }
         return connectWithPreferences(c)
     }
 
-    /** Open the WS stream for a fresh turn: reset the reconnect budget, attach, and
-     *  suspend until the server confirms the subscription (or a 12s safety timeout).
+    /** Attach the event stream to [conn] and suspend until the server confirms the
+     *  subscription (or [SessionStream]'s safety timeout: [StreamAttachFailed]).
      *  [seedOnAttach] rebuilds an in-flight turn from the attach snapshot (reattach). */
     private suspend fun openStream(conn: String, seedOnAttach: Boolean = false) {
-        streamReconnects = 0
+        resetSelectorsForConnection(conn)
         pendingReattachSeed = seedOnAttach
-        reconnectJob?.cancel()
-        reconnectJob = null
-        connectStream(conn, awaitAttach = true, seedOnAttach = seedOnAttach)
+        val since = when (val cursor = attachCursor) {
+            null -> stream.cursorFor(conn)
+            0L -> null
+            else -> cursor
+        }
+        attachCursor = null
+        stream.attach(conn, since)
     }
 
-    /** Launch a WS consumer for [conn], attaching with the current [lastSeq] so a
-     *  re-attach resumes via the server's replay. When [awaitAttach], suspend until
-     *  the server confirms the subscription (snapshot/replay) or a 12s safety timeout;
-     *  a silent reconnect passes false and lets events flow in as they arrive.
-     *  [seedOnAttach] seeds the live turn from the first snapshot (reattach only). */
-    private suspend fun connectStream(conn: String, awaitAttach: Boolean, seedOnAttach: Boolean = false) {
-        val p = profile ?: return
-        resetSelectorsForConnection(conn)
-        streamGeneration += 1
-        val gen = streamGeneration
-        val attached = CompletableDeferred<Unit>()
-        consumerJob?.cancel()
-        consumerJob = viewModelScope.launch {
-            val s = repository.eventStream(p) ?: run {
-                if (!attached.isCompleted) attached.complete(Unit)
-                return@launch
-            }
-            stream = s
-            s.frames().collect { frame ->
-                if (gen != streamGeneration) return@collect
-                when (frame) {
-                    StreamFrame.Ready -> s.attach(subscriptionId, conn, lastSeq.takeIf { it > 0 })
-                    is StreamFrame.Snapshot -> {
-                        streamReconnects = 0
-                        frame.snapshot.eventSeq?.let { lastSeq = it }
-                        // A reconnect that fell back to a snapshot may have skipped this send's
-                        // `prompting`, which is what opens [ownTurnStarted]. Without this, the
-                        // turn's content and its `turn_complete` would be ignored for good.
-                        val builder = liveBuilder
-                        if (builder != null && !ownTurnStarted && snapshotStartsOwnTurn(frame.snapshot, isReconnect = !awaitAttach)) {
-                            ownTurnStarted = true
-                            // The server cleared its live message when this turn started, so what
-                            // it holds now is this turn's, which the closed gate dropped.
-                            if (builder.isEmpty) {
-                                builder.seedFrom(frame.snapshot)
-                                scheduleLiveEmit()
-                            }
-                        }
-                        // Before any early return below: the snapshot's selectors are this
-                        // connection's current ones whichever branch we take next, and an idle
-                        // connection is exactly when an open sheet has no other source.
-                        adoptSnapshotSelectors(frame.snapshot)
-                        if (seedOnAttach && !seedLiveFromSnapshot(frame.snapshot)) {
-                            // Idle connection — nothing in flight; abort the reattach.
-                            // Deliberately does NOT surface the snapshot's `last_error` here:
-                            // an idle snapshot cannot say whether that failure is the last
-                            // turn's or the previous one's — see [applySnapshotError].
-                            if (!attached.isCompleted) attached.complete(Unit)
-                            abortIdleReattach()
-                            return@collect
-                        }
-                        // Only adopt a snapshot's pending permission/question on a reattach or a
-                        // mid-turn reconnect — the initial send handshake snapshot is pre-prompt
-                        // state and could surface a stale card (iOS skips it there).
-                        if (seedOnAttach || !awaitAttach) restorePending(frame.snapshot)
-                        if (!attached.isCompleted) attached.complete(Unit)
-                    }
-                    is StreamFrame.Replay -> {
-                        streamReconnects = 0
-                        pendingReattachSeed = false
-                        frame.events.forEach { applyEvent(it.event, it.seq) }
-                        if (!attached.isCompleted) attached.complete(Unit)
-                    }
-                    is StreamFrame.Event -> applyEvent(frame.envelope.event, frame.envelope.seq)
-                    is StreamFrame.Detached -> {
-                        // A detach before the attach is confirmed means the server rejected this
-                        // connection (stale/unknown). Fail the awaited handshake so the send path
-                        // retries with a fresh connect, rather than reconnecting to a dead id. A
-                        // silent reconnect (awaitAttach=false) still drives the reconnect loop.
-                        if (awaitAttach && !attached.isCompleted) {
-                            attached.completeExceptionally(StreamAttachFailed(frame.reason))
-                        } else {
-                            handleStreamEnded(gen, frame.reason)
-                        }
-                    }
-                    StreamFrame.Pong -> Unit
-                    is StreamFrame.Closed -> {
-                        if (awaitAttach && !attached.isCompleted) {
-                            attached.completeExceptionally(StreamAttachFailed(frame.reason))
-                        } else {
-                            if (!attached.isCompleted) attached.complete(Unit)
-                            handleStreamEnded(gen, frame.reason)
-                        }
-                    }
-                }
+    /** A snapshot answering an attach ([SessionStream.AttachCause.ATTACH]) or a silent
+     *  re-attach after a drop ([SessionStream.AttachCause.RECONNECT]). */
+    private fun onStreamSnapshot(snapshot: LiveSessionSnapshot, cause: SessionStream.AttachCause) {
+        val isReconnect = cause == SessionStream.AttachCause.RECONNECT
+        // Owed until a snapshot seeds it — so a socket that dropped mid-handshake has the
+        // reconnect's snapshot seed the reattach instead of streaming blind.
+        val seed = pendingReattachSeed
+        // A reconnect that fell back to a snapshot may have skipped this send's `prompting`,
+        // which is what opens [ownTurnStarted]. Without this, the turn's content and its
+        // `turn_complete` would be ignored for good.
+        val builder = liveBuilder
+        if (builder != null && !ownTurnStarted && snapshotStartsOwnTurn(snapshot, isReconnect)) {
+            ownTurnStarted = true
+            // The server cleared its live message when this turn started, so what it holds now
+            // is this turn's, which the closed gate dropped.
+            if (builder.isEmpty) {
+                builder.seedFrom(snapshot)
+                scheduleLiveEmit()
             }
         }
-        // Fail the send if the subscription isn't confirmed in time, instead of prompting
-        // blind against an unconfirmed stream (whose first events could be lost). The send
-        // path treats this like a stale connection and retries once with a fresh connect.
-        if (awaitAttach) withTimeoutOrNull(12_000) { attached.await() } ?: throw StreamAttachFailed("attach timeout")
+        // Before any early return below: the snapshot's selectors are this connection's
+        // current ones whichever branch we take next, and an idle connection is exactly when
+        // an open sheet has no other source.
+        adoptSnapshotSelectors(snapshot)
+        if (seed && !seedLiveFromSnapshot(snapshot)) {
+            // Idle connection — nothing in flight; abort the reattach. Deliberately does NOT
+            // surface the snapshot's `last_error` here: an idle snapshot cannot say whether
+            // that failure is the last turn's or the previous one's — see [applySnapshotError].
+            abortIdleReattach()
+            return
+        }
+        // Only adopt a snapshot's pending permission/question on a reattach or a mid-turn
+        // reconnect — the initial send handshake snapshot is pre-prompt state and could
+        // surface a stale card (iOS skips it there).
+        if (seed || isReconnect) restorePending(snapshot)
     }
 
     fun cancel() {
@@ -1012,7 +988,7 @@ class SessionDetailViewModel @Inject constructor(
             // Attach with NO since_seq so the server sends a full snapshot to seed the
             // in-flight turn from (a since_seq makes it replay events instead). The
             // snapshot's eventSeq becomes the resume point for any later mid-turn reconnect.
-            lastSeq = 0
+            attachCursor = 0
             // Rebuild the in-flight turn from the attach snapshot (seedOnAttach) and keep
             // streaming; the snapshot's live message + active tools are seeded on arrival.
             val builder = LiveTurnBuilder()
@@ -1034,8 +1010,7 @@ class SessionDetailViewModel @Inject constructor(
         }
     }
 
-    private fun applyEvent(event: AcpEvent, seq: Long) {
-        if (seq > 0) lastSeq = seq
+    private fun applyEvent(event: AcpEvent, @Suppress("UNUSED_PARAMETER") seq: Long) {
         // The server starts this send's turn with `prompting`. Until then the live builder is
         // only optimistic, and what arrives is the previous turn's tail, so none of its content
         // is folded in.
@@ -1748,54 +1723,6 @@ class SessionDetailViewModel @Inject constructor(
         clearInteractivePrompts()
     }
 
-    private fun handleStreamEnded(gen: Int, reason: String?) {
-        if (gen != streamGeneration) return
-        // If the turn already finished, this is a normal close.
-        if (!_ui.value.isInFlight) return
-        // `connection_gone` is terminal — the ACP connection itself is gone, so a
-        // socket reopen can't recover it; reconcile against the server transcript.
-        if (reason == REASON_CONNECTION_GONE) {
-            // Terminal: the ACP connection itself is gone, so reopening the socket can't
-            // recover it. Supersede the consumer first so the socket's own trailing close
-            // can't fall through to a doomed reconnect against the dead connection.
-            closeStream()
-            reconcileAfterTurn()
-            return
-        }
-        // Any other drop (socket blip, `lagged`, `server_shutdown`) is transient: the
-        // ACP connection outlives the socket, so re-attach with `since_seq` and let
-        // the server replay whatever we missed instead of ending the live turn.
-        reconnectStream()
-    }
-
-    /** Silently re-attach a fresh stream to the same connection after a transient
-     *  drop, resuming from [lastSeq]. Backs off exponentially (0.5s→8s) and, after
-     *  [MAX_STREAM_RECONNECTS] tries, gives up to a one-shot transcript reconcile so
-     *  the final reply is never lost. Mirrors the iOS `reconnectStream`. */
-    private fun reconnectStream() {
-        streamReconnects += 1
-        if (streamReconnects > MAX_STREAM_RECONNECTS) {
-            reconcileAfterTurn()
-            return
-        }
-        val conn = connectionId ?: run { reconcileAfterTurn(); return }
-        // Supersede the dying consumer immediately so its trailing frames can't slip
-        // through the reconnect budget during the backoff window.
-        streamGeneration += 1
-        consumerJob?.cancel()
-        consumerJob = null
-        val gen = streamGeneration
-        reconnectJob?.cancel()
-        reconnectJob = viewModelScope.launch {
-            val backoffMs = (500L shl (streamReconnects - 1)).coerceAtMost(8_000L)
-            _ui.update { if (it.isInFlight) it.copy(sendStatus = "Reconnecting…") else it }
-            delay(backoffMs)
-            // Bail if the turn ended or was superseded (cancel / finalize) while we waited.
-            if (gen != streamGeneration || !_ui.value.isInFlight) return@launch
-            connectStream(conn, awaitAttach = false, seedOnAttach = pendingReattachSeed)
-        }
-    }
-
     private fun reconcileAfterTurn() {
         val c = client ?: return
         val id = conversationId ?: return
@@ -2015,12 +1942,7 @@ class SessionDetailViewModel @Inject constructor(
     }
 
     private fun closeStream() {
-        streamGeneration += 1 // supersede the current consumer so its Closed is ignored
-        reconnectJob?.cancel()
-        reconnectJob = null
-        consumerJob?.cancel()
-        consumerJob = null
-        stream = null
+        stream.stop()
     }
 
     override fun onCleared() {
@@ -2730,10 +2652,6 @@ private suspend fun <T> orNull(block: suspend () -> T): T? = try {
     null
 }
 
-/** Thrown when the event-stream handshake ends (detached/closed) before the server
- *  confirms the attach — i.e. the connection was rejected. The send path treats this like
- *  a stale connection and retries once with a fresh connect. */
-private class StreamAttachFailed(val reason: String?) : Exception("stream attach failed: ${reason ?: "closed"}")
 
 /** A running options apply, tagged with the agent it targets so a sheet reload only waits for
  *  applies that could affect what it is about to show. */
