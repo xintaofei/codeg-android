@@ -213,10 +213,20 @@ object MessageRender {
         return groupConsecutiveTools(parts)
     }
 
-    /** Collapse runs of 2+ consecutive tool calls into a [RenderPart.ToolGroup]. */
+    /**
+     * Fold a reply's parts into the rows the timeline draws (web `groupActivitySteps`).
+     *
+     * Consecutive calls of one [StepFamily] — explorations, or commands — become one
+     * [RenderPart.ToolGroup]; a run needs two members, so a lone call stays a plain row.
+     * Anything else ends a run: prose, thoughts, edits, MCP and other tools, sub-agents,
+     * plan-mode transitions. A failed call does NOT end one; it stays inside, and the group
+     * shows the failure. A call interrupted before it carried anything is dropped
+     * ([isBlankInterruption]).
+     */
     fun groupConsecutiveTools(parts: List<RenderPart>): List<RenderPart> {
         val out = mutableListOf<RenderPart>()
         var run = mutableListOf<ToolCallVM>()
+        var family: StepFamily? = null
 
         fun flush() {
             if (run.size >= 2) {
@@ -226,12 +236,15 @@ object MessageRender {
                 run.firstOrNull()?.let { out.add(RenderPart.Tool(it)) }
             }
             run = mutableListOf()
+            family = null
         }
 
         for (part in parts) {
-            // Agent-dispatch (`TASK`) and plan-mode transitions each render on their
-            // own, so they never fold into a generic tool run.
-            if (part is RenderPart.Tool && part.vm.bucket != ToolKindBucket.TASK && !part.vm.isPlanMode) {
+            if (part is RenderPart.Tool && isBlankInterruption(part.vm)) continue
+            val joins = (part as? RenderPart.Tool)?.vm?.let(::stepFamily)
+            if (part is RenderPart.Tool && joins != null) {
+                if (joins != family) flush()
+                family = joins
                 run.add(part.vm)
             } else {
                 flush()
