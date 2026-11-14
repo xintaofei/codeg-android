@@ -1,5 +1,6 @@
 package app.codeg.android.core.model
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
@@ -51,6 +52,23 @@ const val KIMI_BASE_URL_INTERNATIONAL = "https://api.moonshot.ai/v1"
 const val KIMI_BASE_URL_CHINA = "https://api.moonshot.cn/v1"
 /** Placeholder model id (a real Moonshot coding model) for the model input. */
 const val KIMI_MODEL_PLACEHOLDER = "kimi-k2.7-code"
+
+/**
+ * Context window the backend writes when the panel sends none. Kimi's schema
+ * REQUIRES `max_context_size` on the managed model block, so the backend never
+ * omits it — it substitutes this. Pre-filled into the field so the form shows
+ * the value that will actually land on disk.
+ */
+const val KIMI_DEFAULT_MAX_CONTEXT_SIZE = 262_144
+
+/**
+ * `capabilities` entry that makes `kimi acp` advertise its Thinking picker.
+ * Mirrors the backend `KIMI_CAPABILITY_THINKING`.
+ */
+const val KIMI_CAPABILITY_THINKING = "thinking"
+
+/** Same, but kimi drops the `Off` row: the model cannot stop reasoning. */
+const val KIMI_CAPABILITY_ALWAYS_THINKING = "always_thinking"
 
 data class KimiInterfaceTypeMeta(
     val value: KimiInterfaceType,
@@ -114,7 +132,28 @@ data class KimiManagedConfig(
     /** Whether that gate token is codeg's synthetic one (vs a real OAuth login). */
     val credentialSynthetic: Boolean? = null,
     val rawConfigToml: String? = null,
+    /**
+     * `[models.<alias>].capabilities` as written on disk. A [KIMI_CAPABILITY_THINKING]
+     * / [KIMI_CAPABILITY_ALWAYS_THINKING] entry here is what makes `kimi acp` offer a
+     * Thinking picker at all; the rest are input modalities the backend re-declares
+     * alongside it (kimi reads a PRESENT list as a whitelist).
+     */
+    val capabilities: List<String> = emptyList(),
+    /** `[models.<alias>].support_efforts` — the reasoning levels the composer offers. */
+    val supportEfforts: List<String> = emptyList(),
+    /** `[models.<alias>].default_effort` — the level the picker opens on. */
+    val defaultEffort: String? = null,
 ) {
+    /** Whether the managed model declares a thinking capability at all. */
+    val reasoningEnabled: Boolean
+        get() = capabilities.any {
+            it == KIMI_CAPABILITY_THINKING || it == KIMI_CAPABILITY_ALWAYS_THINKING
+        }
+
+    /** Whether that declaration is the always-on flavour (the picker has no Off row). */
+    val alwaysThinking: Boolean
+        get() = capabilities.any { it == KIMI_CAPABILITY_ALWAYS_THINKING }
+
     companion object {
         /**
          * Parse the config_json string. Missing/unparseable → an empty config (the
@@ -129,6 +168,9 @@ data class KimiManagedConfig(
             fun str(k: String): String? = obj[k]?.asStringOrNull()
             fun bool(k: String): Boolean? = (obj[k] as? JsonPrimitive)?.booleanOrNull
             fun int(k: String): Int? = (obj[k] as? JsonPrimitive)?.intOrNull
+            fun strList(k: String): List<String> = (obj[k] as? JsonArray)
+                ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) }
+                ?: emptyList()
             return KimiManagedConfig(
                 interfaceType = KimiInterfaceType.fromWire(str("interfaceType")),
                 baseUrl = str("baseUrl"),
@@ -142,6 +184,9 @@ data class KimiManagedConfig(
                 credentialPresent = bool("credentialPresent"),
                 credentialSynthetic = bool("credentialSynthetic"),
                 rawConfigToml = str("rawConfigToml"),
+                capabilities = strList("capabilities"),
+                supportEfforts = strList("supportEfforts"),
+                defaultEffort = str("defaultEffort"),
             )
         }
     }

@@ -430,8 +430,8 @@
     <string name="agents_kimi_fetch">获取</string>
     <string name="agents_kimi_models_count">%1$d 个模型</string>
     <string name="agents_kimi_model_caption">要使用的模型 id。点“获取”列出你的密钥可访问的模型（如 kimi-k2.7-code）——避免“模型未找到”错误。</string>
-    <string name="agents_kimi_max_context">最大上下文长度（可选）</string>
-    <string name="agents_kimi_max_context_caption">token 数，例如 262144。留空则使用模型默认值。</string>
+    <string name="agents_kimi_max_context">最大上下文长度</string>
+    <string name="agents_kimi_max_context_caption">token 数。Kimi 要求必须有此项，留空则写入 262144。</string>
     <string name="agents_kimi_save">保存 Kimi Code 配置</string>
     <string name="agents_kimi_raw_disclosure">高级：直接编辑 config.toml</string>
     <string name="agents_kimi_raw_caption">原样写入（保留注释）并作为 TOML 校验。codeg 同时植入门禁令牌以便会话打开。</string>

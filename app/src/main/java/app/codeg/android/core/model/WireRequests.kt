@@ -375,6 +375,13 @@ data class AccountTokenBody(val accountId: String, val token: String)
  * camelCase wire (matches the backend `rename_all="camelCase"`); null optionals are
  * omitted (CodegJson.request has explicitNulls=false), which the backend's
  * `#[serde(default)]` reads as absent.
+ *
+ * The four reasoning fields are NOT "leave alone when absent": in `apikey` mode the
+ * backend rebuilds the whole managed model block from this body, reading an absent
+ * [reasoningEnabled] as `false` and then dropping `capabilities`, `support_efforts`
+ * and `default_effort` from config.toml. Every `apikey` save must therefore echo the
+ * declaration read back from disk — see `AgentConfigKimiView`. (`login` clears the
+ * block by design and `raw` writes verbatim toml, so neither is affected.)
  */
 @Serializable
 data class UpdateKimiCodeConfigBody(
@@ -388,6 +395,15 @@ data class UpdateKimiCodeConfigBody(
     val vertexProject: String? = null,
     val vertexLocation: String? = null,
     val rawConfigToml: String? = null,
+    /** Declares a thinking capability, which is what makes `kimi acp` advertise its
+     *  Thinking picker in the composer at all. */
+    val reasoningEnabled: Boolean? = null,
+    /** Declares `always_thinking` instead of `thinking` — the picker has no Off row. */
+    val alwaysThinking: Boolean? = null,
+    /** The reasoning levels the composer offers; passed to the provider verbatim. */
+    val supportEfforts: List<String>? = null,
+    /** The level the picker opens on; the backend drops one outside [supportEfforts]. */
+    val defaultEffort: String? = null,
 )
 
 /** `acp_fetch_kimi_models` — probe the provider's `/models` (doubles as a key test). */

@@ -4,6 +4,7 @@ import app.codeg.android.core.model.AcpAgentInfo
 import app.codeg.android.core.model.AgentDraft
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.GrokSettings
+import app.codeg.android.core.model.UpdateKimiCodeConfigBody
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -129,4 +130,76 @@ class AgentsViewModelTest {
 
         assertEquals("enabled", cursorStructuredForSave(draft.copy(cursorSandboxMode = "enabled"), original)?.sandboxMode)
     }
+
+    // region Kimi reasoning declaration
+    //
+    // An `apikey` save rebuilds the managed model block server-side and reads an absent
+    // `reasoningEnabled` as "off", so a body that omits these four fields DELETES the
+    // Thinking picker's declaration from config.toml. This panel has no reasoning editor,
+    // so the save must hand back whatever the live projection reports.
+
+    @Test
+    fun `kimi apikey save carries the live reasoning declaration`() {
+        val fresh = """{"interfaceType":"kimi","modelId":"kimi-k2.7-code",
+            "capabilities":["thinking","image_in","video_in","tool_use"],
+            "supportEfforts":["low","medium","high"],"defaultEffort":"medium",
+            "hasManagedBlock":true}"""
+        val body = UpdateKimiCodeConfigBody(mode = "apikey", model = "kimi-k2.7-code")
+
+        val out = kimiBodyForSave(body, fresh)
+
+        assertEquals(true, out.reasoningEnabled)
+        assertEquals(false, out.alwaysThinking)
+        assertEquals(listOf("low", "medium", "high"), out.supportEfforts)
+        assertEquals("medium", out.defaultEffort)
+        // Everything the panel itself edits is untouched.
+        assertEquals("kimi-k2.7-code", out.model)
+    }
+
+    @Test
+    fun `kimi apikey save preserves the always-on reasoning flavour`() {
+        val out = kimiBodyForSave(
+            UpdateKimiCodeConfigBody(mode = "apikey"),
+            """{"capabilities":["always_thinking","tool_use"],"supportEfforts":["high"]}""",
+        )
+        assertEquals(true, out.reasoningEnabled)
+        assertEquals(true, out.alwaysThinking)
+    }
+
+    @Test
+    fun `kimi apikey save declares reasoning off when the disk has none`() {
+        val out = kimiBodyForSave(
+            UpdateKimiCodeConfigBody(mode = "apikey"),
+            """{"interfaceType":"kimi","modelId":"m","hasManagedBlock":true}""",
+        )
+        assertEquals(false, out.reasoningEnabled)
+        assertEquals(emptyList<String>(), out.supportEfforts)
+        assertNull(out.defaultEffort)
+    }
+
+    @Test
+    fun `kimi save survives a missing or unparseable projection`() {
+        // No Kimi row in the list, or a config.toml that could not be projected: there is
+        // nothing to preserve, and it must not throw on the way to the write.
+        for (raw in listOf(null, "", "not json")) {
+            val out = kimiBodyForSave(UpdateKimiCodeConfigBody(mode = "apikey"), raw)
+            assertEquals(false, out.reasoningEnabled)
+            assertTrue(out.supportEfforts.isNullOrEmpty())
+        }
+    }
+
+    @Test
+    fun `kimi login and raw saves are passed through untouched`() {
+        // Neither rebuilds the block from a spec, so injecting a declaration would be
+        // noise at best — login clears the block, raw writes verbatim toml.
+        val declared = """{"capabilities":["thinking"],"supportEfforts":["high"]}"""
+        for (mode in listOf("login", "raw")) {
+            val out = kimiBodyForSave(UpdateKimiCodeConfigBody(mode = mode), declared)
+            assertNull(out.reasoningEnabled)
+            assertNull(out.alwaysThinking)
+            assertNull(out.supportEfforts)
+            assertNull(out.defaultEffort)
+        }
+    }
+    // endregion
 }

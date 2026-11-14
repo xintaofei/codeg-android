@@ -48,6 +48,7 @@ import app.codeg.android.core.designsystem.component.PrimaryButton
 import app.codeg.android.core.designsystem.component.SecretField
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.AcpAgentInfo
+import app.codeg.android.core.model.KIMI_DEFAULT_MAX_CONTEXT_SIZE
 import app.codeg.android.core.model.KIMI_MODEL_PLACEHOLDER
 import app.codeg.android.core.model.KimiAuthMode
 import app.codeg.android.core.model.KimiEndpointRegion
@@ -97,7 +98,12 @@ fun AgentConfigKimiView(agent: AcpAgentInfo, viewModel: AgentsViewModel) {
     var authType by remember { mutableStateOf(seed.authType ?: KimiNativeAuthType.API_KEY) }
     var apiKey by remember { mutableStateOf(seed.key ?: "") }
     var modelId by remember { mutableStateOf(seed.modelId ?: "") }
-    var maxContext by remember { mutableStateOf(seed.maxContextSize?.toString() ?: "") }
+    // Kimi's schema requires `max_context_size`, so the backend substitutes its own
+    // default when the field is blank. Seed that default instead of an empty box, so
+    // the form shows the number that will actually be written.
+    var maxContext by remember {
+        mutableStateOf((seed.maxContextSize ?: KIMI_DEFAULT_MAX_CONTEXT_SIZE).toString())
+    }
     var vertexProject by remember { mutableStateOf(seed.vertexProject ?: "") }
     var vertexLocation by remember { mutableStateOf(seed.vertexLocation ?: "") }
     var rawConfig by remember { mutableStateOf(seed.rawConfigToml ?: "") }
@@ -142,7 +148,7 @@ fun AgentConfigKimiView(agent: AcpAgentInfo, viewModel: AgentsViewModel) {
 
     fun handleSave() {
         if (mode == KimiAuthMode.LOGIN) {
-            runSave(UpdateKimiCodeConfigBody(mode = "login"))
+            runSave(UpdateKimiCodeConfigBody(mode = KimiAuthMode.LOGIN.wire))
             return
         }
         if (modelId.trim().isEmpty()) {
@@ -151,7 +157,9 @@ fun AgentConfigKimiView(agent: AcpAgentInfo, viewModel: AgentsViewModel) {
         }
         runSave(
             UpdateKimiCodeConfigBody(
-                mode = "apikey",
+                // Keyed on by `AgentsViewModel.saveKimiCodeConfig` to decide whether the
+                // reasoning declaration has to be carried over — keep it the enum's wire value.
+                mode = KimiAuthMode.APIKEY.wire,
                 interfaceType = interfaceType.wire,
                 authType = if (meta.usesApiKey) authType.wire else null,
                 baseUrl = effectiveBaseUrl,
@@ -160,6 +168,10 @@ fun AgentConfigKimiView(agent: AcpAgentInfo, viewModel: AgentsViewModel) {
                 maxContextSize = maxContext.trim().toIntOrNull(),
                 vertexProject = if (isVertex) vertexProject else null,
                 vertexLocation = if (isVertex) vertexLocation else null,
+                // The reasoning declaration is deliberately absent here: this panel has no
+                // editor for it, and the ViewModel fills it from a re-read of the LIVE
+                // config right before the write (`kimiBodyForSave`). Filling it from this
+                // screen's snapshot would revert a change made elsewhere since it opened.
             ),
         )
     }

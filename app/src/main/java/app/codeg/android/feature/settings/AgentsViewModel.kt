@@ -19,6 +19,8 @@ import app.codeg.android.core.model.FieldEdit
 import app.codeg.android.core.model.GeminiAuthMode
 import app.codeg.android.core.model.HermesProviderKind
 import app.codeg.android.core.model.JsonConfig
+import app.codeg.android.core.model.KimiAuthMode
+import app.codeg.android.core.model.KimiManagedConfig
 import app.codeg.android.core.model.ModelProviderInfo
 import app.codeg.android.core.model.PiCommandValidation
 import app.codeg.android.core.model.PiConfigProjection
@@ -388,7 +390,20 @@ class AgentsViewModel @Inject constructor(
     suspend fun saveKimiCodeConfig(body: UpdateKimiCodeConfigBody) {
         val c = client ?: throw IllegalStateException("Not connected")
         opMutex.withLock {
-            c.acpUpdateKimiCodeConfig(body)
+            // An `apikey` save rebuilds the managed model block, so it has to carry the
+            // reasoning declaration this panel cannot edit (see [kimiBodyForSave]). Re-read
+            // it from the LIVE projection here rather than from the panel's snapshot: the
+            // window in which a change made elsewhere gets reverted shrinks from "however
+            // long this screen has been open" to one round-trip. Read BEFORE any write, so
+            // a read failure aborts with nothing persisted instead of wiping the
+            // declaration — same rule as the Grok save above.
+            val payload = if (body.mode == KimiAuthMode.APIKEY.wire) {
+                val fresh = c.acpListAgents().firstOrNull { it.agentType == AgentType.KIMI_CODE }
+                kimiBodyForSave(body, fresh?.configJson)
+            } else {
+                body
+            }
+            c.acpUpdateKimiCodeConfig(payload)
             reload()
         }
     }
@@ -560,6 +575,39 @@ class AgentsViewModel @Inject constructor(
  */
 internal fun toggleWriteSource(agents: List<AcpAgentInfo>, captured: AcpAgentInfo): AcpAgentInfo =
     agents.firstOrNull { it.agentType == captured.agentType } ?: captured
+
+/**
+ * The Kimi save body to actually send, with the reasoning declaration carried over
+ * from [freshConfigJson] (the live `acp_list_agents` projection re-read at save time).
+ *
+ * An `apikey` save makes the backend REBUILD the whole managed model block, and it
+ * reads an absent `reasoningEnabled` as "off" — so a body without these four fields
+ * deletes `capabilities` / `support_efforts` / `default_effort` from config.toml,
+ * silently taking the composer's Thinking picker away. This panel has no reasoning
+ * editor, so it must hand back exactly what is already there.
+ *
+ * What survives is the declaration *as the backend models it*: the backend re-derives
+ * the base capabilities (`image_in` / `video_in` / `tool_use`) that ride alongside a
+ * thinking capability, so a hand-written `capabilities` array with a different set is
+ * normalized rather than preserved. That is the same contract the desktop panel has —
+ * there is no wire field for an arbitrary capability list.
+ *
+ * `login` (clears the block) and `raw` (writes verbatim toml) never rebuild from a
+ * spec, so they are passed through untouched. Extracted for unit testing.
+ */
+internal fun kimiBodyForSave(
+    body: UpdateKimiCodeConfigBody,
+    freshConfigJson: String?,
+): UpdateKimiCodeConfigBody {
+    if (body.mode != KimiAuthMode.APIKEY.wire) return body
+    val onDisk = KimiManagedConfig.parse(freshConfigJson)
+    return body.copy(
+        reasoningEnabled = onDisk.reasoningEnabled,
+        alwaysThinking = onDisk.alwaysThinking,
+        supportEfforts = onDisk.supportEfforts,
+        defaultEffort = onDisk.defaultEffort,
+    )
+}
 
 /**
  * The `grok_config_toml` to persist for a Grok save (null ⇒ leave config.toml

@@ -432,8 +432,8 @@
     <string name="agents_kimi_fetch">Fetch</string>
     <string name="agents_kimi_models_count">%1$d models</string>
     <string name="agents_kimi_model_caption">The model id to use. Tap Fetch to list the models your key can access (e.g. kimi-k2.7-code) — avoids “model not found” errors.</string>
-    <string name="agents_kimi_max_context">Max context size (optional)</string>
-    <string name="agents_kimi_max_context_caption">Tokens, e.g. 262144. Leave blank to use the model default.</string>
+    <string name="agents_kimi_max_context">Max context size</string>
+    <string name="agents_kimi_max_context_caption">Tokens. Kimi requires this; leaving it blank writes 262144.</string>
     <string name="agents_kimi_save">Save Kimi Code Config</string>
     <string name="agents_kimi_raw_disclosure">Advanced: edit config.toml directly</string>
     <string name="agents_kimi_raw_caption">Written verbatim (comments preserved) and validated as TOML. codeg also seeds the gate token so the session opens.</string>
