@@ -88,6 +88,8 @@ data class SessionDetailUiState(
     val backgroundTasks: List<app.codeg.android.core.model.BackgroundOutstandingTask> = emptyList(),
     /** Child connections of the delegations this connection still has running. */
     val delegatedChildren: List<String> = emptyList(),
+    /** The goal-control actions this connection's adapter offers; empty while unknown. */
+    val goalActions: List<String> = emptyList(),
     /** This connection's delegations by the call that started each, finished ones kept. */
     val delegations: Map<String, app.codeg.android.core.model.DelegationBinding> = emptyMap(),
     /** Out-of-turn turns read off the agent's transcript, shown until a detail load has them. */

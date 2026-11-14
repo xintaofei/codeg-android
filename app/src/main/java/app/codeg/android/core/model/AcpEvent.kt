@@ -692,6 +692,13 @@ data class LiveSessionSnapshot(
     val delegatedChildren: List<String> = emptyList(),
     /** The running delegations bound to a card, for a client that missed their start. */
     val activeDelegations: List<DelegationBinding> = emptyList(),
+    /**
+     * The goal-control actions this connection's adapter offers (`pause`, `clear`, …). Three
+     * ways on the wire: a list is known; `null` means `initialize` hasn't answered yet (offer
+     * nothing, read again later); absent is a server too old to say, which offers codex's
+     * legacy pair. Null here is the middle case.
+     */
+    val goalActions: List<String>? = LEGACY_GOAL_ACTIONS,
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -753,6 +760,11 @@ data class LiveSessionSnapshot(
                 backgroundOutstandingTasks = obj.arrayOrNull("background_outstanding_tasks")
                     ?.mapNotNull { AcpEvent.decodeOrNull(json, it, BackgroundOutstandingTask.serializer()) }
                     ?: emptyList(),
+                goalActions = when (val actions = obj["goal_actions"]) {
+                    null -> LEGACY_GOAL_ACTIONS
+                    is JsonArray -> actions.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+                    else -> null
+                },
                 activeDelegations = obj.arrayOrNull("active_delegations")
                     ?.mapNotNull { (it as? JsonObject)?.let { d -> DelegationBinding.fromWire(d, DelegationBinding.Status.RUNNING) } }
                     ?: emptyList(),
@@ -764,6 +776,9 @@ data class LiveSessionSnapshot(
         private fun JsonObject.intOrNull(key: String): Int? =
             (this[key] as? JsonPrimitive)
                 ?.let { runCatching { it.content.toInt() }.getOrNull() }
+
+        /** What a server too old to advertise goal actions offers: codex's pause and clear. */
+        val LEGACY_GOAL_ACTIONS = listOf("pause", "clear")
     }
 }
 

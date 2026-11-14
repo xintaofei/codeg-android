@@ -37,6 +37,8 @@ import app.codeg.android.core.model.PromptInputBlock
 import app.codeg.android.core.model.QuestionAnswer
 import app.codeg.android.core.model.RespondPermissionBody
 import app.codeg.android.core.model.StopAsyncTaskBody
+import app.codeg.android.core.model.LiveSessionSnapshot
+import app.codeg.android.core.model.GoalControlBody
 import app.codeg.android.core.model.ConversationSummary
 import app.codeg.android.core.model.UpdateConversationPinnedBody
 import app.codeg.android.core.model.UpdateConversationStatusBody
@@ -300,6 +302,11 @@ class CodegClient(
      */
     suspend fun stopAsyncTask(connectionId: String, taskId: String): Boolean =
         decode(send("acp_stop_async_task", encode(StopAsyncTaskBody(connectionId, taskId))), Boolean.serializer())
+
+    /** Pause or clear the session's active goal (codex `/goal`, claude's neutral goal). */
+    suspend fun goalControl(connectionId: String, action: String) {
+        send("acp_goal_control", encode(GoalControlBody(connectionId, action)))
+    }
 
     /** End a connection and its agent process. The conversation stays; the next prompt
      *  connects afresh and resumes it (how a settings change made after spawn applies). */
@@ -977,6 +984,15 @@ class CodegClient(
         val text = send("acp_get_session_snapshot", encode(ConnectionIdBody(connectionId)))
         if (isJsonNull(text)) return null
         return decode(text, SessionSnapshot.serializer())
+    }
+
+    /** The connection's live snapshot in the stream's own shape ([LiveSessionSnapshot]), for a
+     *  field the attach snapshot came too early to carry (goal actions before `initialize`). */
+    suspend fun liveSnapshot(connectionId: String): LiveSessionSnapshot? {
+        val text = send("acp_get_session_snapshot", encode(ConnectionIdBody(connectionId)))
+        if (isJsonNull(text)) return null
+        val obj = runCatching { CodegJson.response.parseToJsonElement(text) as? JsonObject }.getOrNull() ?: return null
+        return LiveSessionSnapshot.fromWire(obj, CodegJson.response)
     }
 
     /** Per-agent catalog of modes + config (probes the agent; slow). */

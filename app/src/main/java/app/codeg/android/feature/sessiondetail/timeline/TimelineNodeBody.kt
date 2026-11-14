@@ -65,6 +65,8 @@ import app.codeg.android.core.designsystem.markdown.SingleBlockView
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.MessageTurn
+import app.codeg.android.feature.sessiondetail.rendering.GoalCard
+import app.codeg.android.feature.sessiondetail.rendering.Goals
 import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
 import app.codeg.android.feature.sessiondetail.rendering.ToolWarning
 import app.codeg.android.feature.sessiondetail.rendering.InlineImage
@@ -102,7 +104,7 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
                 SingleBlockView(c.block, modifier)
             }
         is NodeContent.Reasoning -> ReasoningBlock(c.text, modifier, initiallyExpanded = c.streaming)
-        is NodeContent.Tool -> ToolCallCard(c.vm, modifier)
+        is NodeContent.Tool -> if (Goals.isGoalCall(c.vm.rawName)) GoalCard(c.vm, modifier) else ToolCallCard(c.vm, modifier)
         is NodeContent.ToolGroup -> ToolGroupCard(c.items, modifier, streaming = c.streaming, disclosureKey = node.id)
         is NodeContent.Image -> InlineImage(c.image, c.caption, modifier)
         is NodeContent.Compaction -> ContextCompactionDivider(c.part, modifier)

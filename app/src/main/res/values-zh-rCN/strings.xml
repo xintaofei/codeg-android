@@ -739,6 +739,23 @@
     <string name="delegation_done">已完成</string>
     <string name="delegation_failed">失败</string>
     <string name="delegation_open_session">打开会话</string>
+    <string name="goal_title">目标：</string>
+    <string name="goal_objective">目标</string>
+    <string name="goal_status_label">状态</string>
+    <string name="goal_tokens_used">已用 tokens</string>
+    <string name="goal_budget">预算</string>
+    <string name="goal_remaining">剩余</string>
+    <string name="goal_elapsed">耗时</string>
+    <string name="goal_tokens">tokens</string>
+    <string name="goal_pause">暂停</string>
+    <string name="goal_clear">清除</string>
+    <string name="goal_status_active">进行中</string>
+    <string name="goal_status_paused">已暂停</string>
+    <string name="goal_status_blocked">受阻</string>
+    <string name="goal_status_usage_limited">用量受限</string>
+    <string name="goal_status_budget_limited">预算受限</string>
+    <string name="goal_status_limited">已达上限</string>
+    <string name="goal_status_complete">已完成</string>
     <plurals name="delegation_polls">
         <item quantity="other">查看了 %d 次委派进度</item>
     </plurals>

@@ -91,6 +91,10 @@ private val TURN_METADATA_SYNC_DELAYS_MS = longArrayOf(1_500L, 3_000L, 5_000L, 8
 /** Transcript polls a turn that ended without a `turn_complete` gets to judge. */
 private const val TURN_RECONCILE_ATTEMPTS = 5
 
+/** Tries at a goal-action vocabulary not decided yet, and the first back-off (it doubles). */
+private const val GOAL_ACTIONS_RETRIES = 4
+private const val GOAL_ACTIONS_RETRY_BASE_MS = 400L
+
 /** Consecutive history pages that add nothing before the loader row stops trying. */
 private const val MAX_PAGE_STALLS = 3
 
@@ -308,6 +312,7 @@ class SessionDetailViewModel @Inject constructor(
             // the next send must connect afresh.
             override fun onConnectionGone() {
                 connectionId = null
+                _ui.update { if (it.goalActions.isEmpty()) it else it.copy(goalActions = emptyList()) }
                 if (_ui.value.isInFlight) reconcileAfterTurn()
             }
 
@@ -1303,6 +1308,49 @@ class SessionDetailViewModel @Inject constructor(
         }
     }
 
+    private var goalActionsJob: Job? = null
+
+    /**
+     * Read [conn]'s goal-action vocabulary again, backing off, until it is decided (web
+     * `useAdvertisedGoalActions`: a few tries, then give up — the controls just stay away).
+     */
+    private fun rereadGoalActions(conn: String) {
+        if (goalActionsJob?.isActive == true) return
+        val c = client ?: return
+        goalActionsJob = viewModelScope.launch {
+            repeat(GOAL_ACTIONS_RETRIES) { attempt ->
+                delay(GOAL_ACTIONS_RETRY_BASE_MS shl attempt)
+                if (connectionId != conn) return@launch
+                val actions = try {
+                    c.liveSnapshot(conn)?.goalActions
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+                if (actions != null) {
+                    if (connectionId == conn) _ui.update { it.copy(goalActions = actions) }
+                    return@launch
+                }
+            }
+        }
+    }
+
+    /** Pause or clear the session's active goal. Its new state arrives on the stream. */
+    fun goalControl(action: String) {
+        val c = client ?: return
+        val conn = connectionId ?: return
+        viewModelScope.launch {
+            try {
+                c.goalControl(conn, action)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.update { it.copy(notice = e.displayMessage()) }
+            }
+        }
+    }
+
     /** One advisory, told once: its headline, and what follows it below. */
     private fun tell(headline: String, more: String? = null) {
         _ui.update { it.copy(notice = if (more.isNullOrBlank()) headline else "$headline\n$more") }
@@ -1763,6 +1811,8 @@ class SessionDetailViewModel @Inject constructor(
      * newer one back.
      */
     private fun adoptSnapshotConnectionState(snapshot: LiveSessionSnapshot) {
+        // Goal actions not decided yet (`initialize` still in flight): read them again shortly.
+        if (snapshot.goalActions == null) snapshot.connectionId?.let(::rereadGoalActions)
         // The session this conversation's connection runs, for a later connect to resume.
         val linked = snapshot.conversationId == null || snapshot.conversationId == conversationId
         if (conversationId != null && linked && snapshot.connectionId == connectionId) {
@@ -1803,6 +1853,9 @@ class SessionDetailViewModel @Inject constructor(
                 promptSuggestion = suggestion,
                 apiRetry = null,
                 asyncTasks = tasks,
+                // Unknown until `initialize` answers: offer nothing meanwhile (a wrong button is
+                // worse than none), and take the list once a later snapshot has it.
+                goalActions = snapshot.goalActions ?: emptyList(),
                 // Whole sets, the server's current state.
                 backgroundTasks = snapshot.backgroundOutstandingTasks,
                 delegatedChildren = snapshot.delegatedChildren,
@@ -2254,6 +2307,8 @@ class SessionDetailViewModel @Inject constructor(
     private fun forgetConnection() {
         connectionId = null
         closeStream()
+        // A goal control needs a live connection to go out on.
+        _ui.update { if (it.goalActions.isEmpty()) it else it.copy(goalActions = emptyList()) }
     }
 
     override fun onCleared() {

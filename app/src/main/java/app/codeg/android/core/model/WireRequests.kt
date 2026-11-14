@@ -140,6 +140,10 @@ data class PromptBody(
 @Serializable
 data class ConnectionIdBody(val connectionId: String)
 
+/** Body for `acp_goal_control` — `pause` or `clear` the session's active goal. */
+@Serializable
+data class GoalControlBody(val connectionId: String, val action: String)
+
 /** Body for `acp_stop_async_task` — one AIR async task of a connection. */
 @Serializable
 data class StopAsyncTaskBody(val connectionId: String, val taskId: String)

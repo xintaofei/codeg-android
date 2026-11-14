@@ -58,6 +58,8 @@ import app.codeg.android.feature.sessiondetail.rendering.ActivityLive
 import app.codeg.android.feature.sessiondetail.timeline.launchCardTitle
 import app.codeg.android.feature.sessiondetail.timeline.runningSubAgents
 import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
+import app.codeg.android.feature.sessiondetail.rendering.GoalControl
+import app.codeg.android.feature.sessiondetail.rendering.LocalGoalControl
 import app.codeg.android.feature.sessiondetail.rendering.LocalOpenConversation
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -212,6 +214,11 @@ fun SessionDetailScreen(
             approvals = ui.toolApprovals,
             delegations = ui.delegations,
         )
+    }
+    // Goal controls go out on the live connection, gated on what its adapter offers.
+    // The actions are a live connection's (they go when it does).
+    val goalControl = remember(ui.goalActions) {
+        GoalControl(onControl = viewModel::goalControl, actions = ui.goalActions)
     }
     // The "load older" row sits at the head of the list, so every list index the
     // screen computes from a NODE index has to step over it.
@@ -576,6 +583,7 @@ fun SessionDetailScreen(
                     LocalDisclosures provides disclosures,
                     LocalActivityLive provides activityLive,
                     LocalOpenConversation provides onOpenConversation,
+                    LocalGoalControl provides goalControl,
                 ) {
                     LazyColumn(
                         state = listState,

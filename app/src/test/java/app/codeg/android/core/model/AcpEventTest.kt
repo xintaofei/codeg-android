@@ -612,3 +612,18 @@ class AcpEventDelegationTest {
         assertEquals(DelegationBinding.Status.RUNNING, d.status)
     }
 }
+
+/** The goal-control vocabulary is three-valued on the snapshot. */
+class AcpEventGoalActionsTest {
+
+    private val json: Json = CodegJson.response
+
+    private fun snap(raw: String) = LiveSessionSnapshot.fromWire(json.parseToJsonElement(raw).jsonObject, json)
+
+    @Test
+    fun `a list is known, null is not yet, absent is a server too old to say`() {
+        assertEquals(listOf("set", "clear"), snap("""{"goal_actions":["set","clear"]}""").goalActions)
+        assertNull(snap("""{"goal_actions":null}""").goalActions)
+        assertEquals(LiveSessionSnapshot.LEGACY_GOAL_ACTIONS, snap("{}").goalActions)
+    }
+}
