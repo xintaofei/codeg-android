@@ -4,7 +4,7 @@ import app.codeg.android.core.model.FolderVisibility.BranchSwitchPlan
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** Locks down the worktree-aware branch-switch routing ported from iOS `FolderVisibility`. */
+/** Locks down the workspace-list visibility and worktree-aware branch-switch routing ported from iOS `FolderVisibility`. */
 class FolderVisibilityTest {
 
     private fun folder(id: Int, name: String = "f$id", parentId: Int? = null) =
@@ -46,6 +46,31 @@ class FolderVisibilityTest {
     fun `displayName uses own name for a top-level folder`() {
         val root = folder(1, name = "repo")
         assertEquals("repo", FolderVisibility.displayName(root, listOf(root)))
+    }
+
+    @Test
+    fun `childToParent maps only worktrees whose root is open`() {
+        val open = listOf(folder(1), folder(2, parentId = 1), folder(3, parentId = 99))
+        assertEquals(mapOf(2 to 1), FolderVisibility.childToParent(open))
+    }
+
+    @Test
+    fun `visibleFolders hides worktrees of an open root and chat folders`() {
+        val open = listOf(
+            folder(1),
+            folder(2, parentId = 1), // worktree, root open → folds into 1
+            folder(3, parentId = 99), // worktree, root closed → stands on its own
+            folder(4).copy(kind = "chat"),
+            folder(5).copy(isChat = true),
+        )
+        assertEquals(listOf(1, 3), FolderVisibility.visibleFolders(open).map { it.id })
+    }
+
+    @Test
+    fun `mergedFolderId redirects a hidden worktree to its root`() {
+        val map = mapOf(2 to 1)
+        assertEquals(1, FolderVisibility.mergedFolderId(2, map))
+        assertEquals(3, FolderVisibility.mergedFolderId(3, map))
     }
 
     @Test

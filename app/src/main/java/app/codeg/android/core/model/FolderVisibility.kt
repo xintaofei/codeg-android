@@ -39,6 +39,38 @@ object FolderVisibility {
         return all.firstOrNull { it.id == pid }?.name ?: folder.name
     }
 
+    // region Workspace list visibility
+
+    /**
+     * Each worktree child in [open] → its parent id, for children whose parent is ALSO in
+     * [open]: a worktree whose root is closed stands on its own. Port of the web's
+     * `sidebar-conversation-list` `childToParent`.
+     */
+    fun childToParent(open: List<FolderDetail>): Map<Int, Int> {
+        val openIds = open.mapTo(HashSet()) { it.id }
+        return buildMap {
+            for (f in open) {
+                val pid = f.parentId ?: continue
+                if (pid in openIds) put(f.id, pid)
+            }
+        }
+    }
+
+    /**
+     * The folders that get their own row in a workspace list: every folder of [open] (the
+     * server's open set) that isn't a chat scratch folder or a worktree child of an open root.
+     * The server already leaves chat folders out of the open set; this guards it anyway.
+     */
+    fun visibleFolders(open: List<FolderDetail>): List<FolderDetail> {
+        val hidden = childToParent(open)
+        return open.filter { it.id !in hidden && !it.isChatFolder }
+    }
+
+    /** The folder a conversation in [folderId] counts toward: its root's, when its worktree row is hidden. */
+    fun mergedFolderId(folderId: Int, childToParent: Map<Int, Int>): Int = childToParent[folderId] ?: folderId
+
+    // endregion
+
     // region Branch-switch routing
 
     /** Where a branch switch should land. Port of web `BranchSwitchPlan`. */

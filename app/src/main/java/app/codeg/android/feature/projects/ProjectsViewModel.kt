@@ -6,6 +6,7 @@ import app.codeg.android.core.data.ServerRepository
 import app.codeg.android.core.datastore.ServerProfile
 import app.codeg.android.core.model.ConversationSummary
 import app.codeg.android.core.model.FolderDetail
+import app.codeg.android.core.model.FolderVisibility
 import app.codeg.android.core.network.CodegClient
 import app.codeg.android.core.network.displayMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -66,13 +67,23 @@ class ProjectsViewModel @Inject constructor(
         val c = client ?: return
         _ui.update { if (initial) it.copy(loading = true, error = null) else it.copy(refreshing = true) }
         try {
+            // The workspace's open folders, not every folder the server knows: one removed from
+            // the workspace stays on record (closed) so its conversations still resolve by id.
             val result = coroutineScope {
-                val f = async { c.listFolders() }
+                val f = async { c.listOpenFolders() }
                 val conv = async { runCatching { c.listConversations() }.getOrDefault(emptyList()) }
                 f.await() to conv.await()
             }
+            val open = result.first
             _ui.update {
-                it.copy(folders = result.first, conversations = result.second, hasLoaded = true, loading = false, refreshing = false)
+                it.copy(
+                    folders = FolderVisibility.visibleFolders(open),
+                    childToParent = FolderVisibility.childToParent(open),
+                    conversations = result.second,
+                    hasLoaded = true,
+                    loading = false,
+                    refreshing = false,
+                )
             }
         } catch (e: CancellationException) {
             throw e
@@ -117,7 +128,10 @@ class ProjectsViewModel @Inject constructor(
 }
 
 data class ProjectsUiState(
+    /** The rows: open folders, less chat folders and worktrees of an open root. */
     val folders: List<FolderDetail> = emptyList(),
+    /** Hidden worktree → its root, whose row counts the worktree's conversations. */
+    val childToParent: Map<Int, Int> = emptyMap(),
     val conversations: List<ConversationSummary> = emptyList(),
     val loading: Boolean = false,
     val refreshing: Boolean = false,
@@ -126,5 +140,5 @@ data class ProjectsUiState(
 ) {
     val isBusy: Boolean get() = loading || refreshing
     fun runningCount(folderId: Int): Int =
-        conversations.count { it.folderId == folderId && it.status.isLive }
+        conversations.count { FolderVisibility.mergedFolderId(it.folderId, childToParent) == folderId && it.status.isLive }
 }

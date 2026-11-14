@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import app.codeg.android.R
 import app.codeg.android.core.data.ServerRepository
 import app.codeg.android.core.model.FolderDetail
+import app.codeg.android.core.model.FolderVisibility
 import app.codeg.android.core.model.GitBranchList
 import app.codeg.android.core.model.GitCredentials
 import app.codeg.android.core.model.GitHubAccount
@@ -57,7 +58,12 @@ class ProjectDetailViewModel @Inject constructor(
                 val folders = client.listFolders()
                 val folder = folders.firstOrNull { it.id == folderId }
                     ?: throw IllegalStateException("Folder not found")
-                val conversations = runCatching { client.listConversations(folderIds = listOf(folderId)) }.getOrDefault(emptyList())
+                // The worktrees the Folders tab folds into this folder's row count here too, so the
+                // two pages agree. Without the open set, this folder's own conversations still do.
+                val worktrees = runCatching { client.listOpenFolders() }.getOrNull()
+                    ?.let { FolderVisibility.childToParent(it) }
+                    ?.filterValues { it == folderId }?.keys.orEmpty()
+                val conversations = runCatching { client.listConversations(folderIds = listOf(folderId) + worktrees) }.getOrDefault(emptyList())
                 // Prefer the live branch (the folder list often omits gitBranch); null for non-git dirs.
                 val liveBranch = folder.gitBranch ?: runCatching { client.getGitBranch(folder.path) }.getOrNull()
                 _ui.update {
