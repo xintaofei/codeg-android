@@ -302,4 +302,18 @@ class TranscriptTimelineTest {
         assertEquals(turns.dropTrailingAssistantRun(), turns.hideInFlightReply("gone"))
         assertEquals(turns.dropTrailingAssistantRun(), turns.hideInFlightReply(null))
     }
+
+    @Test
+    fun `local turns follow the server window, untouched by the in-flight hiding`() {
+        val nodes = TranscriptTimeline.buildPersisted(
+            listOf(user("u1", "q"), assistant("a1", listOf(ContentBlock.Text("partial")))),
+            emptyList(),
+            agent,
+            hideTrailingAssistantReply = true,
+            inFlightUserTurnId = "u1",
+            localTurns = listOf(assistant("live-1", listOf(ContentBlock.Text("whole")))),
+        )
+        assertTrue(nodes.none { it.id.startsWith("a1") })
+        assertTrue(nodes.any { it.id.startsWith("live-1") })
+    }
 }

@@ -63,3 +63,51 @@ internal fun holdsBatch(detail: ConversationDetail, batchStart: Int, prompts: In
     if (!reachesEnd(detail) || detail.inFlightUserTurnId != null || !endsRound(detail.turns)) return false
     return promptCount(detail.turns.drop(batchStart - offset)) >= prompts
 }
+
+/**
+ * Whether a turn ending now is handed off locally ([promotedTurns]) rather than read back
+ * from the transcript. Not when its end was inferred ([unseen]): it streamed only partly. Nor
+ * when it was observed without its prompt ever reaching this client — an agent's own turn,
+ * or another client's whose `user_message` fired before this one listened and that no
+ * snapshot carried: keeping just the reply would drop the prompt the transcript holds. A
+ * reattached turn's prompt is in the loaded window already.
+ */
+internal fun endsByHandOff(unseen: Boolean, observed: Boolean, fromReattach: Boolean, promptKnown: Boolean): Boolean =
+    !unseen && (!observed || fromReattach || promptKnown)
+
+/** What a window refresh may replace. See [refreshAdoption]. */
+internal enum class RefreshAdoption {
+    /** Leave everything as it is. */
+    SKIP,
+
+    /** The window, and the local turns with it: the read holds them. */
+    TAKE_ALL,
+
+    /** The window only; the local turns stay after it. */
+    TAKE_KEEP_LOCAL,
+}
+
+/**
+ * What a window refresh ([read], from the loaded window's offset) may replace.
+ *
+ * Nothing while a round is on screen ([roundOnScreen]: a live reply or a pending prompt): the
+ * read may hold that round already, and it will be handed off locally too, so taking the read
+ * would show it twice. Otherwise local turns give way only to a read that holds them all
+ * ([holdsBatch]); one that doesn't (still being written, a round behind) would show them
+ * twice or drop them, so it is left for a later read. A rewrite ([reanchored]) leaves no
+ * coordinates to check against — not even a reply-only batch's — so the read is taken and
+ * the local turns stay after it.
+ */
+internal fun refreshAdoption(
+    read: ConversationDetail,
+    reanchored: Boolean,
+    roundOnScreen: Boolean,
+    localTurns: List<MessageTurn>,
+    batchStart: Int,
+): RefreshAdoption = when {
+    roundOnScreen -> RefreshAdoption.SKIP
+    localTurns.isEmpty() -> RefreshAdoption.TAKE_ALL
+    reanchored -> RefreshAdoption.TAKE_KEEP_LOCAL
+    holdsBatch(read, batchStart, promptCount(localTurns)) -> RefreshAdoption.TAKE_ALL
+    else -> RefreshAdoption.SKIP
+}

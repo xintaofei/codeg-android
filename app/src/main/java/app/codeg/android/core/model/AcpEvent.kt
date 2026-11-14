@@ -395,12 +395,17 @@ data class LiveSessionSnapshot(
      * Whether the server has broadcast this turn's `user_message` yet (presence of
      * `pending_user_message`, which it sets from that event and clears at `turn_complete`).
      *
-     * Only the presence is modelled, because only the presence is used: it is the proof a
-     * steering note would survive. [status] alone isn't — the connection loop reports
-     * `prompting` first and emits `user_message` after, and that event CLEARS the turn's
-     * notes, so a note sent in between is accepted and then wiped unread.
+     * It is the proof a steering note would survive. [status] alone isn't — the connection
+     * loop reports `prompting` first and emits `user_message` after, and that event CLEARS the
+     * turn's notes, so a note sent in between is accepted and then wiped unread.
      */
     val hasPendingUserMessage: Boolean,
+    /**
+     * That `user_message` itself (Rust `PendingUserMessage`: its id and blocks), for a client
+     * that attached after it fired: the running turn's prompt, which the transcript it loaded
+     * may not hold yet. Null when absent or unreadable.
+     */
+    val pendingUserMessage: AcpEvent.UserMessage? = null,
     /**
      * The connection's most recent error. Attaching is the ONLY channel for it — the live
      * `error` event already fired — so without this a client that opened the session a beat
@@ -467,6 +472,14 @@ data class LiveSessionSnapshot(
                 feedbackToolAvailable = obj.boolOrNull("feedback_tool_available") ?: false,
                 nativeSteeringAvailable = obj.boolOrNull("native_steering_available") ?: false,
                 hasPendingUserMessage = obj.objectOrNull("pending_user_message") != null,
+                pendingUserMessage = obj.objectOrNull("pending_user_message")?.let { m ->
+                    AcpEvent.UserMessage(
+                        messageId = m.stringOrNull("message_id").orEmpty(),
+                        blocks = m.arrayOrNull("blocks")
+                            ?.mapNotNull { (it as? JsonObject)?.let(UserMessageBlock::fromWire) }
+                            ?: emptyList(),
+                    )
+                },
                 lastError = obj.objectOrNull("last_error")?.let(SessionLastError::fromWire),
                 modes = obj.objectOrNull("modes")?.let {
                     runCatching { json.decodeFromJsonElement(SessionModeState.serializer(), it) }.getOrNull()

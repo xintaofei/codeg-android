@@ -1,6 +1,10 @@
 package app.codeg.android.feature.sessiondetail
 
+import app.codeg.android.core.model.AcpEvent
 import app.codeg.android.core.model.ContentBlock
+import app.codeg.android.core.model.LiveSessionSnapshot
+import app.codeg.android.core.model.UserMessageBlock
+import kotlinx.serialization.json.jsonObject
 import app.codeg.android.core.model.ConversationDetail
 import app.codeg.android.core.model.MessageTurn
 import app.codeg.android.core.model.TurnRole
@@ -114,5 +118,76 @@ class TurnHandoffTest {
         assertFalse(sentPromptAt(read, baseline = 12, sent = sent, priorPrompts = 1))
         val ran = detail(12, 16, user("u1", "continue"), reply("a1"), user("u2", "continue"), reply("a2"))
         assertTrue(sentPromptAt(ran, baseline = 12, sent = sent, priorPrompts = 1))
+    }
+
+    @Test
+    fun `a refresh never lands on a round still on screen`() {
+        // Issued before another client's turn started, answered after: the read may hold that
+        // round, which will be handed off locally too.
+        val read = detail(12, 14, user("m1"), reply("a1"), inFlight = "m1")
+        assertEquals(RefreshAdoption.SKIP, refreshAdoption(read, false, roundOnScreen = true, localTurns = emptyList(), batchStart = 12))
+        assertEquals(RefreshAdoption.TAKE_ALL, refreshAdoption(read, false, roundOnScreen = false, localTurns = emptyList(), batchStart = 12))
+    }
+
+    @Test
+    fun `a refresh takes local turns only when it holds them`() {
+        val local = listOf(prompt("q"), MessageTurn("live-1", TurnRole.ASSISTANT, listOf(ContentBlock.Text("a")), Instant.EPOCH))
+        val holding = detail(12, 14, user("u1"), reply("a1"))
+        assertEquals(RefreshAdoption.TAKE_ALL, refreshAdoption(holding, false, false, local, batchStart = 12))
+        val behind = detail(12, 13, user("u1"))
+        assertEquals(RefreshAdoption.SKIP, refreshAdoption(behind, false, false, local, batchStart = 12))
+        // A rewrite: no coordinates to check, even for a batch with no prompt of its own.
+        val replyOnly = listOf(MessageTurn("live-1", TurnRole.ASSISTANT, listOf(ContentBlock.Text("a")), Instant.EPOCH))
+        assertEquals(RefreshAdoption.TAKE_KEEP_LOCAL, refreshAdoption(holding, true, false, replyOnly, batchStart = 12))
+    }
+
+    @Test
+    fun `an observed turn whose prompt never arrived is read back, not handed off`() {
+        assertTrue(endsByHandOff(unseen = false, observed = false, fromReattach = false, promptKnown = true))
+        assertTrue(endsByHandOff(unseen = false, observed = true, fromReattach = false, promptKnown = true))
+        // Its prompt sits in the window it was reattached from.
+        assertTrue(endsByHandOff(unseen = false, observed = true, fromReattach = true, promptKnown = false))
+        assertFalse(endsByHandOff(unseen = false, observed = true, fromReattach = false, promptKnown = false))
+        assertFalse(endsByHandOff(unseen = true, observed = false, fromReattach = false, promptKnown = true))
+    }
+
+    @Test
+    fun `a snapshot carries the running turn's prompt for a client that missed it`() {
+        val snap = LiveSessionSnapshot.fromWire(
+            json.parseToJsonElement(
+                """{"connection_id":"c1","status":"prompting",
+                    "pending_user_message":{"message_id":"m1","blocks":[{"type":"text","text":"new prompt"}]}}""",
+            ).jsonObject,
+            json,
+        )
+        assertTrue(snap.hasPendingUserMessage)
+        assertEquals(AcpEvent.UserMessage("m1", listOf(UserMessageBlock.Text("new prompt"))), snap.pendingUserMessage)
+        assertEquals(listOf(ContentBlock.Text("new prompt")), observedUserTurn(snap.pendingUserMessage!!)?.blocks)
+    }
+
+    @Test
+    fun `revision notes answered on a turn that ended meanwhile are still owed to it`() {
+        val origin = LiveTurnBuilder().apply { stopReason = "end_turn" }
+        // Handed off before the answer came back: still that turn.
+        assertTrue(planOriginCurrent(origin, live = null, handedOff = origin))
+        assertEquals(
+            PlanFollowUp.SEND_NOW,
+            planFollowUpAction(planOriginCurrent(origin, null, origin), inFlight = false, stopReason = origin.stopReason, errorMessage = null),
+        )
+        // Another turn is live now, or a different one was handed off.
+        assertFalse(planOriginCurrent(origin, live = LiveTurnBuilder(), handedOff = origin))
+        assertFalse(planOriginCurrent(origin, live = null, handedOff = LiveTurnBuilder()))
+    }
+
+    @Test
+    fun `revision notes answered on a turn the user stopped are dropped`() {
+        val origin = LiveTurnBuilder().apply {
+            appendText("plan")
+            stopReason = STOP_REASON_CANCELLED
+        }
+        assertEquals(
+            PlanFollowUp.DROP,
+            planFollowUpAction(planOriginCurrent(origin, null, origin), inFlight = false, stopReason = origin.stopReason, errorMessage = null),
+        )
     }
 }

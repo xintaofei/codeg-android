@@ -218,6 +218,15 @@ internal data class ParkedPlanNotes(val turnId: String, val notes: String) {
 }
 
 /**
+ * Whether [origin] — the turn a plan approval was answered on — is still the turn the answer
+ * applies to: the live one, or, with none live, the one just handed off. A turn that ends
+ * before the answer's response arrives is handed off at once, and that must not read as
+ * "a different turn now" and drop the revision notes it is owed.
+ */
+internal fun planOriginCurrent(origin: LiveTurnBuilder?, live: LiveTurnBuilder?, handedOff: LiveTurnBuilder?): Boolean =
+    live === origin || (live == null && origin != null && handedOff === origin)
+
+/**
  * Where a "request changes" decision's revision notes should go, decided once the
  * answer post comes back. That post is a suspension point, so by then the turn that
  * produced the approval may have finalized, failed, been cancelled, or been replaced
@@ -233,6 +242,9 @@ internal data class ParkedPlanNotes(val turnId: String, val notes: String) {
  * Extracted for testing (the branch is otherwise only reachable through a real
  * in-flight network round trip).
  */
+/** The stop reason of a turn the user cancelled (ACP `StopReason::Cancelled`). */
+internal const val STOP_REASON_CANCELLED = "cancelled"
+
 internal fun planFollowUpAction(
     sameTurn: Boolean,
     inFlight: Boolean,
@@ -241,6 +253,8 @@ internal fun planFollowUpAction(
 ): PlanFollowUp = when {
     !sameTurn -> PlanFollowUp.DROP
     inFlight -> PlanFollowUp.PARK
+    // The user stopped it: starting another turn on its behalf would undo the Stop.
+    stopReason == STOP_REASON_CANCELLED -> PlanFollowUp.DROP
     stopReason != null && errorMessage == null -> PlanFollowUp.SEND_NOW
     else -> PlanFollowUp.DROP
 }
