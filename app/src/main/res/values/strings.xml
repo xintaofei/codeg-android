@@ -752,6 +752,23 @@
         <item quantity="other">%d tools</item>
     </plurals>
 
+    <!-- Search tool output, grouped per file. -->
+    <plurals name="search_results_matches">
+        <item quantity="one">%d match</item>
+        <item quantity="other">%d matches</item>
+    </plurals>
+    <plurals name="search_results_files">
+        <item quantity="one">%d file</item>
+        <item quantity="other">%d files</item>
+    </plurals>
+    <string name="search_results_more">+%1$d more</string>
+    <string name="search_results_none">No matches</string>
+
+    <!-- Plan document card. -->
+    <string name="plan_document_title">Plan</string>
+    <string name="plan_document_show_more">Show more</string>
+    <string name="plan_document_show_less">Show less</string>
+
     <!-- ===== Projects · Changes (working tree) ===== -->
     <string name="changes_load_failed">Couldn\'t load changes</string>
     <string name="changes_clean_title">Working tree clean</string>

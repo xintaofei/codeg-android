@@ -37,7 +37,7 @@ object ToolDerive {
     )
     private val executeNames = setOf(
         "bash", "shell", "sh", "exec", "exec_command", "execute", "execute_command",
-        "run_command", "command", "run_terminal_cmd", "terminal", "write_stdin",
+        "run_command", "command", "run_terminal_cmd", "terminal",
     )
     private val webNames = setOf(
         "webfetch", "web_fetch", "fetch", "websearch", "web_search", "browser", "browser_action",
@@ -81,6 +81,12 @@ object ToolDerive {
             }
         }
 
+        // Codex code-mode identities. Titled from the fields the server's parser
+        // recovered rather than from the arguments, which hold a JS program or a
+        // bare session id — the generic rules produce "wait: 7106" for those.
+        if (CodexCodeMode.isScriptName(name)) return scriptTitle(args)
+        if (CodexCodeMode.isShellSessionName(name)) return sessionTitle(name.trim().lowercase(), args)
+
         return when (n) {
             "read", "read_file", "readfile", "cat", "view" ->
                 str(listOf("file_path", "path", "filename", "file", "target_file"))?.let { "Read ${PathFormat.short(it)}" }
@@ -115,6 +121,31 @@ object ToolDerive {
         }
     }
 
+    /** "Script" / the first command the parser could read, with the call count beside it. */
+    private fun scriptTitle(args: JsonObject?): String {
+        val script = CodexCodeMode.parseScript(args) ?: return "Script"
+        script.title?.trim()?.takeIf { it.isNotEmpty() }?.let { return simplifyCommand(it) }
+        if (script.callCount > 0) return "Script (${script.callCount} tool calls)"
+        return "Script"
+    }
+
+    /**
+     * "Wait <command>" / "Terminate <command>" / "Stdin ^C", falling back to the
+     * bare session id when the history parser could not resolve one — that id is
+     * also shown beside the command that started the session, so the two can be
+     * matched up by eye.
+     */
+    private fun sessionTitle(name: String, args: JsonObject?): String {
+        val call = CodexCodeMode.parseSessionCall(args) ?: return display(name)
+        if (name == CodexCodeMode.WRITE_STDIN_TOOL_NAME && call.chars.isNotEmpty()) {
+            return "Stdin ${CodexCodeMode.describeStdinChars(call.chars)}"
+        }
+        val verb = if (call.terminate) "Terminate" else "Wait"
+        call.command?.let { return "$verb ${simplifyCommand(it)}" }
+        call.sessionId?.let { return "$verb cell $it" }
+        return display(name)
+    }
+
     /**
      * Coarse category for a tool. The ACP `kind` hint (live tools carry an
      * authoritative category) wins first; otherwise we match on **exact**
@@ -128,6 +159,15 @@ object ToolDerive {
             "search" -> return ToolKindBucket.SEARCH
             "execute", "command", "bash", "shell", "terminal" -> return ToolKindBucket.EXECUTE
             "fetch", "web" -> return ToolKindBucket.WEB
+        }
+        // Ahead of the canonical strip, though still behind the `kind` hint:
+        // codex's session tools continue a background shell an `exec_command`
+        // started, so they belong with the commands in a tool group's tally,
+        // and the code-mode script card is a program codex ran. Both are
+        // matched exactly — see [CodexCodeMode.isShellSessionName] for why an
+        // `mcp__…__wait` must not land here.
+        if (CodexCodeMode.isShellSessionName(name) || CodexCodeMode.isScriptName(name)) {
+            return ToolKindBucket.EXECUTE
         }
         val n = canonical(name)
         if (n in readNames) return ToolKindBucket.READ

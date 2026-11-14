@@ -60,25 +60,58 @@ data class ToolCallVM(
             // mode entered"). Resolve them to the canonical name up front so the live
             // stream lands on the same identity the persisted path reads — and so the
             // card's title stops changing mid-stream.
-            val resolvedName = ToolDerive.grokPlanModeName(meta) ?: rawName
-            val parsed = ToolDerive.parseJson(input)
-            val bucket = ToolDerive.bucket(resolvedName, kind)
+            val planName = ToolDerive.grokPlanModeName(meta)
+            // A codex-acp command action announces no tool name and no input at all,
+            // only a human title, so both have to be read back out of it.
+            val action = if (planName == null) CodexCommandAction.resolve(rawName) else null
+            val resolvedName = planName ?: action?.name ?: rawName
+            // The NAME is recovered from the title whichever way this falls — as the
+            // web's `normalizeToolName` does — because a tool genuinely called
+            // "Search for 'x'" does not exist, and without the rename the card loses
+            // its search icon and its tool-group tally. Only the INPUT is conditional:
+            // arguments the call actually sent are never replaced by a recovered guess.
+            val effectiveInput = when {
+                sentArguments(input) -> input
+                // A bare "Search" / "List files" recovers an identity but no
+                // fields. Keeping the `{}` the host sent in its place would give
+                // the card a body to expand that has nothing in it.
+                action != null -> action.input.takeIf { it.isNotEmpty() }?.toString()
+                else -> input
+            }
+            val parsed = ToolDerive.parseJson(effectiveInput)
+            // A recovered command action outranks the ACP `kind` hint, which codex
+            // sends as "read" for a directory listing — kind-first bucketing would
+            // file it as a file read and route the envelope through the Read-file
+            // body. Every other call keeps the hint's precedence.
+            val bucket = ToolDerive.bucket(resolvedName, if (action != null) "" else kind)
             return ToolCallVM(
                 id = id,
                 rawName = resolvedName,
                 kind = kind,
                 state = state,
-                input = input,
+                input = effectiveInput,
                 output = output,
                 content = content,
                 isError = isError,
                 displayTitle = ToolDerive.title(resolvedName, parsed),
                 bucket = bucket,
-                diffFiles = ToolDerive.diff(bucket, input, output, content, parsed),
+                diffFiles = ToolDerive.diff(bucket, effectiveInput, output, content, parsed),
                 meta = meta,
             )
         }
     }
+}
+
+/**
+ * Whether a call carried arguments of its own. Not just "is [input] non-blank":
+ * hosts encode "no arguments" as `{}` as readily as they omit the field, and
+ * reading that as real input strands a codex command action with no recovered
+ * query — the wrench icon and the raw envelope the recovery exists to prevent.
+ * Text that is not JSON at all counts as real.
+ */
+internal fun sentArguments(input: String?): Boolean {
+    if (input.isNullOrBlank()) return false
+    return ToolDerive.effectiveArgs(ToolDerive.parseJson(input))?.isEmpty() != true
 }
 
 /** One ordered piece of a rendered assistant turn (static subset; live variants added in M4). */

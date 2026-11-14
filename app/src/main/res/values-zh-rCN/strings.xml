@@ -743,6 +743,21 @@
         <item quantity="other">%d 个工具</item>
     </plurals>
 
+    <!-- Search tool output, grouped per file. -->
+    <plurals name="search_results_matches">
+        <item quantity="other">%d 处匹配</item>
+    </plurals>
+    <plurals name="search_results_files">
+        <item quantity="other">%d 个文件</item>
+    </plurals>
+    <string name="search_results_more">还有 %1$d 条</string>
+    <string name="search_results_none">无匹配</string>
+
+    <!-- Plan document card. -->
+    <string name="plan_document_title">方案</string>
+    <string name="plan_document_show_more">展开</string>
+    <string name="plan_document_show_less">收起</string>
+
     <!-- ===== Projects · Changes (working tree) ===== -->
     <string name="changes_load_failed">无法加载更改</string>
     <string name="changes_clean_title">工作区干净</string>
