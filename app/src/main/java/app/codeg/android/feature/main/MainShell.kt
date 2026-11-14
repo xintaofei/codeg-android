@@ -6,10 +6,15 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Forum
@@ -26,7 +31,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -114,7 +118,6 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
     val nav = rememberNavController()
     val backStackEntry by nav.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = HomeTab.entries.any { it.route == currentRoute }
     val tabRoutes = remember { HomeTab.entries.map { it.route }.toSet() }
     val selectedProfile by appViewModel.selectedProfile.collectAsStateWithLifecycle()
     // Wide screens (tablets / landscape) use a side NavigationRail instead of the bottom bar.
@@ -122,14 +125,13 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
 
     // Scroll-driven bottom bar: scrolling up (reading further down the list) slides
     // the bar off the bottom edge and collapses the New Task FAB to just "+";
-    // scrolling back down slides it in and restores the label. The bar lives in this
-    // shared Scaffold while the scroll happens in each tab's LazyColumn, so a
-    // NestedScrollConnection on the content picks up every tab's scroll for free.
+    // scrolling back down slides it in and restores the label. Every tab's frame shares this
+    // state, and a NestedScrollConnection on each frame's page picks up its scroll for free.
     var barsVisible by remember { mutableStateOf(true) }
     val density = LocalDensity.current
     // 0 = fully shown, 1 = fully hidden. Collapsing the bar's *reported* height (not
-    // just translating it) is what lets the Scaffold hand the freed strip back to the
-    // content, so every tab's list reclaims the space instead of leaving it blank.
+    // just translating it) is what hands the freed strip back to the page, so every tab's
+    // list reclaims the space instead of leaving it blank.
     val barProgress by animateFloatAsState(
         targetValue = if (barsVisible) 0f else 1f,
         animationSpec = tween(durationMillis = 280),
@@ -198,69 +200,45 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
         app.codeg.android.core.common.DeepLinkBus.consume(route)
     }
 
-    Scaffold(
-        containerColor = Color.Transparent,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        bottomBar = {
-            if (showBottomBar && !wide) {
-                CodegBottomBar(
-                    currentRoute,
-                    onTab,
-                    // Report a shrinking height as the bar hides so the Scaffold gives the
-                    // freed strip back to the content (the whole point — reclaim the space);
-                    // the bar is drawn at full height and slid down within, clipped away.
-                    modifier = Modifier
-                        .clipToBounds()
-                        .layout { measurable, constraints ->
-                            val placeable = measurable.measure(constraints)
-                            val full = placeable.height
-                            val reported = (full * (1f - barProgress)).roundToInt().coerceIn(0, full)
-                            layout(placeable.width, reported) {
-                                placeable.placeRelative(0, (full * barProgress).roundToInt())
-                            }
-                        },
-                )
-            }
+    // The tab chrome — the bottom bar, or the rail on a wide screen — is part of each tab's own
+    // frame ([TabFrame]), not the shell's: it slides away with its tab when a detail is pushed and
+    // comes back with it on pop. Chrome owned by the shell appeared and vanished with the route
+    // instead, resizing the page still animating out — on Back the detail's composer leapt up
+    // over the incoming list for the length of the transition.
+    val frame: @Composable (HomeTab, @Composable () -> Unit) -> Unit = { tab, content ->
+        TabFrame(tab, wide, { barProgress }, barConnection, onTab, content)
+    }
+    NavHost(
+        navController = nav,
+        startDestination = HomeTab.CHATS.route,
+        modifier = Modifier.fillMaxSize(),
+        // Material motion: lateral tab switches fade through; pushing a
+        // detail/editor slides in along the X axis (and back reverses it).
+        enterTransition = {
+            val lateral = initialState.destination.route in tabRoutes &&
+                targetState.destination.route in tabRoutes
+            if (lateral) fadeIn(tween(190))
+            else slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) +
+                fadeIn(tween(300))
         },
-    ) { padding ->
-        // Only intercept scroll when the bottom bar is actually shown (a tab route on a
-        // narrow screen); the side rail and full-screen routes don't hide-on-scroll.
-        val contentModifier =
-            if (showBottomBar && !wide) Modifier.nestedScroll(barConnection) else Modifier
-        androidx.compose.foundation.layout.Row(
-            Modifier.padding(padding).fillMaxSize().then(contentModifier),
-        ) {
-            if (showBottomBar && wide) CodegNavRail(currentRoute, onTab)
-            NavHost(
-                navController = nav,
-                startDestination = HomeTab.CHATS.route,
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                // Material motion: lateral tab switches fade through; pushing a
-                // detail/editor slides in along the X axis (and back reverses it).
-                enterTransition = {
-                    val lateral = initialState.destination.route in tabRoutes &&
-                        targetState.destination.route in tabRoutes
-                    if (lateral) fadeIn(tween(190))
-                    else slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) +
-                        fadeIn(tween(300))
-                },
-                exitTransition = {
-                    val lateral = initialState.destination.route in tabRoutes &&
-                        targetState.destination.route in tabRoutes
-                    if (lateral) fadeOut(tween(190))
-                    else slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) +
-                        fadeOut(tween(300))
-                },
-                popEnterTransition = {
-                    slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) +
-                        fadeIn(tween(300))
-                },
-                popExitTransition = {
-                    slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) +
-                        fadeOut(tween(300))
-                },
-            ) {
-            composable(HomeTab.CHATS.route) {
+        exitTransition = {
+            val lateral = initialState.destination.route in tabRoutes &&
+                targetState.destination.route in tabRoutes
+            if (lateral) fadeOut(tween(190))
+            else slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) +
+                fadeOut(tween(300))
+        },
+        popEnterTransition = {
+            slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) +
+                fadeIn(tween(300))
+        },
+        popExitTransition = {
+            slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) +
+                fadeOut(tween(300))
+        },
+    ) {
+        composable(HomeTab.CHATS.route) {
+            frame(HomeTab.CHATS) {
                 CompositionLocalProvider(LocalBarsVisible provides barsVisible) {
                     SessionListScreen(
                         servers = servers,
@@ -273,83 +251,132 @@ fun MainShell(appViewModel: AppViewModel, servers: List<ServerProfile>) {
                     )
                 }
             }
-            composable(HomeTab.FOLDERS.route) {
-                ProjectListScreen(onOpenFolder = { id -> nav.navigate("project/$id") })
-            }
-            composable(HomeTab.ACTIVITY.route) {
-                ActivityScreen(onOpenConversation = { id -> nav.navigate("conversation/$id") })
-            }
-            composable(HomeTab.SEARCH.route) {
-                SearchScreen(onOpenConversation = { id -> nav.navigate("conversation/$id") })
-            }
-            composable(HomeTab.SETTINGS.route) {
-                SettingsScreen()
-            }
+        }
+        composable(HomeTab.FOLDERS.route) {
+            frame(HomeTab.FOLDERS) { ProjectListScreen(onOpenFolder = { id -> nav.navigate("project/$id") }) }
+        }
+        composable(HomeTab.ACTIVITY.route) {
+            frame(HomeTab.ACTIVITY) { ActivityScreen(onOpenConversation = { id -> nav.navigate("conversation/$id") }) }
+        }
+        composable(HomeTab.SEARCH.route) {
+            frame(HomeTab.SEARCH) { SearchScreen(onOpenConversation = { id -> nav.navigate("conversation/$id") }) }
+        }
+        composable(HomeTab.SETTINGS.route) {
+            frame(HomeTab.SETTINGS) { SettingsScreen() }
+        }
 
-            composable(
-                route = "conversation/{id}",
-                arguments = listOf(navArgument("id") { type = NavType.IntType }),
-            ) {
-                SessionDetailScreen(
-                    onBack = { nav.popBackStack() },
-                    onOpenSession = { folderId -> nav.navigate("$ROUTE_NEW_TASK?folderId=$folderId") },
-                    onOpenConversation = { id -> nav.navigate("conversation/$id") },
-                    onManageTags = { nav.navigate(ROUTE_TAGS) },
-                )
-            }
-            composable(
-                route = "$ROUTE_NEW_TASK?folderId={folderId}",
-                arguments = listOf(
-                    navArgument("folderId") {
-                        type = NavType.IntType
-                        defaultValue = -1
-                    },
-                ),
-            ) {
-                SessionDetailScreen(
-                    onBack = { nav.popBackStack() },
-                    onOpenSession = { folderId -> nav.navigate("$ROUTE_NEW_TASK?folderId=$folderId") },
-                    onOpenConversation = { id -> nav.navigate("conversation/$id") },
-                    onManageTags = { nav.navigate(ROUTE_TAGS) },
-                )
-            }
+        composable(
+            route = "conversation/{id}",
+            arguments = listOf(navArgument("id") { type = NavType.IntType }),
+        ) {
+            SessionDetailScreen(
+                onBack = { nav.popBackStack() },
+                onOpenSession = { folderId -> nav.navigate("$ROUTE_NEW_TASK?folderId=$folderId") },
+                onOpenConversation = { id -> nav.navigate("conversation/$id") },
+                onManageTags = { nav.navigate(ROUTE_TAGS) },
+            )
+        }
+        composable(
+            route = "$ROUTE_NEW_TASK?folderId={folderId}",
+            arguments = listOf(
+                navArgument("folderId") {
+                    type = NavType.IntType
+                    defaultValue = -1
+                },
+            ),
+        ) {
+            SessionDetailScreen(
+                onBack = { nav.popBackStack() },
+                onOpenSession = { folderId -> nav.navigate("$ROUTE_NEW_TASK?folderId=$folderId") },
+                onOpenConversation = { id -> nav.navigate("conversation/$id") },
+                onManageTags = { nav.navigate(ROUTE_TAGS) },
+            )
+        }
 
-            composable(
-                route = "project/{folderId}",
-                arguments = listOf(navArgument("folderId") { type = NavType.IntType }),
-            ) {
-                ProjectDetailScreen(onBack = { nav.popBackStack() })
-            }
+        composable(
+            route = "project/{folderId}",
+            arguments = listOf(navArgument("folderId") { type = NavType.IntType }),
+        ) {
+            ProjectDetailScreen(onBack = { nav.popBackStack() })
+        }
 
-            composable(ROUTE_TAGS) {
-                TagsManagerScreen(onBack = { nav.popBackStack() })
-            }
+        composable(ROUTE_TAGS) {
+            TagsManagerScreen(onBack = { nav.popBackStack() })
+        }
 
-            composable(ROUTE_SERVERS) {
-                ServerListScreen(
-                    servers = servers,
-                    selectedId = selectedProfile?.id,
-                    onSelect = appViewModel::selectServer,
-                    onDelete = appViewModel::deleteServer,
-                    onAdd = { nav.navigate(ROUTE_EDITOR) },
-                    onEdit = { id -> nav.navigate("$ROUTE_EDITOR?serverId=$id") },
-                    onBack = { nav.popBackStack() },
-                )
-            }
-            composable(
-                route = "$ROUTE_EDITOR?serverId={serverId}",
-                arguments = listOf(
-                    navArgument("serverId") {
-                        type = NavType.StringType
-                        nullable = true
-                        defaultValue = null
-                    },
-                ),
-            ) {
-                ServerEditorScreen(onDone = { nav.popBackStack() })
-            }
+        composable(ROUTE_SERVERS) {
+            ServerListScreen(
+                servers = servers,
+                selectedId = selectedProfile?.id,
+                onSelect = appViewModel::selectServer,
+                onDelete = appViewModel::deleteServer,
+                onAdd = { nav.navigate(ROUTE_EDITOR) },
+                onEdit = { id -> nav.navigate("$ROUTE_EDITOR?serverId=$id") },
+                onBack = { nav.popBackStack() },
+            )
+        }
+        composable(
+            route = "$ROUTE_EDITOR?serverId={serverId}",
+            arguments = listOf(
+                navArgument("serverId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) {
+            ServerEditorScreen(onDone = { nav.popBackStack() })
+        }
+    }
+}
+
+/**
+ * One tab's page with its navigation chrome: the bottom bar beneath it, or the rail beside it
+ * on a wide screen. The bar shows [tab] as selected — its own tab, not the current route, so a
+ * page animating out keeps its own selection.
+ *
+ * The bar hides on scroll by reporting a shrinking height ([barProgress]: 0 shown, 1 hidden)
+ * while it slides down within that height, clipped — so the page reclaims the freed strip. It
+ * never reports less than the gesture bar, though, so the page's end stays clear of it.
+ */
+@Composable
+private fun TabFrame(
+    tab: HomeTab,
+    wide: Boolean,
+    barProgress: () -> Float,
+    barConnection: NestedScrollConnection,
+    onTab: (HomeTab) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    if (wide) {
+        androidx.compose.foundation.layout.Row(Modifier.fillMaxSize()) {
+            CodegNavRail(tab.route, onTab)
+            Box(Modifier.weight(1f).fillMaxHeight().windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))) {
+                content()
             }
         }
+        return
+    }
+    val gestureBar = WindowInsets.navigationBars
+    androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
+        // The bar reacts to every scroll inside the page.
+        Box(Modifier.weight(1f).fillMaxWidth().nestedScroll(barConnection)) { content() }
+        CodegBottomBar(
+            tab.route,
+            onTab,
+            modifier = Modifier
+                .clipToBounds()
+                .layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    val full = placeable.height
+                    val progress = barProgress()
+                    val floor = gestureBar.getBottom(this).coerceAtMost(full)
+                    val reported = (full * (1f - progress)).roundToInt().coerceIn(floor, full)
+                    layout(placeable.width, reported) {
+                        placeable.placeRelative(0, (full * progress).roundToInt())
+                    }
+                },
+        )
     }
 }
 
