@@ -656,6 +656,8 @@
     <string name="toolcall_failed_count">%1$d failed</string>
     <string name="tool_error_output">Error output</string>
     <string name="liveplan_title">Plan</string>
+    <string name="proposed_plan_title">Proposed plan</string>
+    <string name="proposed_plan_planning">Planning…</string>
     <string name="liveplan_priority_high">High</string>
     <string name="timeline_unsupported_block">Unsupported block: %1$s</string>
     <string name="timeline_copied">Copied</string>

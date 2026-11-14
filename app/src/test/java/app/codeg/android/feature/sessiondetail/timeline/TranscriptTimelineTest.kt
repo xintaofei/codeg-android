@@ -3,6 +3,7 @@ package app.codeg.android.feature.sessiondetail.timeline
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.MessageTurn
+import app.codeg.android.core.model.PlanEntry
 import app.codeg.android.core.model.TurnRole
 import app.codeg.android.core.model.TurnUsage
 import app.codeg.android.feature.sessiondetail.LiveSegment
@@ -135,7 +136,6 @@ class TranscriptTimelineTest {
         val live = LiveTurnState(
             id = "live1",
             segments = listOf(LiveSegment.Text("t0", "intro paragraph\n\ntail paragraph")),
-            livePlan = emptyList(),
             isStreaming = true,
             stopReason = null,
             error = null,
@@ -158,7 +158,6 @@ class TranscriptTimelineTest {
         val live = LiveTurnState(
             id = "live1",
             segments = emptyList(),
-            livePlan = emptyList(),
             isStreaming = false,
             stopReason = "empty",
             error = LiveTurnError("The agent produced no reply.", "stderr:\n  Error: 401"),
@@ -177,7 +176,6 @@ class TranscriptTimelineTest {
         val live = LiveTurnState(
             id = "live1",
             segments = listOf(LiveSegment.Text("t0", "partial")),
-            livePlan = emptyList(),
             isStreaming = false,
             stopReason = null,
             error = LiveTurnError("Cancelled"),
@@ -514,6 +512,48 @@ class TranscriptTimelineTest {
         assertEquals(listOf("compaction:live-1#0"), shape(TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent)))
         b.appendText("carrying on")
         assertEquals(listOf("header:live-1", "compaction:live-1#0"), shape(TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent)))
+    }
+
+    @Test
+    fun `the live plan stands where the agent last revised it`() {
+        val b = LiveTurnBuilder("live-1")
+        b.updatePlan(listOf(PlanEntry("A")))
+        b.appendText("working on it")
+        b.updatePlan(listOf(PlanEntry("A", status = "completed")))
+        val ids = TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent).map { it.id }
+        assertEquals(listOf("live-1#header", "live-1#0", "live-1#1"), ids)
+        val plan = TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent).single { it.content is NodeContent.Plan }
+        assertEquals("live-1#1", plan.id)
+        // An empty plan takes it away.
+        b.updatePlan(emptyList())
+        assertTrue(TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent).none { it.content is NodeContent.Plan })
+    }
+
+    @Test
+    fun `a turn handed off keeps its plan in place, as the same row`() {
+        val b = LiveTurnBuilder("live-1")
+        b.appendText("first")
+        b.updatePlan(listOf(PlanEntry("Step one")))
+        b.appendText("then")
+        b.isStreaming = false
+        val live = TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent)
+        val handed = TranscriptTimeline.build(listOf(user("u1", "q")) + b.snapshotAsMessageTurns(), emptyList(), null, agent)
+        val livePlan = live.single { it.content is NodeContent.Plan }
+        val keptPlan = handed.single { it.content is NodeContent.Plan }
+        assertEquals(livePlan.id, keptPlan.id)
+        assertEquals(livePlan.content, keptPlan.content)
+    }
+
+    @Test
+    fun `prose the plan cut in two is one again once it moves on`() {
+        val b = LiveTurnBuilder("live-1")
+        b.appendText("Hello wor")
+        b.updatePlan(listOf(PlanEntry("A")))
+        b.appendText("ld, done.")
+        b.updatePlan(listOf(PlanEntry("A", status = "completed")))
+        val segments = b.snapshot().segments
+        assertEquals(listOf("Hello world, done."), segments.filterIsInstance<LiveSegment.Text>().map { it.text })
+        assertTrue(segments.last() is LiveSegment.Plan)
     }
 }
 

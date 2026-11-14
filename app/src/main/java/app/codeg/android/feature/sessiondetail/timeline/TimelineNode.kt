@@ -13,12 +13,13 @@ import app.codeg.android.core.model.TurnUsage
 import app.codeg.android.core.model.isTurnErrorRecord
 import app.codeg.android.core.model.turnErrors
 import app.codeg.android.feature.sessiondetail.LiveSegment
-import app.codeg.android.feature.sessiondetail.rendering.ActivitySummary
-import app.codeg.android.feature.sessiondetail.rendering.ContextCompaction
 import app.codeg.android.feature.sessiondetail.LiveToolCallState
 import app.codeg.android.feature.sessiondetail.LiveTurnState
 import app.codeg.android.feature.sessiondetail.STEER_TURN_PREFIX
+import app.codeg.android.feature.sessiondetail.rendering.ActivitySummary
+import app.codeg.android.feature.sessiondetail.rendering.ContextCompaction
 import app.codeg.android.feature.sessiondetail.rendering.MessageRender
+import app.codeg.android.feature.sessiondetail.rendering.ProposedPlan
 import app.codeg.android.feature.sessiondetail.rendering.RenderPart
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallVM
@@ -47,6 +48,9 @@ sealed interface NodeContent {
     data class Compaction(val part: RenderPart.Compaction) : NodeContent
     data class Footer(val turn: MessageTurn, val questionId: String?) : NodeContent
     data class Plan(val entries: List<PlanEntry>) : NodeContent
+
+    /** codex's Plan-mode plan document: part of the reply's answer. */
+    data class ProposedPlan(val markdown: String, val streaming: Boolean) : NodeContent
     data object Thinking : NodeContent
     /** [details] is the server's redacted diagnostic evidence, shown behind a disclosure (see
      *  [LiveTurnError]). Present only for failures codeg *inferred* — an ordinary error, and a
@@ -103,7 +107,7 @@ data class TimelineNode(
             is NodeContent.Image -> MarkerKind.Image
             is NodeContent.Compaction -> MarkerKind.Compaction
             is NodeContent.Footer -> MarkerKind.Footer
-            is NodeContent.Plan -> MarkerKind.Plan
+            is NodeContent.Plan, is NodeContent.ProposedPlan -> MarkerKind.Plan
             is NodeContent.Thinking -> MarkerKind.Thinking
             is NodeContent.Error -> MarkerKind.Error
             is NodeContent.Unsupported -> MarkerKind.System // reuse the dim system tick
@@ -132,6 +136,7 @@ data class TimelineNode(
             is NodeContent.Compaction -> "compaction"
             is NodeContent.Footer -> "footer"
             is NodeContent.Plan -> "plan"
+            is NodeContent.ProposedPlan -> "proposedplan"
             is NodeContent.Thinking -> "thinking"
             is NodeContent.Error -> "error"
             is NodeContent.Unsupported -> "unsupported"
@@ -445,8 +450,8 @@ object TranscriptTimeline {
     }
 
     /**
-     * The in-flight reply → its entries: the reply (plan? + grouped parts), the agent working
-     * (before its first word), its failure.
+     * The in-flight reply → its entries: the reply (its parts, the plan where the agent last
+     * revised it), the agent working (before its first word), its failure.
      *
      * A note steered into the turn ([LiveSegment.Steer]) splits it the way the transcript
      * will: the reply so far, the note as the user's message, then the reply that follows —
@@ -484,21 +489,16 @@ object TranscriptTimeline {
             val trailer = buildList {
                 // Nothing streamed yet (or nothing since a note was steered in): the agent is
                 // working on it.
-                if (streaming && chunk.isEmpty() && (k > 0 || live.livePlan.isEmpty())) {
+                if (streaming && chunk.isEmpty()) {
                     add(TimelineNode("$ownerId#thinking", NodeContent.Thinking, agent))
                 }
                 if (last) live.error?.let { add(TimelineNode("${live.id}#error", NodeContent.Error(it.message, it.details), agent)) }
             }
-            val plan = if (k == 0 && live.livePlan.isNotEmpty()) {
-                listOf(TimelineNode("${live.id}#plan", NodeContent.Plan(live.livePlan), agent))
-            } else {
-                emptyList()
-            }
-            val calls = liveParts(chunk)
+            val calls = liveParts(chunk, streaming)
             // A compaction with nothing else said (yet) is a divider between turns, as in
             // history ([hoistsCompaction]); once the reply goes on, it is one of its steps.
             val compaction = calls.singleOrNull() as? RenderPart.Compaction
-            if (compaction != null && plan.isEmpty()) {
+            if (compaction != null) {
                 entries.add(ThreadEntry.Row(TimelineNode("$ownerId#0", NodeContent.Compaction(compaction), agent, startsGroup = true)))
                 trailer.forEach { entries.add(ThreadEntry.Row(it)) }
                 return@forEachIndexed
@@ -506,7 +506,7 @@ object TranscriptTimeline {
             // Live text is parsed uncached (each flush is a new key → cache churn).
             entries.add(
                 ThreadEntry.Reply(
-                    replyRows(ownerId, agent, calls, cached = false, completed = !streaming, durationMs = null, trailer, plan, caret = streaming),
+                    replyRows(ownerId, agent, calls, cached = false, completed = !streaming, durationMs = null, trailer, caret = streaming),
                 ),
             )
         }
@@ -527,7 +527,6 @@ object TranscriptTimeline {
         completed: Boolean,
         durationMs: Int?,
         trailer: List<TimelineNode>,
-        lead: List<TimelineNode> = emptyList(),
         caret: Boolean = false,
     ): ReplyRows {
         val parts = MessageRender.groupConsecutiveTools(calls)
@@ -544,7 +543,7 @@ object TranscriptTimeline {
         }
         val split = answerStart(parts)
         val summary = summarizeActivity(calls)
-        val process = lead + rows.take(split).flatten()
+        val process = rows.take(split).flatten()
         return ReplyRows(
             id = id,
             agent = agent,
@@ -630,11 +629,17 @@ object TranscriptTimeline {
         return out
     }
 
-    private fun liveParts(segments: List<LiveSegment>): List<RenderPart> {
+    /** [streaming]: the reply is still written, so an unclosed `<proposed_plan>` is a card being written. */
+    private fun liveParts(segments: List<LiveSegment>, streaming: Boolean): List<RenderPart> {
         val parts = mutableListOf<RenderPart>()
         for (seg in segments) {
             when (seg) {
-                is LiveSegment.Text -> if (seg.text.isNotBlank()) parts.add(RenderPart.Text(seg.text))
+                is LiveSegment.Text -> if (seg.text.isNotBlank()) {
+                    ProposedPlan.expand(seg.text, streaming)?.let(parts::addAll) ?: parts.add(RenderPart.Text(seg.text))
+                }
+                // Where the agent last revised it — the same place, and the same card, as
+                // the turn handed off keeps it ([LiveTurnBuilder.snapshotAsMessageTurns]).
+                is LiveSegment.Plan -> if (seg.entries.isNotEmpty()) parts.add(RenderPart.Plan(seg.entries))
                 is LiveSegment.Thinking -> if (seg.text.isNotBlank()) parts.add(RenderPart.Reasoning(seg.text))
                 // Same boundary-marker treatment as the persisted path: codex emits the
                 // `Context compacting` → `Context compacted` pair on one id, so the
@@ -676,6 +681,8 @@ object TranscriptTimeline {
             is RenderPart.Compaction -> listOf(TimelineNode(base, NodeContent.Compaction(part), agent))
             is RenderPart.Error -> listOf(TimelineNode(base, NodeContent.Error(part.message), agent))
             is RenderPart.Unknown -> listOf(TimelineNode(base, NodeContent.Unsupported(part.type), agent))
+            is RenderPart.Plan -> listOf(TimelineNode(base, NodeContent.Plan(part.entries), agent))
+            is RenderPart.ProposedPlan -> listOf(TimelineNode(base, NodeContent.ProposedPlan(part.markdown, part.streaming), agent))
         }
     }
 

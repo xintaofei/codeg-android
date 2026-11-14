@@ -1,6 +1,7 @@
 package app.codeg.android.feature.sessiondetail.rendering
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +27,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.codeg.android.R
+import app.codeg.android.core.designsystem.markdown.MarkdownContent
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.PlanEntry
 
@@ -88,5 +90,34 @@ private fun PlanRow(entry: PlanEntry) {
             )
         }
         Box(Modifier.size(0.dp))
+    }
+}
+
+/**
+ * codex's Plan-mode plan document (`<proposed_plan>`), as a card of its own rather than raw
+ * text with visible tags (web `ProposedPlanPart`). Free-form markdown, unlike [LivePlanView]'s
+ * checklist; while it is still being written and has nothing in it yet, it says so.
+ */
+@Composable
+fun ProposedPlanCard(markdown: String, streaming: Boolean, modifier: Modifier = Modifier) {
+    val colors = CodegTheme.colors
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.textPrimary.copy(alpha = 0.03f))
+            .border(0.5.dp, colors.hairline, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.Rounded.Checklist, null, tint = colors.accent, modifier = Modifier.size(15.dp))
+            Text(stringResource(R.string.proposed_plan_title), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.textSecondary)
+        }
+        if (markdown.isNotBlank()) {
+            MarkdownContent(markdown)
+        } else if (streaming) {
+            Text(stringResource(R.string.proposed_plan_planning), fontSize = 12.sp, color = colors.textTertiary)
+        }
     }
 }

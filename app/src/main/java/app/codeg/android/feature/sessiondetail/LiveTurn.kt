@@ -8,8 +8,9 @@ import app.codeg.android.core.model.MessageTurn
 import app.codeg.android.core.model.PlanEntry
 import app.codeg.android.core.model.ToolCallStateSnapshot
 import app.codeg.android.core.model.TurnRole
-import kotlinx.serialization.json.JsonObject
+import app.codeg.android.feature.sessiondetail.rendering.PlanParse
 import java.time.Instant
+import kotlinx.serialization.json.JsonObject
 
 /** Immutable, render-ready snapshot of one in-flight tool call. */
 data class LiveToolCallState(
@@ -50,6 +51,11 @@ sealed interface LiveSegment {
     data class Steer(val noteId: String, val text: String) : LiveSegment {
         override val key: String get() = "s-$noteId"
     }
+
+    /** The agent's plan, where it last updated it ([LiveTurnBuilder.updatePlan]). */
+    data class Plan(val entries: List<PlanEntry>) : LiveSegment {
+        override val key: String get() = "p"
+    }
 }
 
 /** Id prefix of the user turn a steered note becomes. See [promptCount]. */
@@ -70,12 +76,11 @@ data class LiveTurnError(val message: String, val details: String? = null)
 data class LiveTurnState(
     val id: String,
     val segments: List<LiveSegment>,
-    val livePlan: List<PlanEntry>,
     val isStreaming: Boolean,
     val stopReason: String?,
     val error: LiveTurnError?,
 ) {
-    val isEmpty: Boolean get() = segments.isEmpty() && error == null && livePlan.isEmpty()
+    val isEmpty: Boolean get() = segments.isEmpty() && error == null
 }
 
 /**
@@ -91,6 +96,7 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         class Thinking(val id: String, val text: StringBuilder) : Seg()
         class Tool(val call: ToolBuilder) : Seg()
         class Steer(val noteId: String, val text: String, val at: Instant) : Seg()
+        class Plan(val entries: List<PlanEntry>) : Seg()
     }
 
     private class ToolBuilder(
@@ -108,7 +114,6 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
     private val toolIndex = mutableMapOf<String, ToolBuilder>()
     private var seq = 0
 
-    var livePlan: List<PlanEntry> = emptyList()
     var isStreaming: Boolean = true
     var stopReason: String? = null
     var error: LiveTurnError? = null
@@ -232,7 +237,35 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         if (meta != null) call.meta = meta
     }
 
-    fun updatePlan(entries: List<PlanEntry>) { livePlan = entries }
+    /**
+     * The agent's plan, as of now. It stands where it was last updated, as the web's
+     * `PLAN_UPDATE` keeps it: the old one is taken out and the new one goes at the end, so it
+     * moves to the point in the reply where the agent revised it. An empty one removes it.
+     */
+    fun updatePlan(entries: List<PlanEntry>) {
+        val at = segments.indexOfFirst { it is Seg.Plan }
+        val current = (segments.getOrNull(at) as? Seg.Plan)?.entries
+        if (at == segments.lastIndex && current == entries) return
+        if (at >= 0) {
+            segments.removeAt(at)
+            // What streamed either side of it was one run of prose (or of thought) the plan
+            // cut in two — appends join a run otherwise — so it is joined again, or a sentence
+            // split mid-word would draw as two paragraphs.
+            val before = segments.getOrNull(at - 1)
+            val after = segments.getOrNull(at)
+            when {
+                before is Seg.Text && after is Seg.Text -> {
+                    before.text.append(after.text)
+                    segments.removeAt(at)
+                }
+                before is Seg.Thinking && after is Seg.Thinking -> {
+                    before.text.append(after.text)
+                    segments.removeAt(at)
+                }
+            }
+        }
+        if (entries.isNotEmpty()) segments.add(Seg.Plan(entries))
+    }
 
     /**
      * Seed this (empty) builder from a reattach snapshot: rebuild the in-flight
@@ -272,7 +305,6 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         val previous = toolIndex.toMap()
         segments.clear()
         toolIndex.clear()
-        livePlan = emptyList()
         seedFrom(snapshot)
         for ((id, call) in toolIndex) {
             val held = previous[id] ?: continue
@@ -295,7 +327,7 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         )
     }
 
-    val isEmpty: Boolean get() = segments.isEmpty() && error == null && livePlan.isEmpty()
+    val isEmpty: Boolean get() = segments.isEmpty() && error == null
 
     /** The active (unfinished) tool's title, for the compose status line. */
     fun activeToolTitle(): String? {
@@ -314,6 +346,7 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
                 is Seg.Text -> LiveSegment.Text(seg.id, seg.text.toString())
                 is Seg.Thinking -> LiveSegment.Thinking(seg.id, seg.text.toString())
                 is Seg.Steer -> LiveSegment.Steer(seg.noteId, seg.text)
+                is Seg.Plan -> LiveSegment.Plan(seg.entries)
                 is Seg.Tool -> LiveSegment.Tool(
                     LiveToolCallState(
                         id = seg.call.id,
@@ -328,7 +361,6 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
                 )
             }
         },
-        livePlan = livePlan,
         isStreaming = isStreaming,
         stopReason = stopReason,
         error = error,
@@ -364,6 +396,9 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
                     closePart()
                     out.add(MessageTurn("$STEER_TURN_PREFIX${seg.noteId}", TurnRole.USER, listOf(ContentBlock.Text(seg.text)), seg.at))
                 }
+                // Kept where it stood, as the call the transcript records a plan by, which
+                // draws as the same plan card ([PlanParse]).
+                is Seg.Plan -> blocks.add(ContentBlock.ToolUse("$id-plan", PlanParse.HANDOFF_TOOL_NAME, PlanParse.handoffInput(seg.entries)))
             }
         }
         closePart()

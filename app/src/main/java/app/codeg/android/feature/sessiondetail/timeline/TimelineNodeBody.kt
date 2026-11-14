@@ -67,6 +67,7 @@ import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.MessageTurn
 import app.codeg.android.feature.sessiondetail.rendering.InlineImage
 import app.codeg.android.feature.sessiondetail.rendering.LivePlanView
+import app.codeg.android.feature.sessiondetail.rendering.ProposedPlanCard
 import app.codeg.android.feature.sessiondetail.rendering.ReasoningBlock
 import app.codeg.android.feature.sessiondetail.rendering.RenderPart
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallCard
@@ -105,6 +106,7 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
         is NodeContent.Compaction -> ContextCompactionDivider(c.part, modifier)
         is NodeContent.Footer -> TurnFooter(c.turn, c.questionId, modifier)
         is NodeContent.Plan -> LivePlanView(c.entries, modifier)
+        is NodeContent.ProposedPlan -> ProposedPlanCard(c.markdown, c.streaming, modifier)
         is NodeContent.Thinking -> ThinkingShimmer(modifier)
         is NodeContent.Error -> InlineTurnError(c.message, c.details, modifier)
         is NodeContent.ReplyHeader -> ReplyHeaderBody(c, modifier)

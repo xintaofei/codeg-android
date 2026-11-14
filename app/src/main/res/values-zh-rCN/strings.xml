@@ -649,6 +649,8 @@
     <string name="toolcall_failed_count">%1$d 个失败</string>
     <string name="tool_error_output">错误输出</string>
     <string name="liveplan_title">计划</string>
+    <string name="proposed_plan_title">计划提案</string>
+    <string name="proposed_plan_planning">规划中…</string>
     <string name="liveplan_priority_high">高</string>
     <string name="timeline_unsupported_block">不支持的块：%1$s</string>
     <string name="timeline_copied">已复制</string>

@@ -4,6 +4,7 @@ import app.codeg.android.core.designsystem.diff.DiffFile
 import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.ImageData
 import app.codeg.android.core.model.MessageTurn
+import app.codeg.android.core.model.PlanEntry
 import kotlinx.serialization.json.JsonObject
 
 /** The visual lifecycle of a tool call. */
@@ -132,6 +133,12 @@ sealed interface RenderPart {
     data class Tool(val vm: ToolCallVM) : RenderPart
     data class ToolGroup(val items: List<ToolCallVM>, val streaming: Boolean) : RenderPart
     data class Image(val image: ImageData, val caption: String?) : RenderPart
+
+    /** A plan checklist: the live plan update, or a persisted plan-like call ([PlanParse]). */
+    data class Plan(val entries: List<PlanEntry>) : RenderPart
+
+    /** codex's Plan-mode `<proposed_plan>` document ([ProposedPlan]); [streaming] while unclosed. */
+    data class ProposedPlan(val markdown: String, val streaming: Boolean) : RenderPart
     /**
      * A context compaction (`meta.contextCompaction`) — a conversation boundary
      * marker, not a tool call. Rendered as a chrome-less centred divider; the token
@@ -177,7 +184,9 @@ object MessageRender {
             if (idx in consumed) return@forEachIndexed
             when (block) {
                 is ContentBlock.Text ->
-                    if (block.text.isNotBlank()) parts.add(RenderPart.Text(block.text))
+                    if (block.text.isNotBlank()) {
+                        ProposedPlan.expand(block.text, streaming = false)?.let(parts::addAll) ?: parts.add(RenderPart.Text(block.text))
+                    }
                 is ContentBlock.Thinking ->
                     if (block.text.isNotBlank()) parts.add(RenderPart.Reasoning(block.text))
                 is ContentBlock.Image ->
@@ -188,6 +197,15 @@ object MessageRender {
                 }
                 is ContentBlock.ToolUse -> {
                     val resultIdx = findResult(blocks, idx, block.id, consumed)
+                    // A plan-like call that carries a checklist draws as the plan the live
+                    // stream showed, its result ("Todos modified") consumed with it. Only one
+                    // that yields entries: anything else stays a tool call.
+                    val planEntries = if (PlanParse.isPlanLikeToolName(block.name)) PlanParse.parseTodos(block.inputPreview) else emptyList()
+                    if (planEntries.isNotEmpty()) {
+                        resultIdx?.let(consumed::add)
+                        parts.add(RenderPart.Plan(planEntries))
+                        return@forEachIndexed
+                    }
                     var output: String? = null
                     var isErr = false
                     if (resultIdx != null) {

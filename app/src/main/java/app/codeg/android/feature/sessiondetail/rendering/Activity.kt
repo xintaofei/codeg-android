@@ -203,13 +203,15 @@ internal fun retrySignature(vm: ToolCallVM): String? {
 
 /**
  * Whether [part] is the reply's answer rather than the process that produced it (web
- * `isTurnAnswerPart`): prose, an image, a failure in the agent's words. Everything else —
- * calls, thoughts, compactions — is process. Exhaustive on purpose: a new part kind fails
+ * `isTurnAnswerPart`): prose, an image, a failure in the agent's words, the plan document
+ * codex proposes. Everything else — calls, thoughts, compactions, todo checklists — is process. Exhaustive on purpose: a new part kind fails
  * to compile here until it is classified.
  */
 fun isAnswerPart(part: RenderPart): Boolean = when (part) {
-    is RenderPart.Text, is RenderPart.Image, is RenderPart.Error -> true
-    is RenderPart.Reasoning, is RenderPart.Tool, is RenderPart.ToolGroup, is RenderPart.Compaction, is RenderPart.Unknown -> false
+    is RenderPart.Text, is RenderPart.Image, is RenderPart.Error, is RenderPart.ProposedPlan -> true
+    is RenderPart.Reasoning, is RenderPart.Tool, is RenderPart.ToolGroup, is RenderPart.Compaction, is RenderPart.Plan,
+    is RenderPart.Unknown,
+    -> false
 }
 
 /**
