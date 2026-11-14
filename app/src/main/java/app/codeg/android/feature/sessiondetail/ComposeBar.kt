@@ -39,10 +39,30 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.codeg.android.feature.sessiondetail.composer.ComposerKey
+import app.codeg.android.feature.sessiondetail.composer.ComposerKeyOutcome
+import app.codeg.android.feature.sessiondetail.composer.ComposerPick
+import app.codeg.android.feature.sessiondetail.composer.ComposerSuggestionPanel
+import app.codeg.android.feature.sessiondetail.composer.ComposerSuggestions
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -89,8 +109,31 @@ fun ComposeBar(
     /** The prompt the agent predicts comes next, offered in gray while the field is empty; a
      *  tap on the button beside it fills it in (nothing is sent). */
     suggestion: String? = null,
+    /** The inline `/`·`$` menu and `@` panel this field feeds; null for a field without them. */
+    suggestions: ComposerSuggestions? = null,
 ) {
     val colors = CodegTheme.colors
+    // The field keeps its own selection (the menus read the caret); the text stays the
+    // caller's. An outside change — a send clearing it, a restored draft — puts the caret at
+    // the end.
+    var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
+    val value = if (field.text == text) field else TextFieldValue(text, TextRange(text.length))
+    // Adopted as the field's own once drawn, so a draft cleared and then restored to the same
+    // text never brings back the caret (or composition) it had before.
+    LaunchedEffect(text) {
+        if (field.text != text) field = TextFieldValue(text, TextRange(text.length))
+    }
+    var focused by remember { mutableStateOf(false) }
+    val panel = suggestions?.panel?.collectAsStateWithLifecycle()?.value
+    if (suggestions != null) {
+        LaunchedEffect(suggestions, value.text, value.selection, focused) {
+            suggestions.update(value.text, value.selection.takeIf { it.collapsed }?.end, focused)
+        }
+    }
+    val applyPick: (ComposerPick) -> Unit = { pick ->
+        field = TextFieldValue(pick.text, TextRange(pick.caret))
+        if (pick.text != text) onTextChange(pick.text)
+    }
     // `sendingNote` blocks the ordinary Send too. The draft is deliberately still on screen
     // while a note is in flight, and the turn can finish underneath it — a native note is
     // allowed to complete after `turn_complete`. Without this the Stop would flip back to
@@ -107,6 +150,13 @@ fun ComposeBar(
     )
 
     Column(modifier = modifier.fillMaxWidth()) {
+        if (suggestions != null && panel != null) {
+            ComposerSuggestionPanel(
+                state = panel,
+                onPick = { row -> suggestions.pick(row, value.text)?.let(applyPick) },
+                onSelectTab = suggestions::selectTab,
+            )
+        }
         // A hairline setting the composer off from the timeline above it — the same
         // separator the bottom navigation bar uses, so every bottom-chrome surface is
         // delineated from its content the same way.
@@ -186,12 +236,32 @@ fun ComposeBar(
                     )
                 }
                 BasicTextField(
-                    value = text,
-                    onValueChange = onTextChange,
+                    value = value,
+                    onValueChange = { next ->
+                        field = next
+                        if (next.text != text) onTextChange(next.text)
+                    },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.textPrimary),
                     cursorBrush = SolidColor(colors.accent),
                     maxLines = 6,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { focused = it.isFocused }
+                        // A hardware keyboard drives an open menu: arrows move, Enter/Tab pick,
+                        // Escape closes. Soft keyboards send none of these as key events.
+                        .onPreviewKeyEvent { event ->
+                            val s = suggestions
+                            val key = composerKey(event)
+                            if (s == null || panel == null || key == null) return@onPreviewKeyEvent false
+                            when (val outcome = s.handleKey(key, value.text, composing = value.composition != null)) {
+                                ComposerKeyOutcome.Ignored -> false
+                                ComposerKeyOutcome.Handled -> true
+                                is ComposerKeyOutcome.Replace -> {
+                                    applyPick(ComposerPick(outcome.text, outcome.caret))
+                                    true
+                                }
+                            }
+                        },
                 )
             }
             // The web fills it in on Tab; a phone has none, so the fill is a button of its own.
@@ -289,5 +359,19 @@ fun ComposeBar(
                 }
             }
         }
+    }
+}
+
+/** The hardware key an open suggestion menu may take, or null for any other key. */
+private fun composerKey(event: KeyEvent): ComposerKey? {
+    if (event.type != KeyEventType.KeyDown) return null
+    return when (event.key) {
+        Key.DirectionUp -> ComposerKey.UP
+        Key.DirectionDown -> ComposerKey.DOWN
+        // Shift+Enter stays the field's newline.
+        Key.Enter, Key.NumPadEnter -> if (event.isShiftPressed) null else ComposerKey.ENTER
+        Key.Tab -> if (event.isShiftPressed) ComposerKey.SHIFT_TAB else ComposerKey.TAB
+        Key.Escape -> ComposerKey.ESCAPE
+        else -> null
     }
 }

@@ -1133,6 +1133,16 @@
     <string name="insert_empty_experts">没有与该智能体关联的专家。</string>
     <string name="insert_empty_commands">暂无可用的斜杠命令。</string>
 
+    <!-- ===== Session Detail · Composer inline / menu and @ panel ===== -->
+    <string name="composer_suggest_loading_commands">正在加载命令…</string>
+    <string name="composer_suggest_searching">正在搜索…</string>
+    <string name="composer_suggest_no_matches">无匹配项</string>
+    <string name="composer_suggest_no_workspace">此会话没有可搜索的文件夹</string>
+    <string name="composer_suggest_more">还有更多结果，继续输入以筛选</string>
+    <string name="composer_suggest_tab_agents">智能体</string>
+    <string name="composer_suggest_tab_files">文件</string>
+    <string name="composer_suggest_skill">技能</string>
+
     <!-- ===== Session Detail · Permission fallback ===== -->
     <string name="perm_request_title">权限请求</string>
     <string name="perm_option_grants">各选项将授予的权限</string>

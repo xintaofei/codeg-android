@@ -216,6 +216,9 @@ sealed interface AcpEvent {
     /** Whether this connection's agent can fork its session (`session/fork`). */
     data class ForkSupported(val supported: Boolean) : AcpEvent
 
+    /** The agent's slash commands, re-advertised. Replaces the whole list. */
+    data class AvailableCommands(val commands: List<AvailableCommandInfo>) : AcpEvent
+
     /**
      * A transient error the agent is retrying on its own, keeping the turn alive — NOT a turn
      * failure. Two sources share it: `turn_retrying` (codex `_meta.codex.error` with
@@ -430,6 +433,10 @@ sealed interface AcpEvent {
                 "selectors_ready" -> SelectorsReady
                 "remote_control" -> RemoteControl(obj.objectOrNull("remote_control")?.let(RemoteControlInfo::fromWire))
                 "fork_supported" -> ForkSupported(obj.boolOrNull("supported") ?: false)
+                // A list that does not decode is not an empty one: replacing the menu with
+                // nothing would be worse than ignoring the update.
+                "available_commands" -> decodeListOrNull(json, obj["commands"], AvailableCommandInfo.serializer())
+                    ?.let(::AvailableCommands) ?: Unknown(type)
                 "turn_retrying" -> {
                     val message = obj.stringOrNull("message").orEmpty()
                     ApiRetry(
@@ -715,6 +722,9 @@ data class LiveSessionSnapshot(
     val remoteControl: RemoteControlInfo? = null,
     /** Whether the agent can fork its session. */
     val forkSupported: Boolean = false,
+    /** The agent's slash commands as the connection holds them. Null when the field is absent
+     *  or did not decode — never read as "no commands". */
+    val availableCommands: List<AvailableCommandInfo>? = null,
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -789,6 +799,7 @@ data class LiveSessionSnapshot(
                     ?: emptyList(),
                 remoteControl = obj.objectOrNull("remote_control")?.let(RemoteControlInfo::fromWire),
                 forkSupported = obj.boolOrNull("fork_supported") ?: false,
+                availableCommands = AcpEvent.decodeListOrNull(json, obj["available_commands"], AvailableCommandInfo.serializer()),
             )
 
         private fun JsonObject.intOrNull(key: String): Int? =

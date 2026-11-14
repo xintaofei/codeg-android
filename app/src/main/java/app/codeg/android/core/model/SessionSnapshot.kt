@@ -12,6 +12,11 @@ data class AvailableCommandInfo(
     val name: String,
     val description: String? = null,
     val inputHint: String? = null,
+    /** The agent marks the command as a skill (claude-agent-acp, JetBrains AIR). Absent on
+     *  the wire when false. */
+    val skill: Boolean = false,
+    /** The skill's `SKILL.md`, when the agent sent it. Only set with [skill]. */
+    val skillPath: String? = null,
 )
 
 /**
@@ -166,4 +171,7 @@ data class SessionConfigSelectGroup(
 data class AgentOptionsSnapshot(
     val modes: SessionModeState? = null,
     val configOptions: List<SessionConfigOption> = emptyList(),
+    /** The slash commands the probe's session advertised (empty when it named none within the
+     *  probe's window) — how a draft, which has no live session, still gets a `/` menu. */
+    val availableCommands: List<AvailableCommandInfo> = emptyList(),
 )

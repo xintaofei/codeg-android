@@ -118,6 +118,10 @@ import app.codeg.android.core.model.UpdateAgentEnvBody
 import app.codeg.android.core.model.AgentSkillContent
 import app.codeg.android.core.model.AgentSkillsListResult
 import app.codeg.android.core.model.SkillListBody
+import app.codeg.android.core.model.CancelWorkspaceFileSearchBody
+import app.codeg.android.core.model.WorkspaceFileEntry
+import app.codeg.android.core.model.WorkspaceFileSearchBody
+import app.codeg.android.core.model.WorkspaceSearchRequest
 import app.codeg.android.core.model.SkillReadBody
 import app.codeg.android.core.model.SkillSaveBody
 import app.codeg.android.core.model.SkillDeleteBody
@@ -150,6 +154,7 @@ import app.codeg.android.core.model.DescribeAgentOptionsBody
 import app.codeg.android.core.model.SetModeBody
 import app.codeg.android.core.model.SetConfigOptionBody
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -950,6 +955,48 @@ class CodegClient(
         send("acp_delete_agent_skill", encode(SkillDeleteBody(agentType, scope, skillId)))
     }
 
+    // region Composer (`/` menu skills, `@` file search)
+
+    /**
+     * The skills an agent's sessions can load from [workspacePath], for the composer's `/`·`$`
+     * menu (`acp_list_agent_runtime_skills`). For OpenCode that is more than the Skills settings
+     * page manages (`.claude` folders and the folders above the workspace); for every other
+     * agent the two agree.
+     */
+    suspend fun listAgentRuntimeSkills(agentType: AgentType, workspacePath: String?): AgentSkillsListResult =
+        decode(
+            send("acp_list_agent_runtime_skills", encode(SkillListBody(agentType, workspacePath))),
+            AgentSkillsListResult.serializer(),
+        )
+
+    /**
+     * Rank the workspace's files against [query] server-side and return at most [limit]
+     * (clamped 1…200 by the server). The first search of a cold root builds its index — the
+     * backend bounds that at five minutes — so this one call waits as long as the web does
+     * (`timeoutMs: 330_000`) instead of the 30s every other call gets.
+     */
+    suspend fun searchWorkspaceFiles(
+        path: String,
+        query: String,
+        limit: Int,
+        request: WorkspaceSearchRequest,
+    ): List<WorkspaceFileEntry> =
+        decode(
+            send(
+                "search_workspace_files",
+                encode(WorkspaceFileSearchBody(path, query, limit, request)),
+                timeoutMillis = FILE_SEARCH_TIMEOUT_MS,
+            ),
+            ListSerializer(WorkspaceFileEntry.serializer()),
+        )
+
+    /** Stop the search [request] names (and any older one of its consumer). */
+    suspend fun cancelWorkspaceFileSearch(request: WorkspaceSearchRequest) {
+        send("cancel_workspace_file_search", encode(CancelWorkspaceFileSearchBody(request)))
+    }
+
+    // endregion
+
     /** The global built-in expert catalog (`experts_list`). */
     suspend fun expertsList(): List<ExpertListItem> =
         decode(send("experts_list", encode(EmptyBody)), ListSerializer(ExpertListItem.serializer()))
@@ -1129,14 +1176,23 @@ class CodegClient(
     /**
      * `POST /api/<path>` with [bodyJson] as the body. Returns the raw response
      * text, or throws an [ApiError] for any non-2xx / transport failure.
+     *
+     * [timeoutMillis] lifts the engine's 30s ceiling for one call that legitimately runs long
+     * (a cold workspace index); null keeps the engine's own timeouts.
      */
-    private suspend fun send(path: String, bodyJson: String): String {
+    private suspend fun send(path: String, bodyJson: String, timeoutMillis: Long? = null): String {
         val url = "$baseUrl/api/$path"
         val response = try {
             http.post(url) {
                 header(HttpHeaders.Authorization, "Bearer $token")
                 contentType(ContentType.Application.Json)
                 setBody(bodyJson)
+                if (timeoutMillis != null) {
+                    timeout {
+                        requestTimeoutMillis = timeoutMillis + TIMEOUT_GRACE_MS
+                        socketTimeoutMillis = timeoutMillis
+                    }
+                }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Cancellation must stay cancellation — never masquerade as a transport error,
@@ -1174,6 +1230,12 @@ class CodegClient(
     // endregion
 
     companion object {
+        /** The backend bounds a file search's queue wait + traversal to five minutes. */
+        private const val FILE_SEARCH_TIMEOUT_MS = 330_000L
+
+        /** How much longer a long call may take end to end than it may sit silent. */
+        private const val TIMEOUT_GRACE_MS = 30_000L
+
         /** Trim a trailing slash so `"$baseUrl/api/<name>"` never doubles up. */
         fun normalizeBaseUrl(raw: String): String =
             raw.trim().trimEnd('/')

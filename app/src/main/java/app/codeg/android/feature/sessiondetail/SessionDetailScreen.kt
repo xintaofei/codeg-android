@@ -56,6 +56,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import app.codeg.android.feature.sessiondetail.composer.ComposerReferenceCodec
 import app.codeg.android.feature.sessiondetail.timeline.ForkControl
 import app.codeg.android.feature.sessiondetail.timeline.LocalForkControl
 import app.codeg.android.feature.sessiondetail.rendering.ActivityLive
@@ -163,7 +164,8 @@ fun SessionDetailScreen(
     // when the composer is empty, so it never clobbers a fresh draft typed during the send.
     LaunchedEffect(ui.restoreDraft) {
         ui.restoreDraft?.let { restored ->
-            if (draft.isBlank()) draft = restored
+            // It left in its wire form; its mention links read as tokens again.
+            if (draft.isBlank()) draft = viewModel.composer.restore(restored)
             viewModel.consumeRestoredDraft()
         }
     }
@@ -549,7 +551,9 @@ fun SessionDetailScreen(
                         onEdit = { id ->
                             // Back into the composer, after anything already being written there.
                             viewModel.takeQueued(id)?.let { item ->
-                                draft = if (draft.isBlank()) item.text else draft.trimEnd() + "\n" + item.text
+                                // Queued text is in its wire form; its mention links read as tokens.
+                                val restored = viewModel.composer.restore(item.text)
+                                draft = if (draft.isBlank()) restored else draft.trimEnd() + "\n" + restored
                             }
                         },
                         onRemove = viewModel::removeQueued,
@@ -576,8 +580,10 @@ fun SessionDetailScreen(
                 } else ComposeBar(
                     text = draft,
                     onTextChange = { draft = it },
+                    // The `@` mentions leave as the web's Markdown links: from here on (the queue
+                    // included) the text is in its wire form.
                     onSend = {
-                        viewModel.send(draft)
+                        viewModel.send(viewModel.composer.encode(draft))
                         draft = ""
                     },
                     isInFlight = ui.isInFlight,
@@ -586,7 +592,7 @@ fun SessionDetailScreen(
                     // gives up its slot to keep the field usable on a phone.
                     onPlus = if (ui.isInFlight) null else ({ showInsert = true }),
                     onQueue = if (ui.isInFlight) ({
-                        viewModel.send(draft)
+                        viewModel.send(viewModel.composer.encode(draft))
                         draft = ""
                     }) else null,
                     onAttach = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -599,7 +605,8 @@ fun SessionDetailScreen(
                                 // only if the composer still holds what was sent — a refusal
                                 // (or an edit made while it was in flight) leaves the text
                                 // exactly where the user can see it.
-                                if (viewModel.sendNote(sent).await() && draft == sent) draft = ""
+                                // Sent in its wire form; compared against what the field showed.
+                                if (viewModel.sendNote(viewModel.composer.encode(sent)).await() && draft == sent) draft = ""
                             }
                         }
                     } else {
@@ -608,6 +615,7 @@ fun SessionDetailScreen(
                     noteLandsInstantly = ui.notesLandInstantly,
                     sendingNote = ui.sendingNote,
                     suggestion = ui.promptSuggestion?.takeIf { !ui.isInFlight },
+                    suggestions = viewModel.composer,
                 )
             }
         },
@@ -923,7 +931,8 @@ private fun QueueStrip(
             ) {
                 Text("#${index + 1}", fontSize = 11.sp, color = colors.textTertiary)
                 Text(
-                    item.text.ifEmpty {
+                    // Queued text is in its wire form; a mention reads as its label here.
+                    ComposerReferenceCodec.foldLinks(item.text).ifEmpty {
                         pluralStringResource(R.plurals.queue_images, item.attachments.size, item.attachments.size)
                     },
                     fontSize = 12.sp,

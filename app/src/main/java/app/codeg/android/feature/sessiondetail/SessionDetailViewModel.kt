@@ -39,6 +39,9 @@ import app.codeg.android.core.network.CodegClient
 import app.codeg.android.core.network.conversationMoved
 import app.codeg.android.core.network.displayMessage
 import app.codeg.android.core.network.isStaleConnection
+import app.codeg.android.core.model.WorkspaceSearchRequest
+import app.codeg.android.feature.sessiondetail.composer.ComposerReferenceCodec
+import app.codeg.android.feature.sessiondetail.composer.ComposerSuggestions
 import app.codeg.android.feature.sessiondetail.interactive.ParsedPermission
 import app.codeg.android.feature.sessiondetail.interactive.PermissionMerge
 import app.codeg.android.feature.sessiondetail.interactive.permissionToolCallId
@@ -290,6 +293,33 @@ class SessionDetailViewModel @Inject constructor(
         sendQueued = { next -> send(next.text, next.attachments, SendOrigin.QUEUE) },
     )
 
+    /**
+     * The composer's inline `/`·`$` menu and `@` panel, and the mention tokens the draft holds
+     * (the screen encodes them into links on every send, queue and steer).
+     */
+    val composer = ComposerSuggestions(
+        scope = viewModelScope,
+        source = object : ComposerSuggestions.Source {
+            override fun context() = ComposerSuggestions.Context(client?.baseUrl.orEmpty(), agent, folder?.path)
+
+            override suspend fun fetchCommands(allowProbe: Boolean) = fetchComposerCommands(allowProbe)
+
+            override suspend fun runtimeSkills(agent: AgentType, workspaceRoot: String?) =
+                composerClient().listAgentRuntimeSkills(agent, workspaceRoot)
+
+            override suspend fun agents() = composerClient().acpListAgents()
+
+            override suspend fun searchFiles(root: String, query: String, limit: Int, request: WorkspaceSearchRequest) =
+                composerClient().searchWorkspaceFiles(root, query, limit, request)
+
+            override suspend fun cancelFileSearch(request: WorkspaceSearchRequest) {
+                client?.cancelWorkspaceFileSearch(request)
+            }
+        },
+    )
+
+    private fun composerClient(): CodegClient = client ?: throw IllegalStateException("No server")
+
     /** The event subscription to [connectionId]. See [streamListener]. */
     private val stream = SessionStream(
         scope = viewModelScope,
@@ -422,6 +452,9 @@ class SessionDetailViewModel @Inject constructor(
                         )
                     }
                 }
+                // The agent and folder are known now, and they are what the composer's `/`
+                // menu lists for.
+                composer.screenDidLoad()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -685,7 +718,9 @@ class SessionDetailViewModel @Inject constructor(
         if (conversationId != null) return
         val c = client ?: return
         val f = folder ?: throw IllegalStateException("No folder available to start a task")
-        val id = c.createConversation(f.id, agent, title = firstPrompt.take(60))
+        // Mention links fold to their labels first, as the web's title seed does — never a raw
+        // `[README.md](file://…)`, nor one cut in half.
+        val id = c.createConversation(f.id, agent, title = ComposerReferenceCodec.foldLinks(firstPrompt).take(60))
         conversationId = id
         _ui.update { it.copy(isNew = false) }
     }
@@ -1302,6 +1337,8 @@ class SessionDetailViewModel @Inject constructor(
                     ),
                 )
             }
+            // The agent re-advertised its commands: the composer's `/` menu takes the new list.
+            is AcpEvent.AvailableCommands -> composer.adoptLiveCommands(event.commands)
             else -> Unit
         }
     }
@@ -1963,6 +2000,9 @@ class SessionDetailViewModel @Inject constructor(
      * newer one back.
      */
     private fun adoptSnapshotConnectionState(snapshot: LiveSessionSnapshot) {
+        // The commands the connection holds feed the composer's `/` menu (an empty list is a
+        // connection whose agent hasn't advertised yet, not "none").
+        composer.adoptSnapshotCommands(snapshot.availableCommands)
         // Goal actions not decided yet (`initialize` still in flight): read them again shortly.
         if (snapshot.goalActions == null) snapshot.connectionId?.let(::rereadGoalActions)
         // The session this conversation's connection runs, for a later connect to resume.
@@ -2494,6 +2534,8 @@ class SessionDetailViewModel @Inject constructor(
     override fun onCleared() {
         sendJob?.cancel()
         closeStream()
+        // Stops a file search the server may still be running for the `@` panel.
+        composer.teardown()
         super.onCleared()
     }
 
@@ -2690,12 +2732,27 @@ class SessionDetailViewModel @Inject constructor(
         return runCatching { c.expertsListForAgent(agent) }.getOrDefault(emptyList())
     }
 
-    /** The commands the live session advertises, all of them, as the web lists them. */
-    suspend fun loadSlashCommands(): List<AvailableCommandInfo> {
-        val c = client ?: return emptyList()
-        val id = conversationId ?: return emptyList()
-        val snapshot = runCatching { c.sessionSnapshotByConversation(id) }.getOrNull() ?: return emptyList()
-        return snapshot.availableCommands
+    /** The commands the agent advertises, all of them, as the web lists them — the same list
+     *  the composer's inline `/` menu shows ([ComposerSuggestions.loadCommands]). */
+    suspend fun loadSlashCommands(): List<AvailableCommandInfo> = composer.loadCommands()
+
+    /**
+     * The agent's commands, cheapest source first: the live connection this screen holds (works
+     * before it is bound to the conversation), the conversation's bound one, and — only when
+     * [allowProbe] — a throwaway probe agent (`acp_describe_agent_options`), which is how a
+     * draft or an idle session with no live connection gets a list at all. Null when none had
+     * any.
+     */
+    private suspend fun fetchComposerCommands(allowProbe: Boolean): List<AvailableCommandInfo>? {
+        val c = client ?: return null
+        connectionId?.let { conn ->
+            orNull { c.sessionSnapshot(conn) }?.availableCommands?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
+        conversationId?.let { id ->
+            orNull { c.sessionSnapshotByConversation(id) }?.availableCommands?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
+        if (!allowProbe) return null
+        return orNull { c.describeAgentOptions(agent, folder?.path) }?.availableCommands
     }
 
     suspend fun knownExpertIds(): Set<String> =
@@ -2743,6 +2800,7 @@ class SessionDetailViewModel @Inject constructor(
         // old agent reported very likely exists on the new one too, meaning something else
         // entirely.
         _ui.update { it.copy(agent = newAgent, liveSelectors = null) }
+        composer.screenDidLoad()
     }
 
     /** Change the draft's folder before the first send (the agent's working dir),
@@ -2763,6 +2821,7 @@ class SessionDetailViewModel @Inject constructor(
                 liveSelectors = null,
             )
         }
+        composer.screenDidLoad()
     }
 
     /** List the folder's branches for the picker; refreshes the current-branch

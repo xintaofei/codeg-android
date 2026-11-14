@@ -1171,6 +1171,16 @@
     <string name="insert_empty_experts">No experts linked to this agent.</string>
     <string name="insert_empty_commands">No slash commands available.</string>
 
+    <!-- ===== Session Detail · Composer inline / menu and @ panel ===== -->
+    <string name="composer_suggest_loading_commands">Loading commands…</string>
+    <string name="composer_suggest_searching">Searching…</string>
+    <string name="composer_suggest_no_matches">No matches</string>
+    <string name="composer_suggest_no_workspace">This session has no folder to search</string>
+    <string name="composer_suggest_more">More results — keep typing to filter</string>
+    <string name="composer_suggest_tab_agents">Agents</string>
+    <string name="composer_suggest_tab_files">Files</string>
+    <string name="composer_suggest_skill">Skill</string>
+
     <!-- ===== Session Detail · Permission fallback ===== -->
     <string name="perm_request_title">Permission Request</string>
     <!-- What picking each permission option would grant (_meta.permission.changes). -->
