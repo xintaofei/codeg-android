@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -106,6 +107,8 @@ fun SessionLoadErrorBanner(error: SessionLoadErrorUi, onReload: () -> Unit, onNe
         Modifier
             .fillMaxWidth()
             .background(colors.danger.copy(alpha = 0.1f))
+            // In the composer's place, so above the gesture bar like it.
+            .navigationBarsPadding()
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

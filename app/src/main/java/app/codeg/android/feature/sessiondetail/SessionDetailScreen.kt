@@ -408,16 +408,6 @@ fun SessionDetailScreen(
                         }
                     },
                     actions = {
-                        // Message navigation: once there is a message to go to.
-                        if (!ui.isNew && (ui.window?.hasOlder == true || ui.turns.any { it.role == TurnRole.USER })) {
-                            IconButton(onClick = { viewModel.loadOutline(); showNav = true }) {
-                                Icon(
-                                    Icons.AutoMirrored.Rounded.FormatListBulleted,
-                                    contentDescription = stringResource(R.string.message_nav_title),
-                                    tint = colors.textPrimary,
-                                )
-                            }
-                        }
                         // The agent avatar is the options button (mode / config / folder / branch).
                         Box(
                             Modifier
@@ -430,6 +420,16 @@ fun SessionDetailScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             AgentAvatar(ui.agent, size = 28.dp)
+                        }
+                        // Message navigation: once there is a message to go to.
+                        if (!ui.isNew && (ui.window?.hasOlder == true || ui.turns.any { it.role == TurnRole.USER })) {
+                            IconButton(onClick = { viewModel.loadOutline(); showNav = true }) {
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.FormatListBulleted,
+                                    contentDescription = stringResource(R.string.message_nav_title),
+                                    tint = colors.textPrimary,
+                                )
+                            }
                         }
                         if (ui.summary != null) SessionActionsMenu(ui, viewModel, onDeleted = onBack, onManageTags = onManageTags)
                     },

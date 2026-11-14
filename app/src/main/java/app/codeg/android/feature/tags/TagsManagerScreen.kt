@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -108,9 +110,18 @@ fun TagsManagerScreen(onBack: () -> Unit, viewModel: TagsManagerViewModel = hilt
                         retryLabel = stringResource(R.string.common_retry),
                     )
                 }
-                else -> LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // The end of a long list scrolls clear of the gesture bar.
+                else -> LazyColumn(
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 8.dp,
+                        bottom = 8.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     item {
-                        Text(stringResource(R.string.tags_manager_description), fontSize = 13.sp, color = colors.textSecondary)
+                        Text(stringResource(R.string.tags_manager_description), fontSize = 13.sp, lineHeight = 18.sp, color = colors.textSecondary)
                     }
                     ui.error?.let { error ->
                         item { Text(error, fontSize = 12.sp, color = colors.danger) }
@@ -195,7 +206,7 @@ private fun SectionTitle(title: String, description: String) {
     val colors = CodegTheme.colors
     Column(Modifier.padding(top = 14.dp, bottom = 2.dp)) {
         Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.textPrimary)
-        Text(description, fontSize = 12.sp, color = colors.textSecondary)
+        Text(description, fontSize = 12.sp, lineHeight = 16.sp, color = colors.textSecondary)
     }
 }
 
@@ -286,7 +297,12 @@ private fun BranchTagSection(branch: BranchTagSetting, enabled: Boolean, onChang
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ColorPresets(selected: String, enabled: Boolean = true, onPick: (String) -> Unit) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        // A row per family where the width allows; a narrower screen wraps within them.
+        maxItemsInEachRow = ConversationTags.COLOR_PRESETS.size / 2,
+    ) {
         ConversationTags.COLOR_PRESETS.forEach { hex ->
             val color = colorFromHex(hex) ?: Color.Gray
             val isSelected = hex.equals(selected, ignoreCase = true)

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -21,8 +22,11 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -83,7 +87,21 @@ fun ActivityScreen(
                     val toggle: (String) -> Unit = { id ->
                         collapsed = if (id in collapsed) collapsed - id else collapsed + id
                     }
-                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)) {
+                    val listState = rememberLazyListState()
+                    val atTop by remember(listState) {
+                        derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 }
+                    }
+                    // What lands above the first row — Running, once the live statuses arrive, or a
+                    // newly active session — would otherwise open the feed part-way down: the list
+                    // keeps the row it showed first in view. At the top it stays at the top; a list
+                    // the user has scrolled keeps its place.
+                    if (atTop) {
+                        // Read here, in composition, so every new feed reruns the effect while the
+                        // state still describes the list as it was (the rows aren't measured yet).
+                        val feed = sections
+                        SideEffect { if (feed.isNotEmpty()) listState.requestScrollToItem(0) }
+                    }
+                    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)) {
                         sections.forEach { section ->
                             val isCollapsed = section.id in collapsed
                             item(key = "h-${section.id}", contentType = "header") {

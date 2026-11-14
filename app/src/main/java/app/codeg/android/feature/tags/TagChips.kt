@@ -55,6 +55,9 @@ fun TagChip(name: String, color: String, modifier: Modifier = Modifier, size: Ta
         Text(
             name,
             fontSize = size.textSp.sp,
+            // Its own leading: the inherited body style's 24sp would make a row chip as tall
+            // as the title beside it.
+            lineHeight = (size.textSp + 4).sp,
             fontWeight = FontWeight.Medium,
             color = fg,
             maxLines = 1,
@@ -70,6 +73,7 @@ fun MoreTagsChip(count: Int, size: TagChipSize = TagChipSize.ROW) {
     Text(
         "+$count",
         fontSize = size.textSp.sp,
+        lineHeight = (size.textSp + 4).sp,
         fontWeight = FontWeight.Medium,
         color = colors.textSecondary,
         modifier = Modifier

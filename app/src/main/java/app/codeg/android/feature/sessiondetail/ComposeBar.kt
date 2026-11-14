@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -114,7 +115,11 @@ fun ComposeBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(colors.bgElevated.copy(alpha = 0.92f))
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                // The surface runs on under the gesture bar; the controls stop above it. With
+                // the keyboard up the screen's imePadding has already taken this, so it adds
+                // nothing then.
+                .navigationBarsPadding()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -143,10 +148,16 @@ fun ComposeBar(
             Box(
                 Modifier
                     .weight(1f)
+                    // The icon buttons lay out at their 48dp touch target with the 40dp disc
+                    // centred in it; the same margin here keeps the field level with the discs
+                    // (the row aligns bottoms so a growing draft keeps them at its foot).
+                    .padding(vertical = 4.dp)
                     .heightIn(min = 40.dp)
                     .background(colors.codeSurface, RoundedCornerShape(20.dp))
                     .border(0.5.dp, colors.surfaceStroke, RoundedCornerShape(20.dp))
-                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                    // One 24sp line plus this is exactly the buttons' 40dp, so a one-line field
+                    // sits level with them; longer drafts grow upward from the shared baseline.
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 val offered = suggestion?.takeIf { text.isEmpty() && onSendNote == null && it.isNotBlank() }

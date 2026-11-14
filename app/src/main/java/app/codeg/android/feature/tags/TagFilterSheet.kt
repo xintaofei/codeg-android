@@ -144,7 +144,9 @@ fun TagFilterSheet(
                                 colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.textTertiary),
                                 modifier = Modifier.padding(8.dp),
                             )
-                            TagChip(tag.name, tag.color, modifier = Modifier.weight(1f, fill = false))
+                            // The chip caps its own width; the spacer alone takes the rest, so
+                            // every count lines up at the end.
+                            TagChip(tag.name, tag.color)
                             Spacer(Modifier.weight(1f))
                             Text("${counts[tag.id] ?: 0}", fontSize = 12.sp, color = colors.textTertiary, modifier = Modifier.padding(end = 8.dp))
                         }

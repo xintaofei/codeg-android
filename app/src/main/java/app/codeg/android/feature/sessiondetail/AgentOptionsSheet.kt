@@ -810,7 +810,7 @@ private fun BooleanOptionSection(option: SessionConfigOption, currentValue: Stri
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(option.name.ifEmpty { option.id }, fontSize = 15.sp, color = colors.textPrimary)
-                option.description?.takeIf { it.isNotEmpty() }?.let { Text(it, fontSize = 12.sp, color = colors.textTertiary) }
+                option.description?.takeIf { it.isNotEmpty() }?.let { Text(it, fontSize = 12.sp, lineHeight = 16.sp, color = colors.textTertiary) }
             }
             // The switch already animates to the optimistic position, so the spinner sits
             // beside it instead of replacing it — swapping it out would hide the very
@@ -847,7 +847,7 @@ private fun OptionRow(title: String, description: String?, selected: Boolean, bu
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, fontSize = 15.sp, color = colors.textPrimary)
-            description?.takeIf { it.isNotEmpty() }?.let { Text(it, fontSize = 12.sp, color = colors.textTertiary) }
+            description?.takeIf { it.isNotEmpty() }?.let { Text(it, fontSize = 12.sp, lineHeight = 16.sp, color = colors.textTertiary) }
         }
         if (busy) CircularProgressIndicator(color = colors.accent, modifier = Modifier.size(16.dp))
         else if (selected) Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(18.dp))

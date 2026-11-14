@@ -61,7 +61,7 @@ fun MessageNavSheet(
     onDismiss: () -> Unit,
 ) {
     val colors = CodegTheme.colors
-    val sheetState = rememberModalBottomSheetState()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
     val earlierRow = hasEarlier && outline !is OutlineState.Ready
     LaunchedEffect(Unit) {
