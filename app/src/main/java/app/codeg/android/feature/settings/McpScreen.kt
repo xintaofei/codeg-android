@@ -157,7 +157,10 @@ private fun McpEditor(
                 CodegTextField(spec, { spec = it }, label = stringResource(R.string.mcp_spec_json), mono = true, singleLine = false)
                 Text(stringResource(R.string.mcp_enabled_for), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.textSecondary)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (agent in AgentType.entries) {
+                    // Built-ins only: the server dropped custom-agent server management
+                    // from the MCP settings surface (0.22.0), so a `custom:<id>` app id
+                    // here would be written and then ignored.
+                    for (agent in AgentType.BUILTINS) {
                         val on = apps.contains(agent.wire)
                         CodegFilterChip(
                             label = agent.shortName,

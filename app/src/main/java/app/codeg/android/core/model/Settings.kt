@@ -229,7 +229,56 @@ data class AcpAgentInfo(
     /** `cursor` parsed scalar settings backing the structured controls — derived
      * server-side from [cursorCliConfigJson]. */
     val cursorSettings: CursorSettings? = null,
+    /**
+     * A custom agent's own display icon, inlined as a `data:` URL. Always null for
+     * built-ins, which ship hand-drawn marks in `AgentVisuals`.
+     *
+     * NOT rendered here: ACP-registry marks are SVGs, which Android cannot rasterize
+     * without an image library this app deliberately does not carry (its only images
+     * are compile-time vector drawables). A custom agent shows the neutral plug mark
+     * tinted by a colour derived from its id instead. Kept on the model because it is
+     * part of the wire contract and is what a future SVG-capable loader would read.
+     */
+    val iconUrl: String? = null,
+    /**
+     * For a custom agent, where its definition came from (`registry` | `manual`); null
+     * for built-ins. A manual definition's [registryVersion] is user-typed, so only the
+     * installed version is worth showing for those.
+     */
+    val customSource: String? = null,
+    /**
+     * Whether this agent has a codeg-known skill store — every built-in, plus custom
+     * agents that declared the shared `.agents/skills` directory. Gates the Skills
+     * screen's per-agent rows.
+     */
+    val skillsCapable: Boolean = true,
 )
+
+/**
+ * One entry of an agent picker: the wire identity plus the label to show for it.
+ *
+ * A built-in names itself from its [AgentType]; a custom agent cannot, because its type
+ * carries only the registry id (`goose`) and the display name lives on the server's
+ * [AcpAgentInfo] row. So the label is carried rather than re-derived. The mark is not: every
+ * agent draws from [AgentType] alone (see `AgentVisuals.icon`), so there is nothing else here.
+ */
+data class AgentChoice(
+    val type: AgentType,
+    val label: String,
+) {
+    companion object {
+        fun of(agent: AcpAgentInfo): AgentChoice = AgentChoice(
+            type = agent.agentType,
+            // Built-ins keep their curated short label; a custom agent prefers the name
+            // it registered under, falling back to its id.
+            label = agent.agentType.builtin?.shortName
+                ?: agent.name.ifBlank { agent.agentType.shortName },
+        )
+
+        /** For the offline fallback list, where no server row is available. */
+        fun of(type: AgentType): AgentChoice = AgentChoice(type, type.shortName)
+    }
+}
 
 /**
  * Parsed scalar keys from `~/.grok/config.toml` backing the Grok panel's structured

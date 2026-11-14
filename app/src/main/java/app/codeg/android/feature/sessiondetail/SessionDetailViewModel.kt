@@ -10,6 +10,7 @@ import app.codeg.android.core.datastore.SelectorPrefs
 import app.codeg.android.core.datastore.SelectorPrefsStore
 import app.codeg.android.core.datastore.ServerProfile
 import app.codeg.android.core.model.AcpEvent
+import app.codeg.android.core.model.AgentChoice
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.AvailableCommandInfo
 import app.codeg.android.core.model.ConnectionStatus
@@ -192,17 +193,22 @@ class SessionDetailViewModel @Inject constructor(
                     val open = runCatching { c.listOpenFolders() }.getOrDefault(emptyList())
                     val topLevel = FolderVisibility.filterTopLevel(open)
                         .sortedByDescending { it.lastOpenedAt ?: Instant.MIN }
+                    // Kept as AgentChoice, not bare types: a custom agent's label exists only on
+                    // the server row (its type carries just the registry id).
                     val agents = runCatching { c.acpListAgents() }.getOrDefault(emptyList())
                         .filter { it.available && it.enabled }
                         .sortedBy { it.sortOrder }
-                        .map { it.agentType }
-                        .distinct()
-                        .ifEmpty { AgentType.entries.toList() }
+                        .distinctBy { it.agentType }
+                        .map(AgentChoice::of)
+                        // Only reached when the agents call failed or returned nothing —
+                        // fall back to the built-ins, the one set we can name offline.
+                        .ifEmpty { AgentType.BUILTINS.map(AgentChoice::of) }
                     folder = allFolders.firstOrNull { it.id == folderIdArg }
                         ?: topLevel.firstOrNull()
                         ?: allFolders.maxByOrNull { it.lastOpenedAt ?: Instant.MIN }
                         ?: allFolders.firstOrNull()
-                    agent = folder?.defaultAgentType?.takeIf { it in agents } ?: agents.first()
+                    agent = folder?.defaultAgentType?.takeIf { d -> agents.any { it.type == d } }
+                        ?: agents.first().type
                     currentBranch = folder?.gitBranch
                     _ui.update {
                         it.copy(
@@ -1537,7 +1543,7 @@ data class SessionDetailUiState(
     val currentBranch: String? = null,
     val isDraftEditable: Boolean = false,
     val availableFolders: List<FolderDetail> = emptyList(),
-    val availableAgents: List<AgentType> = emptyList(),
+    val availableAgents: List<AgentChoice> = emptyList(),
     val turns: List<MessageTurn> = emptyList(),
     val pendingUserTurns: List<MessageTurn> = emptyList(),
     val live: LiveTurnState? = null,

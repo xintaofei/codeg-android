@@ -115,6 +115,12 @@ fun AgentDetailContent(
     // — like Hermes' raw editor, they hide the host "Save" and the generic
     // native-config editor.
     val selfContained = agentType == AgentType.KIMI_CODE || agentType == AgentType.PI
+    // A custom (user-registered) or unrecognised agent has NO local config file on the
+    // server (`agent_local_config_path` returns None for it), so `acp_update_agent_config`
+    // accepts a config.json and drops it on the floor. Showing the editor and a Save
+    // button would report success and discard the text on the next reload, so both are
+    // hidden — the enable toggle, which rides `acp_update_agent_env`, still works.
+    val hasLocalConfig = agentType.builtin != null
     Column(Modifier.fillMaxSize().imePadding()) {
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
@@ -136,12 +142,18 @@ fun AgentDetailContent(
                 AgentType.CURSOR -> CursorSection(detail, viewModel)
                 AgentType.KIMI_CODE -> AgentConfigKimiView(detail.agent, viewModel)
                 AgentType.PI -> AgentConfigPiView(detail.agent, viewModel)
+                // A custom (user-registered) or unrecognised agent has no hand-written
+                // panel. The header already shows its own name, description and version;
+                // everything else about it is registered in the desktop app.
+                else -> CustomAgentNote()
             }
 
-            if (agentType != AgentType.HERMES && !selfContained) AdvancedSection(detail, viewModel)
+            if (agentType != AgentType.HERMES && !selfContained && hasLocalConfig) {
+                AdvancedSection(detail, viewModel)
+            }
         }
 
-        if (!selfContained) {
+        if (!selfContained && hasLocalConfig) {
             // Surface WHY Save is disabled for the one gate a user can't otherwise
             // guess: API-key mode with nothing typed would persist a credential-less
             // auth mode and silently fall back to the browser login.
@@ -158,6 +170,26 @@ fun AgentDetailContent(
 }
 
 // region Header + Save bar
+
+/**
+ * Stands in for the per-agent panel a custom (user-registered) ACP agent has none of.
+ * It says what CAN be done here — the enable toggle above — and where the rest lives,
+ * rather than leaving an agent detail page that looks broken.
+ */
+@Composable
+private fun CustomAgentNote() {
+    val colors = CodegTheme.colors
+    Text(
+        stringResource(R.string.agents_custom_note),
+        fontSize = 13.sp,
+        color = colors.textTertiary,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.bgElevated.copy(alpha = 0.5f))
+            .padding(14.dp),
+    )
+}
 
 @Composable
 private fun AgentHeader(state: AgentDetailState, onToggle: (Boolean) -> Unit) {

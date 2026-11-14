@@ -599,6 +599,9 @@ data class AgentDraft(
                 // Kimi & Pi project their own state from `configJson` inside their
                 // self-contained panels.
                 AgentType.KIMI_CODE, AgentType.PI -> Unit
+                // A custom (user-registered) or unrecognised agent has no hand-written
+                // field mapping — it keeps the generic config.json + env draft built above.
+                else -> Unit
             }
             return draft
         }
@@ -911,6 +914,9 @@ object AgentConfig {
             // Kimi & Pi are self-contained (saved via acp_update_kimi_code_config /
             // acp_update_pi_config), not the shared draft.
             AgentType.KIMI_CODE, AgentType.PI -> Unit
+            // A custom (user-registered) or unrecognised agent has no structured fields
+            // to re-apply — its config.json and env are edited verbatim.
+            else -> Unit
         }
         return Applied(configText, envText, codexConfigTomlText, codexAuthJsonText)
     }

@@ -563,6 +563,7 @@
     <string name="agents_provider_none">该智能体未配置模型提供方。请在“设置 → 模型提供方”中添加。</string>
     <string name="agents_provider_endpoint">端点</string>
     <!-- Detail · advanced raw editor -->
+    <string name="agents_custom_note">此 agent 在 codeg 桌面端注册。这里可以启用或停用它；启动命令、版本和图标都在桌面端管理。</string>
     <string name="agents_advanced">高级</string>
     <string name="agents_advanced_override_hint">此处的修改在保存时会覆盖上方字段。</string>
 

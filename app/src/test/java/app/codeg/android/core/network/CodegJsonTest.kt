@@ -68,8 +68,21 @@ class CodegJsonTest {
             """{"id":1,"folder_id":1,"agent_type":"brand_new_agent","status":"weird_status",
                "message_count":0,"created_at":"2024-01-02T03:04:05Z","updated_at":"2024-01-02T03:04:05Z"}""",
         )
-        assertEquals(AgentType.CLAUDE_CODE, c.agentType)
+        // An agent this build doesn't know keeps its own identity and its raw wire value
+        // instead of being mislabelled as Claude Code on every session row.
+        assertEquals(AgentType.Unknown("brand_new_agent"), c.agentType)
         assertEquals(ConversationStatus.OTHER, c.status)
+    }
+
+    @Test
+    fun `a custom agent's session decodes to its registry id`() {
+        val c = CodegJson.response.decodeFromString<ConversationSummary>(
+            """{"id":1,"folder_id":1,"agent_type":"custom:goose","status":"completed",
+               "message_count":0,"created_at":"2024-01-02T03:04:05Z","updated_at":"2024-01-02T03:04:05Z"}""",
+        )
+        assertEquals(AgentType.Custom("goose"), c.agentType)
+        assertEquals("goose", c.agentType.displayName)
+        assertEquals("custom:goose", c.agentType.wire)
     }
 
     @Test

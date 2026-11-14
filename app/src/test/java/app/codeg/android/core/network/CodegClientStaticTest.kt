@@ -39,10 +39,10 @@ class CodegClientStaticTest {
     }
 
     @Test
-    fun `decodeAgentList decodes the newest agent types and drops still-unknown ones`() {
-        // code_buddy / kimi_code / pi / grok are now first-class AgentType values, so
-        // they decode (grok also carries its own config payload). A genuinely-unknown
-        // future wire must still be dropped, not collapsed onto claude_code.
+    fun `decodeAgentList keeps built-in, custom and still-unknown agents`() {
+        // Custom (user-registered) ACP agents arrive as `custom:<id>` and must survive
+        // the decode — dropping them makes them unselectable for a new session. A wire
+        // value from a newer server survives too, keeping its own identity.
         val json = """
             [
               {"agent_type":"claude_code","name":"Claude Code"},
@@ -52,6 +52,7 @@ class CodegClientStaticTest {
               {"agent_type":"pi","name":"Pi"},
               {"agent_type":"grok","name":"Grok","grok_config_toml":"[ui]\n","grok_settings":{"permission_mode":"ask","default_reasoning_effort":"high"}},
               {"agent_type":"cursor","name":"Cursor","cursor_cli_config_json":"{}","cursor_settings":{"sandbox_mode":"enabled","permissions_allow":["Shell(ls)"],"permissions_deny":["Shell(rm)"]}},
+              {"agent_type":"custom:goose","name":"Goose","icon_url":"data:image/png;base64,AAA","custom_source":"registry"},
               {"agent_type":"future_agent_9000","name":"Future"}
             ]
         """.trimIndent()
@@ -60,6 +61,7 @@ class CodegClientStaticTest {
             listOf(
                 AgentType.CLAUDE_CODE, AgentType.CODE_BUDDY, AgentType.CODEX,
                 AgentType.KIMI_CODE, AgentType.PI, AgentType.GROK, AgentType.CURSOR,
+                AgentType.Custom("goose"), AgentType.Unknown("future_agent_9000"),
             ),
             agents.map { it.agentType },
         )
@@ -72,24 +74,57 @@ class CodegClientStaticTest {
         assertEquals("enabled", cursor.cursorSettings?.sandboxMode)
         assertEquals(listOf("Shell(ls)"), cursor.cursorSettings?.permissionsAllow)
         assertEquals(listOf("Shell(rm)"), cursor.cursorSettings?.permissionsDeny)
+        // The custom row keeps the fields only it has.
+        val goose = agents.first { it.agentType == AgentType.Custom("goose") }
+        assertEquals("data:image/png;base64,AAA", goose.iconUrl)
+        assertEquals("registry", goose.customSource)
+        // …and the wire form round-trips, so a session can actually be created with it.
+        assertEquals("custom:goose", goose.agentType.wire)
     }
 
     @Test
     fun `decodeAgentList never yields duplicate agent-type keys`() {
-        // Several unknown future types alongside the real claude_code must NOT collapse
-        // into duplicate claude_code rows — that duplicate `agentType` key crashes
-        // LazyColumn.
+        // Two unrecognised types alongside the real claude_code must stay three DISTINCT
+        // rows: collapsing them onto claude_code produced a duplicate `agentType` key,
+        // which crashes LazyColumn.
         val json = """
             [
               {"agent_type":"future_a","name":"A"},
               {"agent_type":"claude_code","name":"Claude Code"},
-              {"agent_type":"future_b","name":"B"}
+              {"agent_type":"future_b","name":"B"},
+              {"agent_type":"custom:goose","name":"Goose"},
+              {"agent_type":"custom:goose","name":"Goose again"}
             ]
         """.trimIndent()
         val agents = CodegClient.decodeAgentList(json)
-        assertEquals(listOf(AgentType.CLAUDE_CODE), agents.map { it.agentType })
+        assertEquals(
+            listOf(
+                AgentType.Unknown("future_a"), AgentType.CLAUDE_CODE,
+                AgentType.Unknown("future_b"), AgentType.Custom("goose"),
+            ),
+            agents.map { it.agentType },
+        )
         val keys = agents.map { it.agentType.wire }
         assertEquals("keys must be unique", keys.distinct().size, keys.size)
+    }
+
+    @Test
+    fun `a malformed custom id is kept verbatim rather than parsed`() {
+        // The server rejects these slugs outright, so they should never arrive — but if
+        // one does, it must not become a Custom whose wire form differs from what came in.
+        val json = """
+            [
+              {"agent_type":"custom:","name":"Empty"},
+              {"agent_type":"custom:../escape","name":"Escape"},
+              {"agent_type":"custom:.hidden","name":"Hidden"}
+            ]
+        """.trimIndent()
+        val agents = CodegClient.decodeAgentList(json)
+        assertEquals(
+            listOf("custom:", "custom:../escape", "custom:.hidden"),
+            agents.map { it.agentType.wire },
+        )
+        assertTrue(agents.all { it.agentType is AgentType.Unknown })
     }
 
     @Test

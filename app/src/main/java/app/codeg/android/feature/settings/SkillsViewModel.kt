@@ -45,7 +45,10 @@ class SkillsViewModel @Inject constructor(
                 client = c
                 if (_ui.value.agents.isEmpty()) _ui.update { it.copy(phase = SkillsPhase.LOADING) }
                 val agents = c.acpListAgents()
-                    .filter { it.available && it.enabled }
+                    // `skillsCapable` is false for a custom agent that declared no skills
+                    // directory — it has no store to read or write, so listing it here
+                    // would only offer an editor whose every save fails.
+                    .filter { it.available && it.enabled && it.skillsCapable }
                     .sortedBy { it.sortOrder }
                     .map { it.agentType }
                 val selected = _ui.value.selectedAgent.takeIf { agents.contains(it) } ?: agents.firstOrNull()

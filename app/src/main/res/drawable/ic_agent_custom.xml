@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Neutral mark for a user-registered ACP agent (`custom:<id>`) and for an agent
+  type this build does not recognise. Custom agents publish their own icon as a
+  data: URL on `AcpAgentInfo.icon_url`; this stands in wherever only the agent
+  TYPE is known (session rows, badges) or the published icon cannot be decoded.
+
+  A plug: the agent speaks the Agent Client Protocol but ships no brand mark here.
+  Monochrome — rendered as a template and tinted like the other mono marks.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M8.5,2 C9.05,2 9.5,2.45 9.5,3 L9.5,7 L7.5,7 L7.5,3 C7.5,2.45 7.95,2 8.5,2 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M15.5,2 C16.05,2 16.5,2.45 16.5,3 L16.5,7 L14.5,7 L14.5,3 C14.5,2.45 14.95,2 15.5,2 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M5,8 L19,8 C19.55,8 20,8.45 20,9 L20,12 C20,15.31 17.58,18.05 14.41,18.71 L14.41,21 C14.41,21.55 13.96,22 13.41,22 L10.59,22 C10.04,22 9.59,21.55 9.59,21 L9.59,18.71 C6.42,18.05 4,15.31 4,12 L4,9 C4,8.45 4.45,8 5,8 Z M6,10 L6,12 C6,14.76 8.24,17 11,17 L13,17 C15.76,17 18,14.76 18,12 L18,10 L6,10 Z"
+        android:fillColor="#FF000000" />
+</vector>

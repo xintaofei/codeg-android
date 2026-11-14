@@ -67,6 +67,7 @@ import app.codeg.android.core.designsystem.component.AgentAvatar
 import app.codeg.android.core.designsystem.component.AgentVisuals
 import app.codeg.android.core.designsystem.component.CodegTextField
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.core.model.AgentChoice
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.FolderDetail
 import app.codeg.android.core.model.GitBranchList
@@ -238,12 +239,13 @@ fun AgentOptionsSheet(
 // region Agent picker (draft only)
 
 @Composable
-private fun AgentPickerSection(agents: List<AgentType>, selected: AgentType, onSelect: (AgentType) -> Unit) {
+private fun AgentPickerSection(agents: List<AgentChoice>, selected: AgentType, onSelect: (AgentType) -> Unit) {
     val colors = CodegTheme.colors
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(stringResource(R.string.agentopts_agent_section), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.textTertiary)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(agents, key = { it.wire }) { agent ->
+            items(agents, key = { it.type.wire }) { choice ->
+                val agent = choice.type
                 val isSelected = agent == selected
                 Column(
                     Modifier
@@ -261,7 +263,7 @@ private fun AgentPickerSection(agents: List<AgentType>, selected: AgentType, onS
                         AgentAvatar(agent, size = 46.dp, modifier = Modifier.alpha(if (isSelected) 1f else 0.75f))
                     }
                     Text(
-                        agent.shortName,
+                        choice.label,
                         fontSize = 11.sp,
                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                         color = if (isSelected) colors.textPrimary else colors.textSecondary,
