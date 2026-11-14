@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -80,7 +81,7 @@ fun ComposerStatusStrips(
         DockStrip(
             title = shownIncident.title.trim().ifEmpty { stringResource(failureCategoryLabel(shownIncident.category)) },
             details = shownIncident.details?.trim()?.takeIf { it.isNotEmpty() },
-            meta = incidents.hiddenCount.takeIf { it > 0 }?.let { stringResource(R.string.failure_more_incidents, it) },
+            meta = incidents.hiddenCount.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.failure_more_incidents, it, it) },
             working = true,
             onDismiss = { onDismissFailures(incidents.ids) },
         )

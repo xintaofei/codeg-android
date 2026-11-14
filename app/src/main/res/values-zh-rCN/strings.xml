@@ -687,7 +687,9 @@
     <string name="failure_category_service">服务异常</string>
     <string name="failure_category_unknown">会话异常</string>
     <string name="failure_recovered">已恢复</string>
-    <string name="failure_more_incidents">另 %1$d 条</string>
+    <plurals name="failure_more_incidents">
+        <item quantity="other">另 %d 条</item>
+    </plurals>
     <string name="failure_notice_title">%1$s：%2$s</string>
     <string name="config_option_adjusted">%1$s 把%2$s设成了 %3$s，而不是 %4$s</string>
     <plurals name="plugin_load_failed_title">
@@ -1006,7 +1008,9 @@
     <string name="perm_network_question">允许这个连接吗？</string>
     <string name="perm_network_host">主机</string>
     <string name="perm_kind_network">网络</string>
-    <string name="perm_queued_count">还有 %1$d 项待审批</string>
+    <plurals name="perm_queued_count">
+        <item quantity="other">还有 %d 项待审批</item>
+    </plurals>
 
     <!-- ===== ViewModel toasts (interactive flows) ===== -->
     <string name="cc_test_message_sent">测试消息已发送。</string>

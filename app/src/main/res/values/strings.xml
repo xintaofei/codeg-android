@@ -698,7 +698,10 @@
     <string name="failure_category_service">Service issue</string>
     <string name="failure_category_unknown">Session issue</string>
     <string name="failure_recovered">Recovered</string>
-    <string name="failure_more_incidents">+%1$d more</string>
+    <plurals name="failure_more_incidents">
+        <item quantity="one">+%d more</item>
+        <item quantity="other">+%d more</item>
+    </plurals>
     <string name="failure_notice_title">%1$s: %2$s</string>
     <string name="config_option_adjusted">%1$s set %2$s to %3$s instead of %4$s</string>
     <plurals name="plugin_load_failed_title">
@@ -1042,7 +1045,10 @@
     <string name="perm_network_question">Allow this connection?</string>
     <string name="perm_network_host">Host</string>
     <string name="perm_kind_network">network</string>
-    <string name="perm_queued_count">+%1$d waiting</string>
+    <plurals name="perm_queued_count">
+        <item quantity="one">+%d waiting</item>
+        <item quantity="other">+%d waiting</item>
+    </plurals>
 
     <!-- ===== ViewModel toasts (interactive flows) ===== -->
     <string name="cc_test_message_sent">Test message sent.</string>
