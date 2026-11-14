@@ -995,6 +995,8 @@ class SessionDetailViewModel @Inject constructor(
      *  and the newest event seq applied on it — what dates a later snapshot against them. */
     private var connectionStateOwner: String? = null
     private var appliedSeq: Long = 0
+    /** The agent session that connection runs, to tell a fork's `session_started` from a replay. */
+    private var connectionSessionId: String? = null
 
     private fun applyEvent(event: AcpEvent, seq: Long) {
         if (seq > appliedSeq) appliedSeq = seq
@@ -1190,7 +1192,20 @@ class SessionDetailViewModel @Inject constructor(
             // The agent's session for this conversation: what a later connect resumes. A draft
             // has none to resume (its options connection may be for another agent), so only once
             // the conversation exists.
-            is AcpEvent.SessionStarted -> if (conversationId != null && event.sessionId.isNotEmpty()) externalId = event.sessionId
+            is AcpEvent.SessionStarted -> {
+                if (conversationId != null && event.sessionId.isNotEmpty()) externalId = event.sessionId
+                // A CHANGED session on the same connection (a fork) strands its AIR tasks: their
+                // terminal frames go out on the session left behind, and the server drops its
+                // table — which an empty snapshot can't clear here. Its prediction goes too. A
+                // replayed announcement of the same session changes nothing.
+                if (event.sessionId != connectionSessionId) {
+                    connectionSessionId = event.sessionId
+                    _ui.update {
+                        if (it.asyncTasks.isEmpty() && it.promptSuggestion == null) it
+                        else it.copy(asyncTasks = emptyList(), promptSuggestion = null)
+                    }
+                }
+            }
             is AcpEvent.ApiRetry -> _ui.update { it.copy(apiRetry = event) }
             is AcpEvent.SessionFailure -> onSessionFailure(event.record)
             // Reporting only: the saved preference keeps what was asked for, since a refusal is
@@ -1824,6 +1839,7 @@ class SessionDetailViewModel @Inject constructor(
             connectionStateOwner = snapshot.connectionId
             appliedSeq = 0
         }
+        connectionSessionId = snapshot.externalId
         // Rows carry no revision, so only a snapshot newer than every event applied may replace
         // them; an overtaken one may only add tasks never seen.
         val overtaken = sameConnection && (snapshot.eventSeq ?: Long.MAX_VALUE) < appliedSeq

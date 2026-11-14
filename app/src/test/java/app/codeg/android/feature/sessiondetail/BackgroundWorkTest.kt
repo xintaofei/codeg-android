@@ -134,4 +134,20 @@ class BackgroundWorkTest {
         assertEquals("codex", runs.delegations[0].binding?.agentType)
         assertNull("no binding seen", runs.delegations[1].binding)
     }
+
+    @Test
+    fun `a turn an overlay re-tells gives way to the overlay's copy`() {
+        val partial = turn("p1", 10, blocks = listOf(ContentBlock.ToolUse("edit-1", "Edit", "{}")))
+        val other = turn("p0", 5)
+        val overlay = BackgroundOverlays.upsert(
+            emptyList(),
+            listOf(turn("bg-0-0", 10, blocks = listOf(ContentBlock.ToolUse("edit-1", "Edit", "{}"), ContentBlock.ToolResult("edit-1", "ok", false)))),
+            watermark = 50,
+        )
+        val ids = BackgroundOverlays.callIds(overlay)
+        assertEquals(setOf("edit-1"), ids)
+        assertEquals(listOf("p0"), BackgroundOverlays.withoutRetold(listOf(other, partial), ids).map { it.id })
+        val untouched = listOf(other)
+        assertSame(untouched, BackgroundOverlays.withoutRetold(untouched, ids))
+    }
 }

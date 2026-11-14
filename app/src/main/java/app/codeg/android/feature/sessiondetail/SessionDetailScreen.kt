@@ -182,10 +182,13 @@ fun SessionDetailScreen(
     val hideReattachDup = ui.liveFromReattach && ui.live != null
     // Out-of-turn turns read off the agent's transcript join the finished rounds after the
     // server's window, in wall-clock order, until a detail load brings their persisted copies.
+    // A turn an overlay re-tells (a background reply read while it was still growing) gives
+    // way to the overlay's newer copy, so no step is drawn twice.
     val persistedEntries = remember(ui.turns, ui.localTurns, ui.backgroundTurns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId) {
+        val retold = BackgroundOverlays.callIds(ui.backgroundTurns)
         TranscriptTimeline.persistedEntries(
-            ui.turns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId,
-            BackgroundOverlays.interleave(ui.localTurns, ui.backgroundTurns),
+            BackgroundOverlays.withoutRetold(ui.turns, retold), ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId,
+            BackgroundOverlays.interleave(BackgroundOverlays.withoutRetold(ui.localTurns, retold), ui.backgroundTurns),
         )
     }
     val entries = remember(persistedEntries, ui.live, ui.agent) {
@@ -202,7 +205,9 @@ fun SessionDetailScreen(
     )
     SideEffect { folds.commit(foldView) }
     val nodes = remember(entries, foldView, folds.version) {
-        TranscriptTimeline.terminate(TranscriptTimeline.flatten(entries) { folds.isOpen(foldView, it) })
+        // Row ids key the list, and two rows under one id crash it: whatever source a repeat
+        // came by, only its first copy is drawn.
+        TranscriptTimeline.terminate(TranscriptTimeline.flatten(entries) { folds.isOpen(foldView, it) }.distinctBy { it.id })
     }
     val hasContent = nodes.isNotEmpty()
     // What the connection knows that the transcript doesn't: the call a permission request

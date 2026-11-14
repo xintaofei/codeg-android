@@ -165,6 +165,33 @@ object BackgroundOverlays {
         return if (kept.size == current.size) current else kept
     }
 
+    /** The tool-call ids the overlay's turns name. */
+    fun callIds(overlay: List<BackgroundOverlay>): Set<String> = overlay.flatMapTo(HashSet()) { o ->
+        o.turn.blocks.mapNotNull {
+            when (it) {
+                is ContentBlock.ToolUse -> it.id
+                is ContentBlock.ToolResult -> it.id
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * [turns] less those an overlay turn re-tells: a detail read can hold a background reply
+     * still growing, which the watcher then re-sends whole under its own id. The overlay copy is
+     * the newer one (a read after it would have retired it), and the two share their calls —
+     * drawn together they would show every step twice. [turns] itself when nothing overlaps.
+     */
+    fun withoutRetold(turns: List<MessageTurn>, overlayCallIds: Set<String>): List<MessageTurn> {
+        if (overlayCallIds.isEmpty()) return turns
+        val kept = turns.filterNot { turn ->
+            turn.blocks.any {
+                (it is ContentBlock.ToolUse && it.id in overlayCallIds) || (it is ContentBlock.ToolResult && it.id in overlayCallIds)
+            }
+        }
+        return if (kept.size == turns.size) turns else kept
+    }
+
     /** [local] and [overlay] in wall-clock order: a foreground exchange between background turns keeps its place. */
     fun interleave(local: List<MessageTurn>, overlay: List<BackgroundOverlay>): List<MessageTurn> {
         if (overlay.isEmpty()) return local
