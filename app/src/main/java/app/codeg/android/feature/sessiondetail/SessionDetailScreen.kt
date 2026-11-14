@@ -55,6 +55,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import app.codeg.android.feature.sessiondetail.rendering.ActivityLive
+import app.codeg.android.feature.sessiondetail.timeline.launchCardTitle
+import app.codeg.android.feature.sessiondetail.timeline.runningSubAgents
 import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -173,9 +175,12 @@ fun SessionDetailScreen(
     // On reattach the live turn (rebuilt from the snapshot) owns the in-flight reply, so
     // hide the partial copy the server persists into `turns` to avoid a doubled reply.
     val hideReattachDup = ui.liveFromReattach && ui.live != null
-    val persistedEntries = remember(ui.turns, ui.localTurns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId) {
+    // Out-of-turn turns read off the agent's transcript join the finished rounds after the
+    // server's window, in wall-clock order, until a detail load brings their persisted copies.
+    val persistedEntries = remember(ui.turns, ui.localTurns, ui.backgroundTurns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId) {
         TranscriptTimeline.persistedEntries(
-            ui.turns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId, ui.localTurns,
+            ui.turns, ui.pendingUserTurns, ui.agent, hideReattachDup, ui.inFlightUserTurnId,
+            BackgroundOverlays.interleave(ui.localTurns, ui.backgroundTurns),
         )
     }
     val entries = remember(persistedEntries, ui.live, ui.agent) {
@@ -419,6 +424,17 @@ fun SessionDetailScreen(
                 ) {
                     NoticeBanner(lastNotice, onDismiss = viewModel::dismissNotice)
                 }
+                // What runs beyond the reply — and outlives its turn.
+                val runs = remember(ui.asyncTasks, ui.backgroundTasks, ui.delegatedChildren, ui.live, ui.turns, ui.localTurns) {
+                    LiveRuns.collect(
+                        asyncTasks = ui.asyncTasks,
+                        foreground = runningSubAgents(ui.live),
+                        background = ui.backgroundTasks,
+                        delegatedChildren = ui.delegatedChildren,
+                        launchTitle = { id -> launchCardTitle(ui.localTurns, id) ?: launchCardTitle(ui.turns, id) },
+                    )
+                }
+                LiveRunsBar(runs, ui.agent.displayName, onStopTask = viewModel::stopAsyncTask)
                 ComposerStatusStrips(
                     retry = ui.apiRetry,
                     failures = ui.sessionFailures,

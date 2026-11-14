@@ -78,6 +78,9 @@ data class ConversationDetail(
      * everything. */
     @Serializable(with = InstantSerializer::class)
     val uncoveredPrefixMaxTs: Instant? = null,
+    /** Byte offset of the agent transcript this read was parsed through. An out-of-turn overlay
+     *  turn read at or before it is in [turns] now (`background_activity`'s watermark). */
+    val transcriptWatermark: Long? = null,
 ) {
     /**
      * The window this response describes, or null when the server answered with

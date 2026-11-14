@@ -36,6 +36,7 @@ import app.codeg.android.core.model.PromptBody
 import app.codeg.android.core.model.PromptInputBlock
 import app.codeg.android.core.model.QuestionAnswer
 import app.codeg.android.core.model.RespondPermissionBody
+import app.codeg.android.core.model.StopAsyncTaskBody
 import app.codeg.android.core.model.ConversationSummary
 import app.codeg.android.core.model.UpdateConversationPinnedBody
 import app.codeg.android.core.model.UpdateConversationStatusBody
@@ -292,6 +293,13 @@ class CodegClient(
     suspend fun cancel(connectionId: String) {
         send("acp_cancel", encode(ConnectionIdBody(connectionId)))
     }
+
+    /**
+     * Stop one AIR async task (`_session/async_task/stop`). The adapter's own verdict: false for
+     * a task it declines to stop (unknown, already finished, a stop already in flight).
+     */
+    suspend fun stopAsyncTask(connectionId: String, taskId: String): Boolean =
+        decode(send("acp_stop_async_task", encode(StopAsyncTaskBody(connectionId, taskId))), Boolean.serializer())
 
     /** End a connection and its agent process. The conversation stays; the next prompt
      *  connects afresh and resumes it (how a settings change made after spawn applies). */

@@ -347,6 +347,7 @@ class SessionDetailViewModel @Inject constructor(
                     _ui.update {
                         it.copy(
                             loading = false,
+                            backgroundTurns = BackgroundOverlays.retire(it.backgroundTurns, detail.transcriptWatermark, detail.uncoveredPrefixMaxTs),
                             summary = detail.summary,
                             turns = detail.turns,
                             localTurns = emptyList(),
@@ -966,7 +967,13 @@ class SessionDetailViewModel @Inject constructor(
         if (visible) queue.schedule()
     }
 
-    private fun applyEvent(event: AcpEvent, @Suppress("UNUSED_PARAMETER") seq: Long) {
+    /** The connection the connection-scoped state (async tasks, failures) was last seeded for,
+     *  and the newest event seq applied on it — what dates a later snapshot against them. */
+    private var connectionStateOwner: String? = null
+    private var appliedSeq: Long = 0
+
+    private fun applyEvent(event: AcpEvent, seq: Long) {
+        if (seq > appliedSeq) appliedSeq = seq
         // The server starts this send's turn with `prompting`. Until then the live builder is
         // only optimistic, and what arrives is the previous turn's tail, so none of its content
         // is folded in.
@@ -1170,6 +1177,19 @@ class SessionDetailViewModel @Inject constructor(
             }
             // A fresh drift shows again even after a dismissed one; a reverted one clears.
             is AcpEvent.SessionConfigStale -> _ui.update { it.copy(configStale = if (event.stale) ConfigStaleUi(event.kind) else null) }
+            is AcpEvent.AsyncTask -> _ui.update {
+                val tasks = AsyncTasks.upsert(it.asyncTasks, event.delta)
+                if (tasks === it.asyncTasks) it else it.copy(asyncTasks = tasks)
+            }
+            is AcpEvent.BackgroundActivity -> onBackgroundActivity(event)
+            is AcpEvent.DelegationChildRunning -> _ui.update {
+                val running = event.childConnectionId in it.delegatedChildren
+                when {
+                    event.running && !running -> it.copy(delegatedChildren = it.delegatedChildren + event.childConnectionId)
+                    !event.running && running -> it.copy(delegatedChildren = it.delegatedChildren - event.childConnectionId)
+                    else -> it
+                }
+            }
             is AcpEvent.SessionLoadFailed -> _ui.update {
                 it.copy(
                     sessionLoadError = SessionLoadErrorUi(
@@ -1180,6 +1200,70 @@ class SessionDetailViewModel @Inject constructor(
                 )
             }
             else -> Unit
+        }
+    }
+
+    /**
+     * What the server's transcript watcher saw happen out of turn. The outstanding set replaces
+     * what was held (it is the producer's whole state); the turns join the overlay; a settled
+     * sub-agent's launch card flips to its settle in place, and the batch is told once.
+     */
+    private fun onBackgroundActivity(event: AcpEvent.BackgroundActivity) {
+        _ui.update { st ->
+            var next = st.copy(
+                backgroundTasks = event.outstandingTasks,
+                backgroundTurns = BackgroundOverlays.upsert(st.backgroundTurns, event.turns, event.watermark),
+            )
+            for (settled in event.settled) {
+                next = next.copy(
+                    turns = BackgroundTask.settle(next.turns, settled),
+                    localTurns = BackgroundTask.settle(next.localTurns, settled),
+                    backgroundTurns = next.backgroundTurns.map { o ->
+                        val flipped = BackgroundTask.settle(listOf(o.turn), settled)
+                        if (flipped[0] === o.turn) o else o.copy(turn = flipped[0])
+                    },
+                )
+            }
+            next
+        }
+        // An interim notification is no task's end: the sub-agent will report again.
+        val finished = event.settled.filterNot { it.interim }
+        if (finished.isEmpty()) return
+        val name = agent.displayName
+        tell(
+            if (finished.size == 1) {
+                val one = finished[0]
+                appContext.getString(
+                    R.string.failure_notice_title,
+                    name,
+                    one.summary?.trim()?.takeIf { it.isNotEmpty() } ?: appContext.getString(R.string.background_settled_fallback, one.status),
+                )
+            } else {
+                appContext.resources.getQuantityString(R.plurals.background_settled_many, finished.size, name, finished.size)
+            },
+        )
+    }
+
+    /**
+     * Stop one async task. The adapter's own verdict comes back: false for a task it declines to
+     * stop (unknown, already finished, a stop already in flight). The task's end arrives on the
+     * stream either way.
+     */
+    fun stopAsyncTask(taskId: String, done: (Boolean) -> Unit = {}) {
+        val c = client ?: return done(false)
+        val conn = connectionId ?: return done(false)
+        viewModelScope.launch {
+            val stopped = try {
+                c.stopAsyncTask(conn, taskId).also { ok ->
+                    if (!ok) _ui.update { it.copy(notice = appContext.getString(R.string.async_task_stop_declined)) }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.update { it.copy(notice = appContext.getString(R.string.async_task_stop_failed, e.displayMessage())) }
+                false
+            }
+            done(stopped)
         }
     }
 
@@ -1474,6 +1558,7 @@ class SessionDetailViewModel @Inject constructor(
                 _ui.update {
                     it.copy(
                         turns = d.turns,
+                        backgroundTurns = BackgroundOverlays.retire(it.backgroundTurns, d.transcriptWatermark, d.uncoveredPrefixMaxTs),
                         window = d.window,
                         inFlightUserTurnId = d.inFlightUserTurnId,
                         sessionStats = d.sessionStats ?: it.sessionStats,
@@ -1635,9 +1720,23 @@ class SessionDetailViewModel @Inject constructor(
      * newer one back.
      */
     private fun adoptSnapshotConnectionState(snapshot: LiveSessionSnapshot) {
+        // Another connection's tables (a restarted agent) describe work that died with it.
+        val sameConnection = snapshot.connectionId != null && snapshot.connectionId == connectionStateOwner
+        if (!sameConnection) {
+            connectionStateOwner = snapshot.connectionId
+            appliedSeq = 0
+        }
+        // Rows carry no revision, so only a snapshot newer than every event applied may replace
+        // them; an overtaken one may only add tasks never seen.
+        val overtaken = sameConnection && (snapshot.eventSeq ?: Long.MAX_VALUE) < appliedSeq
         _ui.update {
             val approvals = ToolApprovals.merge(it.toolApprovals, snapshot.toolApprovals)
-            val failures = SessionFailures.merge(it.sessionFailures, snapshot.sessionFailures)
+            val failures = if (sameConnection) SessionFailures.merge(it.sessionFailures, snapshot.sessionFailures) else snapshot.sessionFailures
+            val tasks = when {
+                !sameConnection -> snapshot.asyncTasks
+                overtaken -> AsyncTasks.adoptUnknown(it.asyncTasks, snapshot.asyncTasks)
+                else -> AsyncTasks.merge(it.asyncTasks, snapshot.asyncTasks)
+            }
             // The drift the one-shot event announced; a dismissal holds while it's the same one.
             val stale = if (snapshot.configStale) {
                 it.configStale?.takeIf { s -> s.kind == snapshot.configStaleKind } ?: ConfigStaleUi(snapshot.configStaleKind)
@@ -1649,19 +1748,17 @@ class SessionDetailViewModel @Inject constructor(
             val suggestion = snapshot.promptSuggestion
             // A retry is never on a snapshot: whatever ended or outran it fell in the gap the
             // snapshot stands for, so the line it left would only go stale.
-            if (approvals === it.toolApprovals && failures === it.sessionFailures && stale == it.configStale &&
-                suggestion == it.promptSuggestion && it.apiRetry == null
-            ) {
-                it
-            } else {
-                it.copy(
-                    toolApprovals = approvals,
-                    sessionFailures = failures,
-                    configStale = stale,
-                    promptSuggestion = suggestion,
-                    apiRetry = null,
-                )
-            }
+            it.copy(
+                toolApprovals = approvals,
+                sessionFailures = failures,
+                configStale = stale,
+                promptSuggestion = suggestion,
+                apiRetry = null,
+                asyncTasks = tasks,
+                // Whole sets, the server's current state.
+                backgroundTasks = snapshot.backgroundOutstandingTasks,
+                delegatedChildren = snapshot.delegatedChildren,
+            )
         }
     }
 
@@ -1801,6 +1898,7 @@ class SessionDetailViewModel @Inject constructor(
                     _ui.update {
                         it.copy(
                             turns = detail.turns,
+                            backgroundTurns = BackgroundOverlays.retire(it.backgroundTurns, detail.transcriptWatermark, detail.uncoveredPrefixMaxTs),
                             window = detail.window,
                             inFlightUserTurnId = detail.inFlightUserTurnId,
                             sessionStats = detail.sessionStats ?: it.sessionStats,
@@ -1835,6 +1933,7 @@ class SessionDetailViewModel @Inject constructor(
                     _ui.update {
                         it.copy(
                             turns = detail.turns,
+                            backgroundTurns = BackgroundOverlays.retire(it.backgroundTurns, detail.transcriptWatermark, detail.uncoveredPrefixMaxTs),
                             window = detail.window,
                             inFlightUserTurnId = detail.inFlightUserTurnId,
                             sessionStats = detail.sessionStats ?: it.sessionStats,

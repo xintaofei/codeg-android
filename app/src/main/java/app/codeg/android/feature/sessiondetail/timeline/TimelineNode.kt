@@ -739,6 +739,26 @@ object TranscriptTimeline {
 }
 
 /** Live tool call → the shared view-ready [ToolCallVM] (mirrors the persisted path). */
+/** The sub-agent calls still running in [live] (id to title), for the running list. */
+fun runningSubAgents(live: LiveTurnState?): List<Pair<String, String>> {
+    if (live == null) return emptyList()
+    return live.segments.mapNotNull { seg ->
+        val call = (seg as? LiveSegment.Tool)?.call ?: return@mapNotNull null
+        if (call.isFinished) return@mapNotNull null
+        val vm = call.toVM()
+        if (vm.bucket == ToolKindBucket.TASK) vm.id to vm.displayTitle else null
+    }
+}
+
+/** The title of call [callId]'s launch card, when it is among [turns]. */
+fun launchCardTitle(turns: List<MessageTurn>, callId: String): String? {
+    for (turn in turns.asReversed()) {
+        val use = turn.blocks.firstOrNull { it is ContentBlock.ToolUse && it.id == callId } as? ContentBlock.ToolUse ?: continue
+        return ToolCallVM.of(callId, use.name, "", ToolCallState.DONE, use.inputPreview, null, null, false, use.meta).displayTitle
+    }
+    return null
+}
+
 private fun LiveToolCallState.toVM(): ToolCallVM {
     val state = when {
         !isFinished -> ToolCallState.RUNNING

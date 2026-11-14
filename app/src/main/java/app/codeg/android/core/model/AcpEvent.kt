@@ -233,6 +233,30 @@ sealed interface AcpEvent {
     /** A JetBrains AIR typed session-failure upsert (see [SessionFailureRecord]). */
     data class SessionFailure(val record: SessionFailureRecord) : AcpEvent
 
+    /** A revision of one AIR async task (see [AsyncTaskDelta]). */
+    data class AsyncTask(val delta: AsyncTaskDelta) : AcpEvent
+
+    /**
+     * Out-of-turn activity the server's watcher read off the agent's own transcript (Claude
+     * only today): background sub-agent and shell completions, the agent's work after them,
+     * cron / loop turns — none of which come over the wire. [turns] are upserts by id
+     * (`bg-<offset>-<idx>`), re-sent whole while they grow; [outstandingTasks] is the producer's
+     * whole current set; [settled] are tasks a notification closed in this batch; [watermark]
+     * is how far the transcript was read, which retires the overlay once a detail load catches
+     * up.
+     */
+    data class BackgroundActivity(
+        val sessionId: String,
+        val turns: List<MessageTurn>,
+        val outstandingTasks: List<BackgroundOutstandingTask>,
+        val settled: List<BackgroundSettledInfo>,
+        val watermark: Long,
+    ) : AcpEvent
+
+    /** A codeg delegation of this connection started ([running]) or ended — every delegation,
+     *  including one with no card to bind. */
+    data class DelegationChildRunning(val childConnectionId: String, val running: Boolean) : AcpEvent
+
     /**
      * The agent settled a `set_config_option` on a value other than the one asked for (pi for a
      * model that can't reason, grok for a mid-conversation model switch) — which otherwise reads
@@ -442,6 +466,27 @@ sealed interface AcpEvent {
                     message = obj.stringOrNull("message").orEmpty(),
                     code = obj.stringOrNull("code").orEmpty(),
                 )
+                "async_task" -> decodeOrNull(json, obj["delta"], AsyncTaskDelta.serializer())
+                    ?.takeIf { it.taskId.isNotEmpty() }
+                    ?.let(::AsyncTask)
+                    ?: Unknown(type)
+                // Each part read on its own, so one turn this build can't read drops alone.
+                "background_activity" -> BackgroundActivity(
+                    sessionId = obj.stringOrNull("session_id").orEmpty(),
+                    turns = obj.arrayOrNull("turns")
+                        ?.mapNotNull { (it as? JsonObject)?.let { t -> runCatching { json.decodeFromJsonElement(MessageTurn.serializer(), t) }.getOrNull() } }
+                        ?: emptyList(),
+                    outstandingTasks = obj.arrayOrNull("outstanding_tasks")
+                        ?.mapNotNull { decodeOrNull(json, it, BackgroundOutstandingTask.serializer()) }
+                        ?: emptyList(),
+                    settled = obj.arrayOrNull("settled")
+                        ?.mapNotNull { decodeOrNull(json, it, BackgroundSettledInfo.serializer()) }
+                        ?: emptyList(),
+                    watermark = obj.longOrNull("watermark") ?: 0,
+                )
+                "delegation_child_running" -> obj.stringOrNull("child_connection_id")?.takeIf { it.isNotEmpty() }
+                    ?.let { DelegationChildRunning(it, obj.boolOrNull("running") ?: false) }
+                    ?: Unknown(type)
                 "session_failure" -> decodeOrNull(json, obj["record"], SessionFailureRecord.serializer())
                     ?.takeIf { it.id.isNotEmpty() && it.revision >= 1 }
                     ?.let(::SessionFailure)
@@ -615,6 +660,12 @@ data class LiveSessionSnapshot(
     val configStaleKind: String? = null,
     /** The follow-up prompt the agent last predicted, for a client attaching between turns. */
     val promptSuggestion: String? = null,
+    /** The merged AIR async-task table, terminal rows included (later deltas revise them). */
+    val asyncTasks: List<AsyncTaskRecord> = emptyList(),
+    /** Background tasks launched and not yet resolved, one by one. */
+    val backgroundOutstandingTasks: List<BackgroundOutstandingTask> = emptyList(),
+    /** Child connection ids of every delegation this connection still has running. */
+    val delegatedChildren: List<String> = emptyList(),
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -669,6 +720,16 @@ data class LiveSessionSnapshot(
                 configStale = obj.boolOrNull("config_stale") ?: false,
                 configStaleKind = obj.stringOrNull("config_stale_kind"),
                 promptSuggestion = obj.stringOrNull("prompt_suggestion")?.trim()?.takeIf { it.isNotEmpty() },
+                asyncTasks = obj.arrayOrNull("async_tasks")
+                    ?.mapNotNull { AcpEvent.decodeOrNull(json, it, AsyncTaskRecord.serializer()) }
+                    ?.filter { it.taskId.isNotEmpty() }
+                    ?: emptyList(),
+                backgroundOutstandingTasks = obj.arrayOrNull("background_outstanding_tasks")
+                    ?.mapNotNull { AcpEvent.decodeOrNull(json, it, BackgroundOutstandingTask.serializer()) }
+                    ?: emptyList(),
+                delegatedChildren = obj.arrayOrNull("delegated_children")
+                    ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.takeIf { c -> c.isNotEmpty() } }
+                    ?: emptyList(),
             )
 
         private fun JsonObject.intOrNull(key: String): Int? =

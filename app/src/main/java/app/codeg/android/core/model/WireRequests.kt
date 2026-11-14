@@ -140,6 +140,10 @@ data class PromptBody(
 @Serializable
 data class ConnectionIdBody(val connectionId: String)
 
+/** Body for `acp_stop_async_task` — one AIR async task of a connection. */
+@Serializable
+data class StopAsyncTaskBody(val connectionId: String, val taskId: String)
+
 /** Body for `acp_respond_permission` — resolves a `permission_request` by
  * selecting one of the offered options. */
 @Serializable

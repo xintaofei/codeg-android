@@ -82,6 +82,14 @@ data class SessionDetailUiState(
     /** The prompt the agent predicts comes next (`prompt_suggestion`), offered in the empty
      *  composer. Spent when a prompt starts. */
     val promptSuggestion: String? = null,
+    /** The connection's AIR async-task table, terminal rows kept (later deltas revise them). */
+    val asyncTasks: List<app.codeg.android.core.model.AsyncTaskRecord> = emptyList(),
+    /** Background tasks the server's watcher counts as launched and unresolved (whole set). */
+    val backgroundTasks: List<app.codeg.android.core.model.BackgroundOutstandingTask> = emptyList(),
+    /** Child connections of the delegations this connection still has running. */
+    val delegatedChildren: List<String> = emptyList(),
+    /** Out-of-turn turns read off the agent's transcript, shown until a detail load has them. */
+    val backgroundTurns: List<BackgroundOverlay> = emptyList(),
     /** The running agent is on its launch-time config after a settings save; null when not. */
     val configStale: ConfigStaleUi? = null,
     /** `session/load` failed for good: the banner that offers reloading or a new session

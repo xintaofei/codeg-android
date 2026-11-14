@@ -527,3 +527,47 @@ class AcpEventPromptSuggestionTest {
         assertNull(LiveSessionSnapshot.fromWire(obj("{}"), json).promptSuggestion)
     }
 }
+
+/** Background work: async tasks, the transcript watcher's activity, delegated children. */
+class AcpEventBackgroundTest {
+
+    private val json: Json = CodegJson.response
+
+    private fun obj(raw: String) = json.parseToJsonElement(raw).jsonObject
+
+    @Test
+    fun `an async task delta decodes`() {
+        val e = AcpEvent.fromWire(obj("""{"type":"async_task","delta":{"task_id":"t","spawned":true,"name":"dev server","task_type":"shell","can_stop":true,"usage":{"total_tokens":12,"tool_uses":1,"duration_ms":3}}}"""), json) as AcpEvent.AsyncTask
+        assertEquals(AsyncTaskDelta("t", spawned = true, name = "dev server", taskType = "shell", canStop = true, usage = AsyncTaskUsage(12, 1, 3)), e.delta)
+        assertTrue(AcpEvent.fromWire(obj("""{"type":"async_task","delta":{"spawned":true}}"""), json) is AcpEvent.Unknown)
+    }
+
+    @Test
+    fun `background activity carries turns, the outstanding set and what settled`() {
+        val e = AcpEvent.fromWire(
+            obj(
+                """{"type":"background_activity","session_id":"s","outstanding":1,"watermark":4096,
+                   "turns":[{"id":"bg-0-0","role":"assistant","blocks":[{"type":"text","text":"done"}],"timestamp":"2026-11-14T03:00:00Z"},{"id":"broken"}],
+                   "outstanding_tasks":[{"task_id":"a","kind":"agent","tool_use_id":"call-1","started_at_ms":7}],
+                   "settled":[{"task_id":"b","status":"completed","summary":"ok","tool_use_id":"call-2"}]}""",
+            ),
+            json,
+        ) as AcpEvent.BackgroundActivity
+        assertEquals(listOf("bg-0-0"), e.turns.map { it.id })
+        assertEquals(BackgroundOutstandingTask("a", "agent", "call-1", null, 7), e.outstandingTasks.single())
+        assertEquals(BackgroundSettledInfo("b", "completed", "ok", "call-2"), e.settled.single())
+        assertEquals(4096L, e.watermark)
+    }
+
+    @Test
+    fun `delegated children ride the event and the snapshot`() {
+        assertEquals(AcpEvent.DelegationChildRunning("c1", true), AcpEvent.fromWire(obj("""{"type":"delegation_child_running","child_connection_id":"c1","running":true}"""), json))
+        val snap = LiveSessionSnapshot.fromWire(
+            obj("""{"delegated_children":["c1"],"async_tasks":[{"task_id":"t","name":"x","task_type":"shell","description":"","show_in_transcript":true,"can_stop":false,"state":"running"}],"background_outstanding_tasks":[{"task_id":"a","kind":"agent","started_at_ms":0}]}"""),
+            json,
+        )
+        assertEquals(listOf("c1"), snap.delegatedChildren)
+        assertEquals(listOf("t"), snap.asyncTasks.map { it.taskId })
+        assertEquals(listOf("a"), snap.backgroundOutstandingTasks.map { it.taskId })
+    }
+}

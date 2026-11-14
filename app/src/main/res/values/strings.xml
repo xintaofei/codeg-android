@@ -719,6 +719,35 @@
     <string name="config_stale_description">This session is still using its previous configuration. Reconnect to apply — your conversation history is kept.</string>
     <string name="config_stale_reconnect">Reconnect to apply</string>
     <string name="config_stale_applies_next">The new configuration applies from your next message.</string>
+    <plurals name="live_runs_count">
+        <item quantity="one">%d running</item>
+        <item quantity="other">%d running</item>
+    </plurals>
+    <string name="live_runs_subagents">Sub-agents</string>
+    <string name="live_runs_subagent_fallback">Sub-agent</string>
+    <string name="live_runs_background">Background</string>
+    <string name="live_runs_delegations">Delegations</string>
+    <string name="live_runs_delegated_fallback">Delegated sub-agent</string>
+    <string name="async_tasks_title">Background tasks</string>
+    <string name="async_task_stop">Stop</string>
+    <string name="async_task_tokens">%1$s tokens</string>
+    <string name="async_task_stop_declined">That task could not be stopped — it may have already finished.</string>
+    <string name="async_task_stop_failed">Failed to stop the task: %1$s</string>
+    <string name="async_task_agent_working">%1$s is working</string>
+    <string name="async_task_scheduled_wakeup">Scheduled wakeup</string>
+    <string name="async_task_scheduled_wakeup_at">Scheduled wakeup for %1$s</string>
+    <string name="async_task_scheduled_task">Scheduled task</string>
+    <string name="background_settled_fallback">Background task finished (%1$s)</string>
+    <plurals name="background_settled_many">
+        <item quantity="one">%1$s: %2$d background task finished</item>
+        <item quantity="other">%1$s: %2$d background tasks finished</item>
+    </plurals>
+    <string name="background_card_running">Running in background</string>
+    <string name="background_card_launched">Launched in background</string>
+    <string name="background_card_completed">Background task completed</string>
+    <string name="background_card_interim">Background task: interim result</string>
+    <string name="background_card_finished_status">Background task finished (%1$s)</string>
+    <string name="background_card_result_pending">Result not returned yet</string>
     <string name="activity_expand">Show the steps</string>
     <string name="activity_collapse">Collapse</string>
 

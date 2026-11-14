@@ -67,6 +67,7 @@ import app.codeg.android.core.designsystem.markdown.MarkdownContent
 import app.codeg.android.core.designsystem.markdown.SingleBlockView
 import app.codeg.android.core.designsystem.markdown.parseMarkdownBlocks
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.feature.sessiondetail.BackgroundTask
 import app.codeg.android.feature.sessiondetail.timeline.LocalDisclosures
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -415,6 +416,12 @@ private fun ToolOutputSection(vm: ToolCallVM) {
     // live wire; unwrap to the text the tool actually returned before classifying, or
     // the card renders the envelope's raw JSON.
     val out = ToolOutputFormat.mcpResultText(vm.trimmedOutput) ?: vm.trimmedOutput
+    // An async sub-agent's launch: its lifecycle, never the marker the parser wrote it after.
+    val lifecycle = BackgroundTask.parse(out)
+    if (lifecycle != null || (vm.state == ToolCallState.DONE && BackgroundTask.isLaunchAck(out))) {
+        BackgroundLaunchBody(lifecycle)
+        return
+    }
     if (vm.bucket == ToolKindBucket.SEARCH) {
         SearchOutputSection(vm, out)
         return
@@ -442,6 +449,39 @@ private fun ToolOutputSection(vm: ToolCallVM) {
                 }
             ToolOutputFormat.Kind.MARKDOWN -> MarkdownContent(out)
             ToolOutputFormat.Kind.LOG -> CodeBlock(code = out, language = "output")
+        }
+    }
+}
+
+/**
+ * An async sub-agent's launch card body (web `useAgentCallModel`): how its task stands, its
+ * summary, and its result once a notification brought one. An unsettled lifecycle reads
+ * "result pending", not "running": the transcript alone can't prove the task is still alive.
+ */
+@Composable
+private fun BackgroundLaunchBody(lifecycle: BackgroundTask.Lifecycle?) {
+    val colors = CodegTheme.colors
+    val status = lifecycle?.status
+    val label = when {
+        lifecycle == null -> stringResource(R.string.background_card_running)
+        status == null -> stringResource(R.string.background_card_launched)
+        status != "completed" -> stringResource(R.string.background_card_finished_status, status)
+        lifecycle.interim -> stringResource(R.string.background_card_interim)
+        else -> stringResource(R.string.background_card_completed)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (status != null && status != "completed") colors.danger else colors.textSecondary,
+        )
+        lifecycle?.summary?.takeIf { it.isNotBlank() }?.let { Text(it, fontSize = 13.sp, color = colors.textPrimary) }
+        val result = lifecycle?.result?.takeIf { it.isNotBlank() }
+        when {
+            result != null -> MarkdownContent(result)
+            status != null -> Unit
+            lifecycle != null -> Text(stringResource(R.string.background_card_result_pending), fontSize = 12.sp, color = colors.textTertiary)
         }
     }
 }
