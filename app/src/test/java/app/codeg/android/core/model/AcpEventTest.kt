@@ -627,3 +627,38 @@ class AcpEventGoalActionsTest {
         assertEquals(LiveSessionSnapshot.LEGACY_GOAL_ACTIONS, snap("{}").goalActions)
     }
 }
+
+class AcpEventRemoteControlTest {
+
+    private val json: Json = CodegJson.response
+
+    private fun obj(raw: String) = json.parseToJsonElement(raw).jsonObject
+    private fun event(raw: String) = AcpEvent.fromWire(obj(raw), json)
+    private fun snap(raw: String) = LiveSessionSnapshot.fromWire(obj(raw), json)
+
+    @Test
+    fun `on carries the link, which may be missing, and off is null`() {
+        assertEquals(
+            AcpEvent.RemoteControl(RemoteControlInfo("https://claude.ai/code/session_1")),
+            event("""{"type":"remote_control","remote_control":{"session_url":" https://claude.ai/code/session_1 "}}"""),
+        )
+        assertEquals(AcpEvent.RemoteControl(RemoteControlInfo(null)), event("""{"type":"remote_control","remote_control":{"session_url":null}}"""))
+        assertEquals(AcpEvent.RemoteControl(null), event("""{"type":"remote_control","remote_control":null}"""))
+    }
+
+    @Test
+    fun `only an https link is offered to open`() {
+        assertEquals(AcpEvent.RemoteControl(RemoteControlInfo(null)), event("""{"type":"remote_control","remote_control":{"session_url":"javascript:alert(1)"}}"""))
+    }
+
+    @Test
+    fun `the snapshot carries it while on, and fork support`() {
+        val on = snap("""{"remote_control":{"session_url":"https://claude.ai/code/x"},"fork_supported":true}""")
+        assertEquals(RemoteControlInfo("https://claude.ai/code/x"), on.remoteControl)
+        assertEquals(true, on.forkSupported)
+        val off = snap("{}")
+        assertNull(off.remoteControl)
+        assertEquals(false, off.forkSupported)
+        assertEquals(AcpEvent.ForkSupported(true), event("""{"type":"fork_supported","supported":true}"""))
+    }
+}

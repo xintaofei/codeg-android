@@ -207,6 +207,16 @@ sealed interface AcpEvent {
     data object SelectorsReady : AcpEvent
 
     /**
+     * Claude Code's Remote Control (`/remote-control`, claude-agent-acp 0.93.0) came on — with the
+     * claude.ai/code link to continue the session from, which the adapter may not return — or
+     * went off ([info] null). The server reads it off the command's reply.
+     */
+    data class RemoteControl(val info: RemoteControlInfo?) : AcpEvent
+
+    /** Whether this connection's agent can fork its session (`session/fork`). */
+    data class ForkSupported(val supported: Boolean) : AcpEvent
+
+    /**
      * A transient error the agent is retrying on its own, keeping the turn alive — NOT a turn
      * failure. Two sources share it: `turn_retrying` (codex `_meta.codex.error` with
      * `willRetry`, and pi's retry announcements, which carry no text — then [message] is
@@ -418,6 +428,8 @@ sealed interface AcpEvent {
                     json, obj["config_options"], SessionConfigOption.serializer(),
                 )?.let(::SessionConfigOptions) ?: Unknown(type)
                 "selectors_ready" -> SelectorsReady
+                "remote_control" -> RemoteControl(obj.objectOrNull("remote_control")?.let(RemoteControlInfo::fromWire))
+                "fork_supported" -> ForkSupported(obj.boolOrNull("supported") ?: false)
                 "turn_retrying" -> {
                     val message = obj.stringOrNull("message").orEmpty()
                     ApiRetry(
@@ -699,6 +711,10 @@ data class LiveSessionSnapshot(
      * legacy pair. Null here is the middle case.
      */
     val goalActions: List<String>? = LEGACY_GOAL_ACTIONS,
+    /** Claude Code's Remote Control while it is on; absent when off. */
+    val remoteControl: RemoteControlInfo? = null,
+    /** Whether the agent can fork its session. */
+    val forkSupported: Boolean = false,
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -771,6 +787,8 @@ data class LiveSessionSnapshot(
                 delegatedChildren = obj.arrayOrNull("delegated_children")
                     ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.takeIf { c -> c.isNotEmpty() } }
                     ?: emptyList(),
+                remoteControl = obj.objectOrNull("remote_control")?.let(RemoteControlInfo::fromWire),
+                forkSupported = obj.boolOrNull("fork_supported") ?: false,
             )
 
         private fun JsonObject.intOrNull(key: String): Int? =
@@ -779,6 +797,17 @@ data class LiveSessionSnapshot(
 
         /** What a server too old to advertise goal actions offers: codex's pause and clear. */
         val LEGACY_GOAL_ACTIONS = listOf("pause", "clear")
+    }
+}
+
+/** Claude Code's Remote Control while on (Rust `RemoteControlInfo`). */
+data class RemoteControlInfo(
+    /** The claude.ai/code session link; null when Claude Code returned none. Only `https`. */
+    val sessionUrl: String?,
+) {
+    companion object {
+        fun fromWire(obj: JsonObject): RemoteControlInfo =
+            RemoteControlInfo(obj.stringOrNull("session_url")?.trim()?.takeIf { it.startsWith("https://", ignoreCase = true) })
     }
 }
 

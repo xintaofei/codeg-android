@@ -708,6 +708,14 @@
     <string name="config_stale_agent_title">智能体配置已更新</string>
     <string name="config_stale_provider_title">模型供应商已更新</string>
     <string name="config_stale_description">当前会话仍在使用旧配置，重连后生效（对话历史不会丢失）。</string>
+    <string name="config_stale_ends_remote_control">重连也会关闭 Remote Control。</string>
+    <string name="remote_control_title">Remote Control 已开启</string>
+    <string name="remote_control_open">在浏览器中打开</string>
+    <string name="remote_control_copy">复制链接</string>
+    <string name="remote_control_copied">已复制</string>
+    <string name="remote_control_no_url">Claude Code 没有返回这个会话的链接</string>
+    <string name="remote_control_turn_off">关闭</string>
+    <string name="remote_control_turn_off_busy">等 Claude 完成后才能关闭</string>
     <string name="config_stale_reconnect">重连以应用</string>
     <string name="config_stale_applies_next">新配置将从你的下一条消息开始生效。</string>
     <plurals name="live_runs_count">

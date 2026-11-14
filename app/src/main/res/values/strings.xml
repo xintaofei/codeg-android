@@ -721,6 +721,14 @@
     <string name="config_stale_agent_title">Agent settings updated</string>
     <string name="config_stale_provider_title">Model provider updated</string>
     <string name="config_stale_description">This session is still using its previous configuration. Reconnect to apply — your conversation history is kept.</string>
+    <string name="config_stale_ends_remote_control">Reconnecting also turns off Remote Control.</string>
+    <string name="remote_control_title">Remote Control is on</string>
+    <string name="remote_control_open">Open in browser</string>
+    <string name="remote_control_copy">Copy link</string>
+    <string name="remote_control_copied">Copied</string>
+    <string name="remote_control_no_url">Claude Code returned no link for this session</string>
+    <string name="remote_control_turn_off">Turn off</string>
+    <string name="remote_control_turn_off_busy">Turn off once Claude has finished</string>
     <string name="config_stale_reconnect">Reconnect to apply</string>
     <string name="config_stale_applies_next">The new configuration applies from your next message.</string>
     <plurals name="live_runs_count">

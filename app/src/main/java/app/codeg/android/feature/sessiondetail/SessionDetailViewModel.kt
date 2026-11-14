@@ -77,6 +77,9 @@ import kotlinx.coroutines.launch
 /** Stop reason recorded for a turn whose `turn_complete` was lost in a reconnect gap. */
 private const val STOP_REASON_UNSEEN = "end_turn"
 
+/** Claude Code's own command that turns Remote Control off (`remote_control_command`). */
+private const val REMOTE_CONTROL_OFF = "/remote-control off"
+
 /** [verifyUnseenTurn]: transcript checks before leaving the turn to its live events. */
 private const val VERIFY_UNSEEN_ATTEMPTS = 5
 
@@ -312,7 +315,7 @@ class SessionDetailViewModel @Inject constructor(
             // the next send must connect afresh.
             override fun onConnectionGone() {
                 connectionId = null
-                _ui.update { if (it.goalActions.isEmpty()) it else it.copy(goalActions = emptyList()) }
+                _ui.update { it.withoutConnectionState() }
                 if (_ui.value.isInFlight) reconcileAfterTurn()
             }
 
@@ -1170,8 +1173,8 @@ class SessionDetailViewModel @Inject constructor(
                 if (it.apiRetry == null) it else it.copy(apiRetry = null)
             }
             // The predicted prompt was for this prompt's place, so it is spent whatever was sent.
-            is AcpEvent.StatusChanged -> if (event.status == ConnectionStatus.PROMPTING) {
-                _ui.update {
+            is AcpEvent.StatusChanged -> when (event.status) {
+                ConnectionStatus.PROMPTING -> _ui.update {
                     val failures = SessionFailures.settle(it.sessionFailures, SessionFailures.SettleScope.ALL)
                     if (it.apiRetry == null && failures === it.sessionFailures && it.promptSuggestion == null) {
                         it
@@ -1179,7 +1182,13 @@ class SessionDetailViewModel @Inject constructor(
                         it.copy(apiRetry = null, sessionFailures = failures, promptSuggestion = null)
                     }
                 }
+                // Remote Control lives in the agent process, and this is that process ending.
+                ConnectionStatus.DISCONNECTED, ConnectionStatus.ERROR ->
+                    _ui.update { if (it.remoteControl == null) it else it.copy(remoteControl = null) }
+                else -> Unit
             }
+            is AcpEvent.RemoteControl -> _ui.update { if (it.remoteControl == event.info) it else it.copy(remoteControl = event.info) }
+            is AcpEvent.ForkSupported -> _ui.update { if (it.forkSupported == event.supported) it else it.copy(forkSupported = event.supported) }
             is AcpEvent.PromptSuggestion -> _ui.update { if (it.promptSuggestion == event.text) it else it.copy(promptSuggestion = event.text) }
             is AcpEvent.TurnComplete -> _ui.update {
                 val failures = if (event.stopReason == "end_turn") {
@@ -1198,11 +1207,12 @@ class SessionDetailViewModel @Inject constructor(
                 // terminal frames go out on the session left behind, and the server drops its
                 // table — which an empty snapshot can't clear here. Its prediction goes too. A
                 // replayed announcement of the same session changes nothing.
+                // Remote Control was on the session left behind, so it goes as well.
                 if (event.sessionId != connectionSessionId) {
                     connectionSessionId = event.sessionId
                     _ui.update {
-                        if (it.asyncTasks.isEmpty() && it.promptSuggestion == null) it
-                        else it.copy(asyncTasks = emptyList(), promptSuggestion = null)
+                        if (it.asyncTasks.isEmpty() && it.promptSuggestion == null && it.remoteControl == null) it
+                        else it.copy(asyncTasks = emptyList(), promptSuggestion = null, remoteControl = null)
                     }
                 }
             }
@@ -1411,6 +1421,15 @@ class SessionDetailViewModel @Inject constructor(
                 .onSuccess { _ui.update { it.copy(notice = appContext.getString(R.string.config_stale_applies_next)) } }
                 .onFailure { e -> if (e is kotlinx.coroutines.CancellationException) throw e else _ui.update { it.copy(notice = e.displayMessage()) } }
         }
+    }
+
+    /**
+     * Turn Claude Code's Remote Control off. It is the agent's own command, so it goes out as a
+     * prompt (as the web sends it), and the reply it answers with is what turns the strip off.
+     */
+    fun turnOffRemoteControl() {
+        if (_ui.value.isInFlight || connectionId == null || _ui.value.remoteControl == null) return
+        send(REMOTE_CONTROL_OFF, emptyList(), SendOrigin.GENERATED)
     }
 
     fun dismissConfigStale() = _ui.update { s -> s.configStale?.let { s.copy(configStale = it.copy(dismissed = true)) } ?: s }
@@ -1872,6 +1891,10 @@ class SessionDetailViewModel @Inject constructor(
                 // Unknown until `initialize` answers: offer nothing meanwhile (a wrong button is
                 // worse than none), and take the list once a later snapshot has it.
                 goalActions = snapshot.goalActions ?: emptyList(),
+                // Current state; only an event this snapshot didn't see can say otherwise.
+                remoteControl = if (overtaken) it.remoteControl else snapshot.remoteControl,
+                // Latched once `initialize` answers, so a snapshot only ever adds it.
+                forkSupported = snapshot.forkSupported || (sameConnection && it.forkSupported),
                 // Whole sets, the server's current state.
                 backgroundTasks = snapshot.backgroundOutstandingTasks,
                 delegatedChildren = snapshot.delegatedChildren,
@@ -2325,9 +2348,14 @@ class SessionDetailViewModel @Inject constructor(
     private fun forgetConnection() {
         connectionId = null
         closeStream()
-        // A goal control needs a live connection to go out on.
-        _ui.update { if (it.goalActions.isEmpty()) it else it.copy(goalActions = emptyList()) }
+        _ui.update { it.withoutConnectionState() }
     }
+
+    /** What only a live connection has: a goal control and a fork need one to go out on, and
+     *  Remote Control ran in its agent process. */
+    private fun SessionDetailUiState.withoutConnectionState(): SessionDetailUiState =
+        if (goalActions.isEmpty() && remoteControl == null && !forkSupported) this
+        else copy(goalActions = emptyList(), remoteControl = null, forkSupported = false)
 
     override fun onCleared() {
         sendJob?.cancel()

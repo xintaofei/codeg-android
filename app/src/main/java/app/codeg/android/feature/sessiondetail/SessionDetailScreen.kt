@@ -372,38 +372,49 @@ fun SessionDetailScreen(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
-            TopAppBar(
-                title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = stringResource(R.string.common_back),
-                            tint = colors.textPrimary,
-                        )
-                    }
-                },
-                actions = {
-                    // The agent avatar is the options button (mode / config / folder / branch).
-                    Box(
-                        Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .clickable(
-                                onClickLabel = stringResource(R.string.session_agent_options),
-                                role = Role.Button,
-                            ) { showOptions = true },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        AgentAvatar(ui.agent, size = 28.dp)
-                    }
-                    if (ui.summary != null) SessionActionsMenu(ui, viewModel, onDeleted = onBack)
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent,
-                    titleContentColor = colors.textPrimary,
-                ),
-            )
+            Column {
+                TopAppBar(
+                    title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = stringResource(R.string.common_back),
+                                tint = colors.textPrimary,
+                            )
+                        }
+                    },
+                    actions = {
+                        // The agent avatar is the options button (mode / config / folder / branch).
+                        Box(
+                            Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .clickable(
+                                    onClickLabel = stringResource(R.string.session_agent_options),
+                                    role = Role.Button,
+                                ) { showOptions = true },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            AgentAvatar(ui.agent, size = 28.dp)
+                        }
+                        if (ui.summary != null) SessionActionsMenu(ui, viewModel, onDeleted = onBack)
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        titleContentColor = colors.textPrimary,
+                    ),
+                )
+                // Where the web docks it: over the transcript, since it is about the session as a
+                // whole rather than the next message.
+                ui.remoteControl?.let { rc ->
+                    RemoteControlStrip(
+                        info = rc,
+                        onTurnOff = viewModel::turnOffRemoteControl,
+                        turnRunning = ui.isInFlight,
+                    )
+                }
+            }
         },
         bottomBar = {
             Column(Modifier.imePadding()) {
@@ -502,6 +513,7 @@ fun SessionDetailScreen(
                         turnRunning = ui.isInFlight,
                         onReconnect = viewModel::reapplyConfig,
                         onDismiss = viewModel::dismissConfigStale,
+                        remoteControlOn = ui.remoteControl != null,
                     )
                 }
                 // A session that couldn't load takes the composer's place: a send would only

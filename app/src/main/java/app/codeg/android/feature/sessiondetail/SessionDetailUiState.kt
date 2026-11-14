@@ -90,6 +90,11 @@ data class SessionDetailUiState(
     val delegatedChildren: List<String> = emptyList(),
     /** The goal-control actions this connection's adapter offers; empty while unknown. */
     val goalActions: List<String> = emptyList(),
+    /** Claude Code's Remote Control on this connection, while it is on. It keeps the agent
+     *  running for claude.ai/code after this screen is gone. */
+    val remoteControl: app.codeg.android.core.model.RemoteControlInfo? = null,
+    /** Whether this connection's agent can fork its session (`fork_supported`). */
+    val forkSupported: Boolean = false,
     /** This connection's delegations by the call that started each, finished ones kept. */
     val delegations: Map<String, app.codeg.android.core.model.DelegationBinding> = emptyMap(),
     /** Out-of-turn turns read off the agent's transcript, shown until a detail load has them. */

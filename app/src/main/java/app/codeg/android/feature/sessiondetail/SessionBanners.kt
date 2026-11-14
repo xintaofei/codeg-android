@@ -1,6 +1,7 @@
 package app.codeg.android.feature.sessiondetail
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -15,7 +16,9 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,13 +35,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.codeg.android.R
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.core.model.RemoteControlInfo
 import app.codeg.android.feature.sessiondetail.rendering.ToolWarning
 import kotlinx.coroutines.delay
 
@@ -48,7 +55,13 @@ import kotlinx.coroutines.delay
  * never mid-turn — and the next message resumes the conversation on the new config.
  */
 @Composable
-fun ConfigStaleBanner(stale: ConfigStaleUi, turnRunning: Boolean, onReconnect: () -> Unit, onDismiss: () -> Unit) {
+fun ConfigStaleBanner(
+    stale: ConfigStaleUi,
+    turnRunning: Boolean,
+    onReconnect: () -> Unit,
+    onDismiss: () -> Unit,
+    remoteControlOn: Boolean = false,
+) {
     val colors = CodegTheme.colors
     Column(
         Modifier
@@ -67,6 +80,8 @@ fun ConfigStaleBanner(stale: ConfigStaleUi, turnRunning: Boolean, onReconnect: (
                     color = colors.textPrimary,
                 )
                 Text(stringResource(R.string.config_stale_description), fontSize = 12.sp, color = colors.textSecondary)
+                // Reconnecting ends the agent process, and Remote Control runs in it.
+                if (remoteControlOn) Text(stringResource(R.string.config_stale_ends_remote_control), fontSize = 12.sp, color = ToolWarning)
             }
             IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
                 Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.common_dismiss), tint = colors.textTertiary, modifier = Modifier.size(16.dp))
@@ -112,6 +127,78 @@ fun SessionLoadErrorBanner(error: SessionLoadErrorUi, onReload: () -> Unit, onNe
             }
             BannerAction(Icons.Rounded.Refresh, stringResource(R.string.session_load_reload), colors.danger, onClick = onReload)
             onNewSession?.let { BannerAction(Icons.Rounded.Add, stringResource(R.string.session_load_new), colors.danger, onClick = it) }
+        }
+    }
+}
+
+/**
+ * Claude Code's Remote Control is on (web `RemoteControlStrip`): this session can be continued
+ * from claude.ai/code or the Claude app, and the agent keeps running for it after this screen is
+ * gone. The link opens or copies; turning off is Claude Code's own command, so it waits for a
+ * running turn. Not kept in the transcript, so a reload that finds it on shows only this.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun RemoteControlStrip(info: RemoteControlInfo, onTurnOff: (() -> Unit)?, turnRunning: Boolean) {
+    val colors = CodegTheme.colors
+    val clipboard = LocalClipboardManager.current
+    val uriHandler = LocalUriHandler.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { delay(1500); copied = false } }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.accent.copy(alpha = 0.1f))
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.Rounded.Smartphone, contentDescription = null, tint = colors.accent, modifier = Modifier.size(16.dp))
+            Text(stringResource(R.string.remote_control_title), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.textPrimary)
+            val url = info.sessionUrl
+            if (url != null) {
+                Text(
+                    url,
+                    fontSize = 12.sp,
+                    color = colors.accent,
+                    textDecoration = TextDecoration.Underline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClickLabel = stringResource(R.string.remote_control_open)) { runCatching { uriHandler.openUri(url) } },
+                )
+            } else {
+                Text(
+                    stringResource(R.string.remote_control_no_url),
+                    fontSize = 12.sp,
+                    color = colors.textTertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            info.sessionUrl?.let { url ->
+                BannerAction(
+                    if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                    stringResource(if (copied) R.string.remote_control_copied else R.string.remote_control_copy),
+                    colors.accent,
+                ) {
+                    clipboard.setText(AnnotatedString(url))
+                    copied = true
+                }
+            }
+            if (onTurnOff != null) {
+                BannerAction(
+                    Icons.Rounded.PowerSettingsNew,
+                    stringResource(if (turnRunning) R.string.remote_control_turn_off_busy else R.string.remote_control_turn_off),
+                    colors.accent,
+                    enabled = !turnRunning,
+                    onClick = onTurnOff,
+                )
+            }
         }
     }
 }
