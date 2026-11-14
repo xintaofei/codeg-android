@@ -624,6 +624,8 @@
     <string name="compose_queue">加入队列</string>
     <string name="queue_edit">编辑排队的消息</string>
     <string name="queue_remove">移出队列</string>
+    <string name="queue_paused">上一条消息失败，队列已暂停</string>
+    <string name="queue_send_now">立即发送</string>
     <string name="compose_stop">停止</string>
     <string name="compose_send">发送</string>
 

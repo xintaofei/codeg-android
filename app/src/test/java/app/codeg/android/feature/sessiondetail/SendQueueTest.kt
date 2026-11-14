@@ -111,6 +111,54 @@ class SendQueueTest {
     }
 
     @Test
+    fun `a failed queued send goes back to the head and holds the rest until resumed`() = runTest {
+        val h = harness("C", inFlight = true)
+        runCurrent()
+        // "B" was sent and failed: it returns ahead of "C", in the same write that frees the
+        // session, and nothing goes out on its own.
+        h.ui.update { it.pausedAfterFailure(requeue = item("B")).copy(isInFlight = false) }
+        runCurrent()
+        assertEquals(emptyList<String>(), h.sent)
+        assertEquals(listOf("B", "C"), h.ui.value.queue.map { it.id })
+        assertEquals(true, h.ui.value.queuePaused)
+        // An explicit re-arm (another hold clearing) doesn't lift it either.
+        h.queue.schedule()
+        runCurrent()
+        assertEquals(emptyList<String>(), h.sent)
+        h.queue.resume()
+        runCurrent()
+        assertEquals(listOf("B"), h.sent)
+    }
+
+    @Test
+    fun `a died turn holds the queue, and the user's next message resumes it`() = runTest {
+        val h = harness("B", inFlight = true)
+        runCurrent()
+        h.ui.update { it.pausedAfterFailure(requeue = null) }
+        h.ui.update { it.copy(isInFlight = false) }
+        runCurrent()
+        assertEquals(emptyList<String>(), h.sent)
+        h.queue.enqueue(item("C"), front = false, resume = true)
+        runCurrent()
+        assertEquals(listOf("B"), h.sent)
+        assertEquals(listOf("C"), h.ui.value.queue.map { it.id })
+    }
+
+    @Test
+    fun `a pause never outlives the queue it held`() {
+        // Nothing queued: a failure has nothing to hold.
+        assertEquals(false, SessionDetailUiState(isNew = false).pausedAfterFailure(requeue = null).queuePaused)
+        val paused = SessionDetailUiState(isNew = false, queue = listOf(item("B"), item("C")), queuePaused = true)
+        val one = paused.withQueue(paused.queue.drop(1))
+        assertEquals(true, one.queuePaused)
+        // The last one removed or taken back to edit: the next message queued must not
+        // inherit a hold nobody can see the reason for.
+        assertEquals(false, one.withQueue(emptyList()).queuePaused)
+        // Nor does a change of queue invent one.
+        assertEquals(false, SessionDetailUiState(isNew = false).withQueue(listOf(item("B"))).queuePaused)
+    }
+
+    @Test
     fun `a bounced message goes back ahead of the rest, a direct send behind them`() {
         val queue = listOf(item("C"))
         assertEquals(listOf("B", "C"), SendQueueController.queued(queue, item("B"), front = true).map { it.id })

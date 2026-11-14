@@ -629,6 +629,8 @@
     <string name="compose_queue">Queue message</string>
     <string name="queue_edit">Edit queued message</string>
     <string name="queue_remove">Remove from queue</string>
+    <string name="queue_paused">Queue paused: the last message failed</string>
+    <string name="queue_send_now">Send now</string>
     <string name="compose_stop">Stop</string>
     <string name="compose_send">Send</string>
 

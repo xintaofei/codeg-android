@@ -43,9 +43,10 @@ internal fun flushRetryDelayMs(now: Long, lastBounceAt: Long, backoffMs: Long = 
  * The queue in [SessionDetailUiState.queue] and when its head goes out.
  *
  * Flushing is level-triggered off the state rather than off turn ends, so every way of
- * becoming idle flushes — a turn's end, a failed send, a bounce's backoff running out — and
+ * becoming idle flushes — a turn's end, a bounce's backoff running out, a pause lifted — and
  * the caller re-arms it ([schedule]) when one of its own [held] reasons clears. One message
- * at a time: the send it starts puts the session back in flight, which holds the rest.
+ * at a time: the send it starts puts the session back in flight, which holds the rest. A
+ * failure pauses it instead ([pausedAfterFailure]) until the user says go on.
  *
  * @param flushDispatcher runs the flush, and must DISPATCH rather than run it in place. The
  *   state turns idle in the middle of a turn's end (the composer is released before the turn
@@ -67,21 +68,32 @@ internal class SendQueueController(
     /** When a send last bounced ([clock]); null if none has. */
     private var lastBounceAt: Long? = null
 
-    /** Start flushing whenever there is something queued and nothing running. */
+    /** Start flushing whenever there is something queued, nothing running, and no hold. */
     fun start() {
         scope.launch {
-            ui.map { it.queue.isNotEmpty() && !it.isInFlight && !it.loading }
+            ui.map { it.queue.isNotEmpty() && !it.isInFlight && !it.loading && !it.queuePaused }
                 .distinctUntilChanged()
                 .collect { ready -> if (ready) schedule() }
         }
     }
 
-    fun enqueue(item: QueuedPrompt, front: Boolean) {
-        ui.update { it.copy(queue = queued(it.queue, item, front)) }
+    /**
+     * Queue [item]. One the user just wrote ([resume]) is also how they take a paused queue
+     * off hold: sending again says "go on".
+     */
+    fun enqueue(item: QueuedPrompt, front: Boolean, resume: Boolean = false) {
+        ui.update {
+            it.copy(queue = queued(it.queue, item, front), queuePaused = it.queuePaused && !resume)
+        }
     }
 
     fun remove(id: String) {
-        ui.update { it.copy(queue = it.queue.filterNot { q -> q.id == id }) }
+        ui.update { it.withQueue(it.queue.filterNot { q -> q.id == id }) }
+    }
+
+    /** "Send now" on a paused queue. */
+    fun resume() {
+        ui.update { if (it.queuePaused) it.copy(queuePaused = false) else it }
     }
 
     /** A send just bounced off a busy turn: hold the next flush back by the backoff. */
@@ -95,7 +107,7 @@ internal class SendQueueController(
         flushJob = scope.launch(flushDispatcher) {
             delay(lastBounceAt?.let { flushRetryDelayMs(clock(), it) } ?: 0L)
             val state = ui.value
-            if (state.isInFlight || state.loading || held()) return@launch
+            if (state.isInFlight || state.loading || state.queuePaused || held()) return@launch
             val next = state.queue.firstOrNull() ?: return@launch
             remove(next.id)
             sendQueued(next)
@@ -107,4 +119,20 @@ internal class SendQueueController(
         fun queued(queue: List<QueuedPrompt>, item: QueuedPrompt, front: Boolean): List<QueuedPrompt> =
             if (front) listOf(item) + queue else queue + item
     }
+}
+
+/** This state with [queue] as its queue; a hold ends with the last message it held. */
+internal fun SessionDetailUiState.withQueue(queue: List<QueuedPrompt>): SessionDetailUiState =
+    copy(queue = queue, queuePaused = queuePaused && queue.isNotEmpty())
+
+/**
+ * The queue after a send that FAILED, or a turn that died — not a send that bounced off a busy
+ * turn, which waits and retries on its own. A queued message that failed goes back to the head,
+ * where it was; and whatever is queued then waits for the user, since it would most likely fail
+ * the same way, one by one. (A failed message from the composer or the app goes back to the
+ * composer instead: the caller's part.)
+ */
+internal fun SessionDetailUiState.pausedAfterFailure(requeue: QueuedPrompt?): SessionDetailUiState {
+    val queue = if (requeue != null) SendQueueController.queued(queue, requeue, front = true) else queue
+    return copy(queue = queue, queuePaused = queue.isNotEmpty())
 }

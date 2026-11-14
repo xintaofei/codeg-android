@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.PauseCircle
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -50,6 +51,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -88,6 +90,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -544,6 +547,9 @@ fun SessionDetailScreen(
                 if (ui.queue.isNotEmpty()) {
                     QueueStrip(
                         items = ui.queue,
+                        // While a turn runs the queue waits for it anyway.
+                        paused = ui.queuePaused && !ui.isInFlight,
+                        onResume = viewModel::resumeQueue,
                         onEdit = { id ->
                             // Back into the composer, after anything already being written there.
                             viewModel.takeQueued(id)?.let { item ->
@@ -856,12 +862,50 @@ private fun FeedbackNotesStrip(notes: List<FeedbackNote>) {
     }
 }
 
-/** The messages waiting for the running turn to end, in the order they will go out. */
+/**
+ * The messages waiting for the running turn to end, in the order they will go out. [paused]
+ * after a failure: they wait for "send now" ([onResume]) instead of going out on their own.
+ */
 @Composable
-private fun QueueStrip(items: List<QueuedPrompt>, onEdit: (String) -> Unit, onRemove: (String) -> Unit) {
+private fun QueueStrip(
+    items: List<QueuedPrompt>,
+    paused: Boolean,
+    onResume: () -> Unit,
+    onEdit: (String) -> Unit,
+    onRemove: (String) -> Unit,
+) {
     val colors = CodegTheme.colors
     val scroll = rememberScrollState()
     LaunchedEffect(items.size) { scroll.animateScrollTo(scroll.maxValue) }
+    if (paused) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(colors.bgElevated.copy(alpha = 0.92f))
+                .padding(start = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                Icons.Rounded.PauseCircle,
+                contentDescription = null,
+                tint = colors.textSecondary,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                stringResource(R.string.queue_paused),
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                color = colors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onResume) {
+                Text(stringResource(R.string.queue_send_now), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.accent)
+            }
+        }
+    }
     Column(
         Modifier
             .fillMaxWidth()

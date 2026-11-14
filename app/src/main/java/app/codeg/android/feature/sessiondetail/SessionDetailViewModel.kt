@@ -443,7 +443,7 @@ class SessionDetailViewModel @Inject constructor(
         if (trimmed.isEmpty() && state.attachments.isEmpty()) return
         // A move or fork re-points the connection; what is sent meanwhile waits for it.
         if (state.isInFlight || state.queue.isNotEmpty() || connectionOps > 0) {
-            queue.enqueue(QueuedPrompt(UUID.randomUUID().toString(), trimmed, state.attachments), front = false)
+            queue.enqueue(QueuedPrompt(UUID.randomUUID().toString(), trimmed, state.attachments), front = false, resume = true)
             _ui.update { it.copy(attachments = emptyList()) }
             return
         }
@@ -572,7 +572,7 @@ class SessionDetailViewModel @Inject constructor(
             // for that turn like any other queued one. (A conversation this send just created
             // can't be busy, but if it were there'd be nothing to queue it on.)
             if (createdConversation) {
-                discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = "A turn is already running on this session.")
+                discardOptimistic(userTurn, text, attachments, origin, createdConversation, createdId, notice = "A turn is already running on this session.")
             } else {
                 bounceToQueue(userTurn, QueuedPrompt(UUID.randomUUID().toString(), text, attachments), origin)
             }
@@ -592,9 +592,9 @@ class SessionDetailViewModel @Inject constructor(
                         ),
                     )
                 }
-                discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = null)
+                discardOptimistic(userTurn, text, attachments, origin, createdConversation, createdId, notice = null)
             } else {
-                discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = e.displayMessage())
+                discardOptimistic(userTurn, text, attachments, origin, createdConversation, createdId, notice = e.displayMessage())
             }
         }
     }
@@ -2105,6 +2105,10 @@ class SessionDetailViewModel @Inject constructor(
         builder.error = builder.error?.takeIf { it.fromAgent } ?: LiveTurnError(message, details?.trim()?.ifEmpty { null })
         builder.isStreaming = false
         emitLiveNow()
+        // The turn died rather than ended: sending the queue into the same failure one message
+        // at a time helps nobody, so it waits for the user. Held before the composer is
+        // released below, which would otherwise flush it.
+        _ui.update { it.pausedAfterFailure(requeue = null) }
         clearInteractivePrompts()
     }
 
@@ -2343,6 +2347,9 @@ class SessionDetailViewModel @Inject constructor(
     /** Drop a queued message. */
     fun removeQueued(id: String) = queue.remove(id)
 
+    /** "Send now" on a queue paused by a failure. */
+    fun resumeQueue() = queue.resume()
+
     /**
      * Take a queued message back out to edit it: its images return to the composer, its
      * text is handed to the caller (which owns the draft). Null when it already went out.
@@ -2350,10 +2357,8 @@ class SessionDetailViewModel @Inject constructor(
     fun takeQueued(id: String): QueuedPrompt? {
         val item = _ui.value.queue.firstOrNull { it.id == id } ?: return null
         _ui.update {
-            it.copy(
-                queue = it.queue.filterNot { q -> q.id == id },
-                attachments = (it.attachments + item.attachments).distinctBy { a -> a.id },
-            )
+            it.withQueue(it.queue.filterNot { q -> q.id == id })
+                .copy(attachments = (it.attachments + item.attachments).distinctBy { a -> a.id })
         }
         return item
     }
@@ -2381,15 +2386,24 @@ class SessionDetailViewModel @Inject constructor(
 
     // endregion
 
+    /**
+     * A send failed (not a bounce: [bounceToQueue]). Undo its optimistic turn and give the
+     * message back — a queued one to the head of the queue, anything else to the composer —
+     * and pause whatever is queued until the user says go on ([pausedAfterFailure]).
+     */
     private fun discardOptimistic(
         userTurn: MessageTurn,
         text: String,
         attachments: List<Attachment>,
+        origin: SendOrigin,
         createdConversation: Boolean,
         createdConversationId: Int?,
         /** Null when a banner already says what went wrong. */
         notice: String?,
     ) {
+        // A queued message is the queue's to give back: into the composer it would either be
+        // dropped (the screen keeps a draft the user is writing) or overtaken by those behind.
+        val requeue = if (origin == SendOrigin.QUEUE) QueuedPrompt(UUID.randomUUID().toString(), text, attachments) else null
         liveBuilder = null
         closeStream()
         // A failed FIRST send may have created a conversation row up front; delete THAT exact
@@ -2412,7 +2426,9 @@ class SessionDetailViewModel @Inject constructor(
             hasStartedFirstSend = false
         }
         _ui.update {
-            it.copy(
+            // Paused in the same write that clears `isInFlight`, so the flush never sees the
+            // queue idle and unheld in between.
+            it.pausedAfterFailure(requeue).copy(
                 pendingUserTurns = it.pendingUserTurns.filterNot { t -> t.id == userTurn.id },
                 live = null,
                 isInFlight = false,
@@ -2421,8 +2437,8 @@ class SessionDetailViewModel @Inject constructor(
                 // Restore the composer so a failed send never silently loses the user's work —
                 // but don't clobber fresh input the user added during the in-flight window (the
                 // draft guard lives in the screen; attachments are owned here). iOS parity.
-                restoreDraft = text.ifEmpty { null },
-                attachments = if (it.attachments.isEmpty()) attachments else it.attachments,
+                restoreDraft = if (requeue != null) it.restoreDraft else text.ifEmpty { null },
+                attachments = if (requeue != null || it.attachments.isNotEmpty()) it.attachments else attachments,
                 summary = if (createdConversation) null else it.summary,
                 isNew = if (createdConversation) true else it.isNew,
                 isDraftEditable = if (createdConversation) true else it.isDraftEditable,

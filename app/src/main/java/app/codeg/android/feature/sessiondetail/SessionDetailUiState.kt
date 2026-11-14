@@ -48,6 +48,12 @@ data class SessionDetailUiState(
     val pendingUserTurns: List<MessageTurn> = emptyList(),
     /** Messages waiting for the running turn to end, oldest first. See SendQueue.kt. */
     val queue: List<QueuedPrompt> = emptyList(),
+    /**
+     * Auto-sending is on hold: the last send failed, or the turn died, for a reason the next
+     * message would most likely hit too. Never true with an empty [queue]; the user's next
+     * send, or "send now" on the strip, resumes it. See SendQueue.kt.
+     */
+    val queuePaused: Boolean = false,
     /** Bumped by every prompt this client sends: folds every reply above it (ReplyFold.kt). */
     val sendSignal: Int = 0,
     val live: LiveTurnState? = null,
