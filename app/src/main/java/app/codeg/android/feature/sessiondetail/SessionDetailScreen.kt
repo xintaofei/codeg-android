@@ -336,7 +336,8 @@ fun SessionDetailScreen(
 
             override fun showFailure(replyId: String, rowId: String) {
                 folds.setOpen(latestFoldView, replyId, true)
-                if (rowId.startsWith("toolgroup-")) disclosures[rowId] = true
+                // A group, or a goal run, opens onto the failed step it holds.
+                if (rowId.startsWith("toolgroup-") || rowId.startsWith("goal-")) disclosures[rowId] = true
                 pendingScroll = rowId
             }
         }

@@ -899,6 +899,23 @@
     <string name="goal_status_budget_limited">预算受限</string>
     <string name="goal_status_limited">已达上限</string>
     <string name="goal_status_complete">已完成</string>
+    <!-- Timeline: background-task poll rows and Codex /goal run rows (web 0.44 background-task.ts, groupGoalRuns) -->
+    <string name="goal_failed">失败</string>
+    <string name="bg_task_running">任务运行中</string>
+    <string name="bg_task_finished">任务完成</string>
+    <string name="bg_task_failed">任务失败</string>
+    <string name="bg_task_stopped">任务已停止</string>
+    <string name="bg_task_metric_exit">退出码 %1$d</string>
+    <string name="bg_task_metric_failed">失败</string>
+    <string name="bg_task_metric_stopped">已停止</string>
+    <string name="bg_task_metric_running">运行中</string>
+    <string name="bg_task_metric_done">完成</string>
+    <string name="bg_task_running_in_background">已在后台运行 · %1$s</string>
+    <string name="bg_task_watching_in_background">已在后台监视 · %1$s</string>
+    <plurals name="bg_task_polled">
+        <item quantity="other">轮询 %d 次</item>
+    </plurals>
+    <!-- end: background-task rows and goal runs -->
     <string name="activity_expand">展开执行过程</string>
     <string name="activity_collapse">收起</string>
 

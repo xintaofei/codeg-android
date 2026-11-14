@@ -68,6 +68,7 @@ import app.codeg.android.core.designsystem.markdown.SingleBlockView
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.MessageTurn
+import app.codeg.android.feature.sessiondetail.rendering.BackgroundTaskRowCard
 import app.codeg.android.feature.sessiondetail.rendering.GoalCard
 import app.codeg.android.feature.sessiondetail.rendering.Goals
 import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
@@ -137,6 +138,8 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
         is NodeContent.Error -> InlineTurnError(c.message, c.details, modifier)
         is NodeContent.ReplyHeader -> ReplyHeaderBody(c, modifier)
         is NodeContent.ReplyFoot -> ReplyFootBody(c, modifier)
+        is NodeContent.BackgroundTask -> BackgroundTaskRowCard(c.row, c.launch, key = node.id, modifier = modifier)
+        is NodeContent.GoalRun -> GoalRunRow(c, modifier, disclosureKey = node.id)
         is NodeContent.Unsupported -> Text(
             stringResource(R.string.timeline_unsupported_block, c.type),
             fontSize = 11.sp,

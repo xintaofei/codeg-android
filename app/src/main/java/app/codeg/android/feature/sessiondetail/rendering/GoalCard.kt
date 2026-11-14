@@ -18,10 +18,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -34,30 +36,69 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.codeg.android.R
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.feature.sessiondetail.timeline.LocalDisclosures
 
 /** The session's goal controls. The default offers none (a preview, a read-only host). */
 val LocalGoalControl = staticCompositionLocalOf { GoalControl(onControl = null, actions = emptyList()) }
 
 /**
- * A goal on the rail (web `GoalCard`): `Goal: <objective>` with what it has used, opening to its
- * status, budget and — while it is active or paused, on a live connection whose adapter offers
- * them — Pause and Clear.
+ * A goal call outside any run on the rail (web `GoalToolCallPart`): the goal row of [GoalFrame],
+ * with no steps of its own.
+ */
+@Composable
+fun GoalCard(vm: ToolCallVM, modifier: Modifier = Modifier) {
+    // Working while the call itself is.
+    GoalFrame(start = vm, end = null, running = GoalRuns.isRunningCall(vm), stepCount = 0, modifier = modifier, steps = null)
+}
+
+/**
+ * A goal on the rail (web `GoalCard`): `Goal: <objective>` with what it has used and how it stands,
+ * opening to its objective, its budget, why it failed, and — while it is active or paused, on a
+ * live connection whose adapter offers them — Pause and Clear. A Codex `/goal` run ([start] …
+ * [end]) opens further onto its own [steps], drawn on a rail of their own, ending on a foot that
+ * folds the row back.
+ *
+ * Whether it is open is DERIVED until the reader taps it: a running run opens as soon as it holds
+ * anything (its steps arrive after its header does), it folds again once it settles (the answer
+ * has been lifted out of it by then), and a failed goal opens to say why.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun GoalCard(vm: ToolCallVM, modifier: Modifier = Modifier) {
+fun GoalFrame(
+    start: ToolCallVM,
+    end: ToolCallVM?,
+    running: Boolean,
+    stepCount: Int,
+    modifier: Modifier = Modifier,
+    /** Its row's id: with a [LocalDisclosures] store above, the reader's choice lives there (and
+     *  "show the failure" can open the row onto a failed step). */
+    disclosureKey: String? = null,
+    steps: (@Composable () -> Unit)?,
+) {
     val colors = CodegTheme.colors
-    val goal = remember(vm) { Goals.parse(vm) }
+    val goal = remember(start, end) { Goals.parseRun(start, end) }
+    val errorText = remember(start, end) { Goals.errorText(start, end) }
     val control = LocalGoalControl.current
-    val failed = vm.state == ToolCallState.ERROR || goal.failed
-    var open by remember(vm.id) { mutableStateOf(failed) }
+    val failed = start.state == ToolCallState.ERROR || start.isError ||
+        end?.let { it.state == ToolCallState.ERROR || it.isError } == true || goal.failed
+    val store = LocalDisclosures.current?.takeIf { disclosureKey != null }
+    var ownOpen by remember(start.id) { mutableStateOf<Boolean?>(null) }
+    val userOpen = if (store != null) store[disclosureKey] else ownOpen
+    fun setUserOpen(value: Boolean) {
+        if (store != null) store[disclosureKey!!] = value else ownOpen = value
+    }
+    val autoOpens = failed || (running && steps != null)
+    val open = userOpen ?: autoOpens
     val title = stringResource(R.string.goal_title)
     // A full-width colon (the Chinese title) takes no space after it.
     val header = goal.objective?.let { if (title.endsWith("：")) "$title$it" else "$title $it" } ?: title
@@ -73,7 +114,8 @@ fun GoalCard(vm: ToolCallVM, modifier: Modifier = Modifier) {
         else -> goal.status
     }
     val tokensWord = stringResource(R.string.goal_tokens)
-    val onControl = control.onControl?.takeIf { control.currentCallId == vm.id }
+    // Only the thread's latest goal call may act on the session's goal (see [GoalControl]).
+    val onControl = control.onControl?.takeIf { control.currentCallId != null && (control.currentCallId == start.id || control.currentCallId == end?.id) }
     val canPause = onControl != null && "pause" in control.actions && status == "active"
     val canClear = onControl != null && "clear" in control.actions && (status == "active" || status == "paused")
     Column(
@@ -84,7 +126,7 @@ fun GoalCard(vm: ToolCallVM, modifier: Modifier = Modifier) {
             .border(0.5.dp, colors.hairline, RoundedCornerShape(10.dp)),
     ) {
         Row(
-            Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 10.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().clickable { setUserOpen(!open) }.padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -100,6 +142,17 @@ fun GoalCard(vm: ToolCallVM, modifier: Modifier = Modifier) {
             )
             goal.tokensUsed?.let { Text("${Goals.tokens(it)} $tokensWord", fontSize = 11.sp, color = colors.textTertiary, maxLines = 1) }
             goal.timeUsedSeconds?.let { Text(Goals.duration(it), fontSize = 11.sp, color = colors.textTertiary, maxLines = 1) }
+            // Working, failed, or where the goal stands.
+            when {
+                running -> CircularProgressIndicator(strokeWidth = 1.5.dp, color = colors.accent, modifier = Modifier.size(12.dp))
+                failed && errorText != null -> Text(stringResource(R.string.goal_failed), fontSize = 11.sp, color = colors.danger, maxLines = 1)
+                statusLabel != null -> Text(
+                    statusLabel,
+                    fontSize = 11.sp,
+                    color = if (goal.failed) colors.danger else colors.textTertiary,
+                    maxLines = 1,
+                )
+            }
             Icon(if (open) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
         }
         AnimatedVisibility(
@@ -121,15 +174,59 @@ fun GoalCard(vm: ToolCallVM, modifier: Modifier = Modifier) {
                     goal.remainingTokens?.let { Figure(stringResource(R.string.goal_remaining), "${Goals.tokens(it)} $tokensWord") }
                     goal.timeUsedSeconds?.let { Figure(stringResource(R.string.goal_elapsed), Goals.duration(it)) }
                 }
-                vm.output?.takeIf { vm.isError && it.isNotBlank() }?.let { Text(it.trim(), fontSize = 12.sp, color = colors.danger) }
+                errorText?.let {
+                    SelectionContainer {
+                        Text(
+                            it,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = colors.danger,
+                            maxLines = 16,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(colors.danger.copy(alpha = 0.1f))
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                        )
+                    }
+                }
                 if (canPause || canClear) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (canPause) OutlinedButton(onClick = { onControl?.invoke("pause") }) { Text(stringResource(R.string.goal_pause), fontSize = 13.sp) }
                         if (canClear) OutlinedButton(onClick = { onControl?.invoke("clear") }) { Text(stringResource(R.string.goal_clear), fontSize = 13.sp) }
                     }
                 }
+                if (steps != null) {
+                    steps()
+                    // A settled run ends its steps on the control that folds the row.
+                    if (!running) GoalFoot(stepCount) { setUserOpen(false) }
+                }
             }
         }
+    }
+}
+
+/** `Collapse · 3 steps`: folds a settled goal run's row back. */
+@Composable
+private fun GoalFoot(stepCount: Int, onFold: () -> Unit) {
+    val colors = CodegTheme.colors
+    val res = LocalContext.current.resources
+    val what = listOfNotNull(
+        stringResource(R.string.activity_collapse),
+        stepCount.takeIf { it > 0 }?.let { res.getQuantityString(R.plurals.activity_steps, it, it) },
+    ).joinToString(stringResource(R.string.activity_separator))
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(role = Role.Button, onClick = onFold)
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(Icons.Rounded.ExpandLess, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.size(16.dp))
+        Text(what, fontSize = 12.sp, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

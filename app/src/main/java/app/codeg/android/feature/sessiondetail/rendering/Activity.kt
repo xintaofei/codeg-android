@@ -131,21 +131,40 @@ data class ActivitySummary(
  * A call the user declined is a failure; one they stopped is interrupted.
  *
  * [parts] in reply order and before [MessageRender.groupConsecutiveTools], which drops the
- * blank interruptions this still counts.
+ * blank interruptions this still counts — but with their lanes drawn out
+ * ([app.codeg.android.feature.sessiondetail.timeline.TranscriptTimeline.laneParts]): a
+ * background task is one step however often it was polled, its failure one failure nothing
+ * recovers, and a goal run's steps count as the reply's, its own two calls not at all.
  */
 fun summarizeActivity(parts: List<RenderPart>): ActivitySummary {
-    val calls = parts.flatMap {
+    // A goal's work counts as the reply's, its own two calls not at all ([GoalRuns.flatten]).
+    val flat = GoalRuns.flatten(parts)
+    val calls = flat.flatMap {
         when (it) {
             is RenderPart.Tool -> listOf(it.vm)
             is RenderPart.ToolGroup -> it.items
+            is RenderPart.BackgroundTasks -> it.rows
             else -> emptyList()
         }
     }
     var steps = 0
     var interrupted = 0
-    val failures = mutableListOf<Pair<Int, ToolCallVM>>()
+    val failures = mutableListOf<Pair<Int, ToolCallVM?>>()
+    val failureIds = mutableMapOf<Int, String>()
     val lastSuccess = mutableMapOf<String, Int>()
-    calls.forEachIndexed { index, vm ->
+    calls.forEachIndexed { index, call ->
+        // A background task is one step however often it was polled, and its failure is one
+        // failure, which nothing recovers (web `summarize.ts`).
+        if (call is BackgroundTaskPolls.Row) {
+            steps++
+            if (call.badge == BackgroundTaskPolls.Badge.FAILED) {
+                failures += index to null
+                failureIds[index] = BackgroundTaskPolls.failureKey(call)
+            }
+            return@forEachIndexed
+        }
+        val vm = call as ToolCallVM
+        failureIds[index] = vm.id
         if (!isBookkeeping(vm)) steps++
         when (stepStatus(vm)) {
             StepStatus.CANCELLED -> interrupted++
@@ -155,7 +174,7 @@ fun summarizeActivity(parts: List<RenderPart>): ActivitySummary {
         }
     }
     val unrecovered = failures.filter { (index, vm) ->
-        val redone = retrySignature(vm)?.let(lastSuccess::get)
+        val redone = vm?.let(::retrySignature)?.let(lastSuccess::get)
         redone == null || redone < index
     }
     return ActivitySummary(
@@ -163,7 +182,7 @@ fun summarizeActivity(parts: List<RenderPart>): ActivitySummary {
         failed = failures.size,
         unrecovered = unrecovered.size,
         interrupted = interrupted,
-        firstUnrecoveredId = unrecovered.firstOrNull()?.second?.id,
+        firstUnrecoveredId = unrecovered.firstOrNull()?.first?.let(failureIds::get),
     )
 }
 
@@ -221,7 +240,7 @@ internal fun retrySignature(vm: ToolCallVM): String? {
 fun isAnswerPart(part: RenderPart): Boolean = when (part) {
     is RenderPart.Text, is RenderPart.Image, is RenderPart.Error, is RenderPart.ProposedPlan -> true
     is RenderPart.Reasoning, is RenderPart.Tool, is RenderPart.ToolGroup, is RenderPart.Compaction, is RenderPart.Plan,
-    is RenderPart.Unknown,
+    is RenderPart.Unknown, is RenderPart.BackgroundTasks, is RenderPart.GoalRun,
     -> false
 }
 

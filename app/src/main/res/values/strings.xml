@@ -917,6 +917,24 @@
     <string name="goal_status_budget_limited">budget limited</string>
     <string name="goal_status_limited">limit reached</string>
     <string name="goal_status_complete">complete</string>
+    <!-- Timeline: background-task poll rows and Codex /goal run rows (web 0.44 background-task.ts, groupGoalRuns) -->
+    <string name="goal_failed">failed</string>
+    <string name="bg_task_running">Task running</string>
+    <string name="bg_task_finished">Task finished</string>
+    <string name="bg_task_failed">Task failed</string>
+    <string name="bg_task_stopped">Task stopped</string>
+    <string name="bg_task_metric_exit">exit %1$d</string>
+    <string name="bg_task_metric_failed">failed</string>
+    <string name="bg_task_metric_stopped">stopped</string>
+    <string name="bg_task_metric_running">running</string>
+    <string name="bg_task_metric_done">done</string>
+    <string name="bg_task_running_in_background">Running in background · %1$s</string>
+    <string name="bg_task_watching_in_background">Watching in background · %1$s</string>
+    <plurals name="bg_task_polled">
+        <item quantity="one">Polled %d time</item>
+        <item quantity="other">Polled %d times</item>
+    </plurals>
+    <!-- end: background-task rows and goal runs -->
     <string name="activity_expand">Show the steps</string>
     <string name="activity_collapse">Collapse</string>
 

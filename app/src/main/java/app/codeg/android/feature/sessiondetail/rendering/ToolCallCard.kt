@@ -441,6 +441,13 @@ private fun ToolOutputSection(vm: ToolCallVM) {
         BackgroundLaunchBody(lifecycle)
         return
     }
+    // A command (or a monitor) that went on in the background: its result is the CLI's note to
+    // the model; the reader gets which task it became, the row its polls draw (web `useCommandOutput`).
+    BackgroundTaskPolls.launchedTask(vm)?.let { (taskId, monitor) ->
+        val note = stringResource(if (monitor) R.string.bg_task_watching_in_background else R.string.bg_task_running_in_background, taskId)
+        CodeBlock(code = note, language = "console")
+        return
+    }
     if (vm.bucket == ToolKindBucket.SEARCH) {
         SearchOutputSection(vm, out)
         return

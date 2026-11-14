@@ -17,6 +17,8 @@ import app.codeg.android.feature.sessiondetail.LiveToolCallState
 import app.codeg.android.feature.sessiondetail.LiveTurnState
 import app.codeg.android.feature.sessiondetail.STEER_TURN_PREFIX
 import app.codeg.android.feature.sessiondetail.rendering.ActivitySummary
+import app.codeg.android.feature.sessiondetail.rendering.BackgroundTaskPolls
+import app.codeg.android.feature.sessiondetail.rendering.GoalRuns
 import app.codeg.android.feature.sessiondetail.rendering.ContextCompaction
 import app.codeg.android.feature.sessiondetail.rendering.Delegations
 import app.codeg.android.feature.sessiondetail.rendering.MessageRender
@@ -78,6 +80,14 @@ sealed interface NodeContent {
     data class Error(val message: String, val details: String? = null) : NodeContent
     data class Unsupported(val type: String) : NodeContent
 
+    /** One task of a background-task lane, its polls folded together; [launch]: the command
+     *  that started it, when that is in the reply. */
+    data class BackgroundTask(val row: BackgroundTaskPolls.Row, val launch: BackgroundTaskPolls.Launch?) : NodeContent
+
+    /** A Codex `/goal` run: one row naming the objective and how it stands, opening onto the
+     *  run's own [steps] ([TranscriptTimeline.goalStepNodes]). */
+    data class GoalRun(val run: RenderPart.GoalRun, val steps: List<TimelineNode>) : NodeContent
+
     /**
      * The head of an assistant reply (web `ActivityHeader`): what it did — its steps, its
      * failures, the time it took — and, when [foldable], the control folding its steps away.
@@ -123,6 +133,8 @@ data class TimelineNode(
             is NodeContent.ReplyFoot -> MarkerKind.Fold
             is NodeContent.Reasoning -> MarkerKind.Reasoning
             is NodeContent.Tool -> when {
+                // A goal call outside any run wears the goal's mark, as a run does.
+                Goals.isGoalCall(c.vm.rawName) -> MarkerKind.Goal(c.vm.state)
                 // A delegated task wears the logo of the agent that took it.
                 Delegations.drawsCard(c.vm) -> MarkerKind.Delegation(c.vm)
                 Delegations.isStatusPoll(c.vm.rawName) || Delegations.isCancel(c.vm.rawName) ->
@@ -145,6 +157,9 @@ data class TimelineNode(
             is NodeContent.Thinking -> MarkerKind.Thinking
             is NodeContent.Error -> MarkerKind.Error
             is NodeContent.Unsupported -> MarkerKind.System // reuse the dim system tick
+            // A sub-agent polled like a background task reads as one.
+            is NodeContent.BackgroundTask -> MarkerKind.BackgroundTask(c.row.isSubagent, BackgroundTaskPolls.rowStatus(c.row))
+            is NodeContent.GoalRun -> MarkerKind.Goal(GoalRuns.markerState(c.run))
         }
 
     /** LazyColumn `contentType` — recycled slots only reuse a subtree of the same shape,
@@ -176,6 +191,8 @@ data class TimelineNode(
             is NodeContent.Unsupported -> "unsupported"
             is NodeContent.ReplyHeader -> "reply.header"
             is NodeContent.ReplyFoot -> "reply.foot"
+            is NodeContent.BackgroundTask -> "bgtask"
+            is NodeContent.GoalRun -> "goalrun"
         }
 }
 
@@ -573,21 +590,21 @@ object TranscriptTimeline {
         durationMs: Int?,
         trailer: List<TimelineNode>,
         caret: Boolean = false,
+        /** Prose parts (by identity) parsed as live text whatever [cached] says. */
+        liveTexts: Set<RenderPart>? = null,
     ): ReplyRows {
-        val parts = MessageRender.groupConsecutiveTools(calls)
-        val rows = parts.mapIndexed { idx, part -> nodesFor(part, id, idx, agent, cached) }.toMutableList()
+        // The lanes, then goal runs, as the web adapts a reply; then the explore / command runs.
+        val laned = laneParts(calls, completed)
+        val parts = MessageRender.groupConsecutiveTools(laned)
+        val rows = parts.mapIndexed { idx, part -> nodesFor(part, id, idx, agent, cached, liveTexts) }.toMutableList()
         val lastRows = rows.lastOrNull()
         val tail = lastRows?.lastOrNull()
         if (caret && tail != null) {
-            val marked = when (val c = tail.content) {
-                is NodeContent.AssistantBlock -> tail.copy(content = c.copy(streaming = true))
-                is NodeContent.Reasoning -> tail.copy(content = c.copy(streaming = true))
-                else -> null
-            }
+            val marked = markStreaming(tail)
             if (marked != null) rows[rows.lastIndex] = lastRows.dropLast(1) + marked
         }
         val split = answerStart(parts)
-        val summary = summarizeActivity(calls)
+        val summary = summarizeActivity(laned)
         val process = rows.take(split).flatten()
         val callRows = buildMap {
             parts.forEachIndexed { idx, part ->
@@ -597,6 +614,12 @@ object TranscriptTimeline {
                         val row = groupRowId(part, "$id#$idx")
                         part.items.forEach { put(it.id, row) }
                     }
+                    is RenderPart.BackgroundTasks -> part.rows.forEach { row ->
+                        val rowId = backgroundRowId(part, row)
+                        put(BackgroundTaskPolls.failureKey(row), rowId)
+                        row.pollIds.forEach { putIfAbsent(it, rowId) }
+                    }
+                    is RenderPart.GoalRun -> GoalRuns.callIds(part).forEach { putIfAbsent(it, goalRowId(part)) }
                     else -> Unit
                 }
             }
@@ -612,8 +635,13 @@ object TranscriptTimeline {
             durationMs = durationMs,
             failureRowId = summary.firstUnrecoveredId?.let(callRows::get),
             pinned = process.filter { node ->
-                val vm = (node.content as? NodeContent.Tool)?.vm
-                vm != null && vm.bucket == ToolKindBucket.TASK && vm.state == ToolCallState.RUNNING
+                when (val c = node.content) {
+                    is NodeContent.Tool -> c.vm.bucket == ToolKindBucket.TASK && c.vm.state == ToolCallState.RUNNING
+                    // A background lane outlives its reply task by task: only one whose newest
+                    // poll is still in flight stays in view.
+                    is NodeContent.BackgroundTask -> BackgroundTaskPolls.staysInView(c.row)
+                    else -> false
+                }
             }.mapTo(mutableSetOf()) { it.id },
             calls = calls,
             callRows = callRows,
@@ -652,7 +680,20 @@ object TranscriptTimeline {
      */
     private fun joinReplies(prev: ReplyRows, next: ReplyRows): ReplyRows {
         val calls = prev.calls + next.calls
-        val summary = summarizeActivity(calls)
+        // A goal run or a background lane reads across the seam: a goal [prev] left open goes on
+        // (and closes) in [next], polls on either side of it are one task's row. Their rows are
+        // then the whole reply's, built as its persisted merge will be — under [prev]'s id, with
+        // [next]'s prose parsed as live text.
+        val laned = laneParts(calls, next.completed)
+        if (laned.any { it is RenderPart.GoalRun || it is RenderPart.BackgroundTasks }) {
+            val liveTexts: MutableSet<RenderPart> = java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
+            next.calls.filterTo(liveTexts) { it is RenderPart.Text }
+            return replyRows(
+                prev.id, next.agent, calls, cached = true, completed = next.completed, durationMs = next.durationMs,
+                trailer = next.trailer, caret = !next.completed, liveTexts = liveTexts,
+            )
+        }
+        val summary = summarizeActivity(laned)
         val callRows = prev.callRows + next.callRows
         val (process, answer) = if (next.process.isEmpty()) {
             prev.process to prev.answer + next.answer
@@ -771,10 +812,17 @@ object TranscriptTimeline {
      * identity across the live→persisted handoff (keyed by its ACP tool id), so the
      * card's expand state and marker survive without flashing.
      */
-    private fun nodesFor(part: RenderPart, ownerId: String, index: Int, agent: AgentType, cached: Boolean): List<TimelineNode> {
+    private fun nodesFor(
+        part: RenderPart,
+        ownerId: String,
+        index: Int,
+        agent: AgentType,
+        cached: Boolean,
+        liveTexts: Set<RenderPart>? = null,
+    ): List<TimelineNode> {
         val base = "$ownerId#$index"
         return when (part) {
-            is RenderPart.Text -> textBlockNodes(part.text, base, agent, cached)
+            is RenderPart.Text -> textBlockNodes(part.text, base, agent, cached && liveTexts?.contains(part) != true)
             is RenderPart.Reasoning -> listOf(TimelineNode(base, NodeContent.Reasoning(part.text), agent))
             is RenderPart.Tool -> listOf(TimelineNode(toolRowId(part.vm), NodeContent.Tool(part.vm), agent))
             is RenderPart.ToolGroup ->
@@ -785,8 +833,66 @@ object TranscriptTimeline {
             is RenderPart.Unknown -> listOf(TimelineNode(base, NodeContent.Unsupported(part.type), agent))
             is RenderPart.Plan -> listOf(TimelineNode(base, NodeContent.Plan(part.entries), agent))
             is RenderPart.ProposedPlan -> listOf(TimelineNode(base, NodeContent.ProposedPlan(part.markdown, part.streaming), agent))
+            // A row per task.
+            is RenderPart.BackgroundTasks -> part.rows.map { row ->
+                TimelineNode(backgroundRowId(part, row), NodeContent.BackgroundTask(row, row.taskId?.let(part.launches::get)), agent)
+            }
+            is RenderPart.GoalRun ->
+                listOf(TimelineNode(goalRowId(part), NodeContent.GoalRun(part, goalStepNodes(part, agent, cached, liveTexts)), agent))
         }
     }
+
+    /**
+     * The streaming reply's last node, marked as the one being written: prose shows the caret,
+     * a thought reads "Thinking". A goal run still open at the reply's end passes the mark on
+     * to its own last step, which is where the writing is; a closed one is done writing, even
+     * while the reply goes on. Null when the tail is nothing that streams.
+     */
+    private fun markStreaming(node: TimelineNode): TimelineNode? = when (val c = node.content) {
+        is NodeContent.AssistantBlock -> node.copy(content = c.copy(streaming = true))
+        is NodeContent.Reasoning -> node.copy(content = c.copy(streaming = true))
+        is NodeContent.GoalRun -> if (c.run.isRunning && c.run.end == null) {
+            c.steps.lastOrNull()?.let(::markStreaming)?.let { last ->
+                node.copy(content = c.copy(steps = c.steps.dropLast(1) + last))
+            }
+        } else {
+            null
+        }
+        else -> null
+    }
+
+    /**
+     * A reply's ungrouped parts with its lanes drawn out, as the web adapts a reply: the
+     * background-task polls into their lane ([MessageRender.groupBackgroundTasks]), then the goal
+     * runs ([GoalRuns.group]) — an unfinished one running only while the reply is still written.
+     */
+    internal fun laneParts(calls: List<RenderPart>, completed: Boolean): List<RenderPart> =
+        GoalRuns.group(MessageRender.groupBackgroundTasks(calls), isStreaming = !completed)
+
+    /**
+     * A goal run's own steps as rail nodes, for its row to draw under its header (the web's nested
+     * activity timeline): the run's parts grouped and mapped as a reply's are — every one a step,
+     * a goal row having no answer slot — the rail ending at the first and last of them.
+     */
+    internal fun goalStepNodes(
+        run: RenderPart.GoalRun,
+        agent: AgentType,
+        cached: Boolean,
+        liveTexts: Set<RenderPart>? = null,
+    ): List<TimelineNode> {
+        val owner = goalRowId(run)
+        val nodes = MessageRender.groupConsecutiveTools(run.items)
+            .flatMapIndexed { idx, part -> nodesFor(part, owner, idx, agent, cached, liveTexts) }
+        return terminate(nodes)
+    }
+
+    /** `bg:<lane's first poll>:<task>`: a row keeps its identity while its lane grows, and across
+     *  the live → history hand-over. */
+    private fun backgroundRowId(lane: RenderPart.BackgroundTasks, row: BackgroundTaskPolls.Row) =
+        "bg:${lane.polls.firstOrNull()?.id.orEmpty()}:${row.key}"
+
+    /** Keyed by the opening call, which the live and the persisted run share. */
+    private fun goalRowId(run: RenderPart.GoalRun) = "goal-${run.start.id}"
 
     /**
      * Split an assistant prose part into one node per Markdown block so a long message

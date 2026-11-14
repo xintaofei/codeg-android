@@ -17,12 +17,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PriorityHigh
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -50,6 +53,7 @@ import app.codeg.android.feature.sessiondetail.rendering.checksStatus
 import app.codeg.android.feature.sessiondetail.rendering.delegationTint
 import app.codeg.android.feature.sessiondetail.rendering.rememberCheckRows
 import app.codeg.android.feature.sessiondetail.rendering.rememberDelegationModel
+import app.codeg.android.feature.sessiondetail.rendering.StepStatus
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
 import app.codeg.android.feature.sessiondetail.rendering.ToolWarning
 import app.codeg.android.feature.sessiondetail.rendering.ToolKindBucket
@@ -108,6 +112,13 @@ sealed interface MarkerKind {
 
     /** The foot folding a reply's steps back: like [Compaction], a mark ON the spine. */
     data object Fold : MarkerKind
+
+    /** A Codex `/goal` (a run, or a goal call outside any run): the goal's flag, tinted by how it stands. */
+    data class Goal(val state: ToolCallState) : MarkerKind
+
+    /** One task of a background-task lane: an hourglass (a robot for a polled sub-agent), tinted
+     *  by how the task stands; a stopped task is neither a success nor a failure. */
+    data class BackgroundTask(val subagent: Boolean, val status: StepStatus) : MarkerKind
 }
 
 /**
@@ -239,13 +250,28 @@ fun NodeMarker(kind: MarkerKind, modifier: Modifier = Modifier) {
                         .background(colors.bg)
                         .border(1.5.dp, colors.rail, CircleShape),
                 )
+            is MarkerKind.Goal -> StateMarker(Icons.Rounded.Flag, kind.state, callId = null)
+            is MarkerKind.BackgroundTask -> {
+                val icon = if (kind.subagent) Icons.Rounded.SmartToy else Icons.Rounded.HourglassTop
+                when (kind.status) {
+                    StepStatus.RUNNING -> StateMarker(icon, ToolCallState.RUNNING, callId = null)
+                    StepStatus.SUCCEEDED -> StateMarker(icon, ToolCallState.DONE, callId = null)
+                    StepStatus.FAILED, StepStatus.REJECTED -> StateMarker(icon, ToolCallState.ERROR, callId = null)
+                    StepStatus.CANCELLED -> SectionBadgeIcon(icon, colors.textTertiary, size = size)
+                }
+            }
         }
     }
 }
 
 /** A tool call's marker: its kind's glyph, tinted by how it stands. */
 @Composable
-private fun ToolMarker(bucket: ToolKindBucket, state: ToolCallState, callId: String?) {
+private fun ToolMarker(bucket: ToolKindBucket, state: ToolCallState, callId: String?) =
+    StateMarker(bucketIcon(bucket), state, callId)
+
+/** [icon], tinted by how its call stands; pinging while it runs (unless it waits on the user). */
+@Composable
+private fun StateMarker(icon: ImageVector, state: ToolCallState, callId: String?) {
     val colors = CodegTheme.colors
     val size = TimelineMetrics.markerSize
     val running = state == ToolCallState.RUNNING || state == ToolCallState.INPUT_STREAMING
@@ -257,7 +283,7 @@ private fun ToolMarker(bucket: ToolKindBucket, state: ToolCallState, callId: Str
         state == ToolCallState.DONE -> SuccessGreen
         else -> colors.danger
     }
-    SectionBadgeIcon(bucketIcon(bucket), tint, size = size)
+    SectionBadgeIcon(icon, tint, size = size)
     if (running && !awaiting) PulseRing(tint, size)
 }
 

@@ -40,7 +40,8 @@ data class GoalControl(
 
 object Goals {
 
-    private fun bareName(name: String) = name.trim().lowercase().substringAfterLast("__").substringAfterLast('/')
+    /** The tool's own name under any wrapper: `mcp__…__`, `server/`, codex's `functions.`. */
+    private fun bareName(name: String) = name.trim().lowercase().substringAfterLast("__").substringAfterLast('/').substringAfterLast('.')
 
     fun isGoalCall(name: String): Boolean = bareName(name).let { it == "create_goal" || it == "update_goal" }
 
@@ -68,18 +69,56 @@ object Goals {
         keys.firstNotNullOfOrNull { (this?.get(it) as? JsonPrimitive)?.takeIf { p -> !p.isString }?.doubleOrNull?.takeIf { d -> d.isFinite() } }
 
     /** The goal [vm] states: its result's `goal` first, then its input; a create is active. */
-    fun parse(vm: ToolCallVM): GoalView {
-        val input = obj(vm.input)
-        val output = obj(vm.output?.takeIf { it.isNotBlank() } ?: vm.content)
-        val goal = output?.get("goal") as? JsonObject
+    fun parse(vm: ToolCallVM): GoalView = parseRun(vm, null)
+
+    /**
+     * The goal a run's calls state (web `parseGoal` over a `goal-run`): the closing call's word
+     * first, then the opening call's — each its result's `goal`, then its input. A run opened
+     * by `create_goal` is active until said otherwise.
+     */
+    fun parseRun(start: ToolCallVM, end: ToolCallVM?): GoalView {
+        fun result(vm: ToolCallVM?) = vm?.let { obj(it.output?.takeIf { o -> o.isNotBlank() } ?: it.content) }
+        val startInput = obj(start.input)
+        val startOutput = result(start)
+        val endInput = end?.let { obj(it.input) }
+        val endOutput = result(end)
+        val startGoal = startOutput?.get("goal") as? JsonObject
+        val endGoal = endOutput?.get("goal") as? JsonObject
         return GoalView(
-            objective = goal.str("objective") ?: input.str("objective"),
-            status = goal.str("status") ?: input.str("status") ?: if (bareName(vm.rawName) == "create_goal") "active" else null,
-            tokensUsed = goal.num("tokensUsed", "tokens_used"),
-            tokenBudget = goal.num("tokenBudget", "token_budget") ?: input.num("tokenBudget", "token_budget"),
-            timeUsedSeconds = goal.num("timeUsedSeconds", "time_used_seconds"),
-            remainingTokens = output.num("remainingTokens", "remaining_tokens"),
+            objective = endGoal.str("objective") ?: endInput.str("objective") ?: startGoal.str("objective") ?: startInput.str("objective"),
+            status = endGoal.str("status") ?: endInput.str("status") ?: startGoal.str("status") ?: startInput.str("status")
+                ?: if (bareName(start.rawName) == "create_goal") "active" else null,
+            tokensUsed = endGoal.num("tokensUsed", "tokens_used") ?: startGoal.num("tokensUsed", "tokens_used"),
+            tokenBudget = endGoal.num("tokenBudget", "token_budget") ?: startGoal.num("tokenBudget", "token_budget")
+                ?: startInput.num("tokenBudget", "token_budget"),
+            timeUsedSeconds = endGoal.num("timeUsedSeconds", "time_used_seconds") ?: startGoal.num("timeUsedSeconds", "time_used_seconds"),
+            remainingTokens = endOutput.num("remainingTokens", "remaining_tokens") ?: startOutput.num("remainingTokens", "remaining_tokens"),
         )
+    }
+
+    private fun failed(vm: ToolCallVM?) = vm != null && (vm.isError || vm.state == ToolCallState.ERROR)
+
+    /** The failure a goal shows: the closing call's, else the opening call's, a fence around the
+     *  whole text lifted. Null when neither failed (or said nothing). */
+    fun errorText(start: ToolCallVM, end: ToolCallVM?): String? {
+        val raw = (if (failed(end)) end?.output else null) ?: (if (failed(start)) start.output else null)
+        return raw?.takeIf { it.isNotBlank() }?.let(::unwrapWholeFence)?.trim()
+    }
+
+    // JS `^…$` without the `m` flag: the whole input, hence `\A` / `\z`.
+    private val WHOLE_FENCE = Regex("\\A[ \\t]*(`{3,})[^`\\n]*\\n([\\s\\S]*?)\\n[ \\t]*\\1[ \\t]*\\z")
+
+    /**
+     * The text a single code fence wraps, when that fence wraps all of [text]; [text] itself
+     * otherwise (web `unwrapWholeFence`). claude-agent-acp fences every failed tool's result for
+     * markdown clients; the goal row shows it as it reads.
+     */
+    fun unwrapWholeFence(text: String): String {
+        val m = WHOLE_FENCE.find(text.trim()) ?: return text
+        val fence = m.groupValues[1]
+        val body = m.groupValues[2]
+        // Only when no line inside could close the fence first.
+        return if (body.split("\n").any { it.trimStart().startsWith(fence) }) text else body
     }
 
     /** `1.2K`, `340` — a token count as the card gives it. */

@@ -177,6 +177,31 @@ sealed interface RenderPart {
      *  turn, which the timeline handles itself; this arm keeps a stray one visible. */
     data class Error(val message: String) : RenderPart
     data class Unknown(val type: String) : RenderPart
+
+    /**
+     * A run of background-task polls ([BackgroundTaskPolls]: Claude Code's `TaskOutput` /
+     * `TaskStop`, Grok's and CodeBuddy's), drawn as one row per task. [launches]: the commands
+     * earlier in the reply that started these tasks, by task id.
+     */
+    data class BackgroundTasks(
+        val polls: List<ToolCallVM>,
+        val launches: Map<String, BackgroundTaskPolls.Launch> = emptyMap(),
+    ) : RenderPart {
+        /** Built once with the part: the header's count, the rail and the rows all read it. */
+        val rows: List<BackgroundTaskPolls.Row> = BackgroundTaskPolls.buildRows(polls)
+    }
+
+    /**
+     * A Codex `/goal` run ([GoalRuns]): `create_goal`, the parts it holds (neither goal call
+     * among them, ungrouped), and the closing `update_goal` when there was one. [isRunning]: an
+     * unfinished run while its reply is still written.
+     */
+    data class GoalRun(
+        val start: ToolCallVM,
+        val end: ToolCallVM?,
+        val items: List<RenderPart>,
+        val isRunning: Boolean,
+    ) : RenderPart
 }
 
 /** Adapts persisted [MessageTurn]s into `[RenderPart]`. Port of iOS `MessageRender`. */
@@ -317,6 +342,47 @@ object MessageRender {
         flush()
         return out
     }
+
+    /**
+     * Wrap each run of consecutive background-task polls ([BackgroundTaskPolls.isToolCall]) into
+     * one [RenderPart.BackgroundTasks] — even a single poll, so every poll reads through the one
+     * lane; anything else breaks a run (web `groupConsecutiveBackgroundTasks`). A codeg delegation
+     * call stays a delegation whatever its result quotes: the web takes that lane by name first,
+     * and a child's report can carry a background envelope's tags as text. Each lane is handed
+     * the commands before it that went on in the background ([BackgroundTaskPolls.launchOf]).
+     *
+     * [parts] ungrouped ([adaptParts]); a reply's turns are merged before they are adapted, so a
+     * run of polls across them is already consecutive (the web's
+     * `mergeAdjacentBackgroundTaskGroups`).
+     */
+    fun groupBackgroundTasks(parts: List<RenderPart>): List<RenderPart> {
+        val polls = BooleanArray(parts.size) { i -> (parts[i] as? RenderPart.Tool)?.vm?.let(::isBackgroundPoll) == true }
+        if (polls.none { it }) return parts
+        val out = mutableListOf<RenderPart>()
+        var run = mutableListOf<ToolCallVM>()
+        val launches = LinkedHashMap<String, BackgroundTaskPolls.Launch>()
+        fun flush() {
+            if (run.isNotEmpty()) out += RenderPart.BackgroundTasks(run, HashMap(launches))
+            run = mutableListOf()
+        }
+        parts.forEachIndexed { i, part ->
+            val vm = (part as? RenderPart.Tool)?.vm
+            if (vm != null && polls[i]) {
+                run += vm
+                return@forEachIndexed
+            }
+            flush()
+            out += part
+            // A later launch of the same id wins.
+            vm?.let(BackgroundTaskPolls::launchOf)?.let { (taskId, launch) -> launches[taskId] = launch }
+        }
+        flush()
+        return out
+    }
+
+    private fun isBackgroundPoll(vm: ToolCallVM): Boolean =
+        !Delegations.drawsCard(vm) && !Delegations.isStatusPoll(vm.rawName) && !Delegations.isCancel(vm.rawName) &&
+            BackgroundTaskPolls.isToolCall(vm)
 
     private fun findResult(blocks: List<ContentBlock>, after: Int, toolID: String?, consumed: Set<Int>): Int? {
         if (toolID != null) {
