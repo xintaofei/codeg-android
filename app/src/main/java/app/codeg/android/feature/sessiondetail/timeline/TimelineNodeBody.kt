@@ -10,19 +10,24 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -41,6 +46,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -94,7 +104,7 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
         is NodeContent.Footer -> TurnFooter(c.turn, c.questionId, modifier)
         is NodeContent.Plan -> LivePlanView(c.entries, modifier)
         is NodeContent.Thinking -> ThinkingShimmer(modifier)
-        is NodeContent.Error -> InlineTurnError(c.message, modifier)
+        is NodeContent.Error -> InlineTurnError(c.message, c.details, modifier)
         is NodeContent.Unsupported -> Text(
             stringResource(R.string.timeline_unsupported_block, c.type),
             fontSize = 11.sp,
@@ -175,14 +185,16 @@ private fun TurnFooter(turn: MessageTurn, questionId: String?, modifier: Modifie
     }
 }
 
+/** [modifier] lets a caller outside the dense footer row grow the hit area to a real target
+ *  (the footer's own is sized to sit inline with 10sp metadata). */
 @Composable
-private fun CopyButton(text: String) {
+private fun CopyButton(text: String, modifier: Modifier = Modifier) {
     val colors = CodegTheme.colors
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1500); copied = false } }
     Row(
-        Modifier
+        modifier
             .clip(RoundedCornerShape(6.dp))
             .clickable { clipboard.setText(AnnotatedString(text)); copied = true }
             .padding(horizontal = 4.dp, vertical = 2.dp),
@@ -298,22 +310,105 @@ fun ContextCompactionDivider(before: Int?, after: Int?, running: Boolean, modifi
 /** Thousands separators for the token counts, in the user's locale. */
 private fun groupDigits(value: Int): String = String.format(java.util.Locale.getDefault(), "%,d", value)
 
-/** A danger banner for a turn-tail error / cancellation. Port of iOS `InlineTurnError`. */
+/**
+ * A danger banner for a turn-tail error / cancellation. Port of iOS `InlineTurnError`.
+ *
+ * [details] is the server's diagnostic evidence for an error codeg inferred — the agent's
+ * stderr tail and what codeg failed to parse. It stays behind a disclosure and out of the
+ * message line: it is multi-line raw agent output, and only wanted once the user asks why.
+ */
 @Composable
-fun InlineTurnError(message: String, modifier: Modifier = Modifier) {
+fun InlineTurnError(message: String, details: String? = null, modifier: Modifier = Modifier) {
     val colors = CodegTheme.colors
-    Row(
+    Column(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(colors.danger.copy(alpha = 0.10f))
             .border(0.5.dp, colors.danger.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Icon(Icons.Rounded.WarningAmber, null, tint = colors.danger, modifier = Modifier.size(14.dp))
-        Text(message, fontSize = 12.sp, color = colors.danger, modifier = Modifier.weight(1f))
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(Icons.Rounded.WarningAmber, null, tint = colors.danger, modifier = Modifier.size(14.dp))
+            Text(message, fontSize = 12.sp, color = colors.danger, modifier = Modifier.weight(1f))
+        }
+        details?.takeIf { it.isNotBlank() }?.let { ErrorDetailsDisclosure(it) }
+    }
+}
+
+/** Guard against a pathological stderr tail. The server bounds this already, but that
+ *  bound is its own — not one this card's layout agreed to. */
+private const val MAX_ERROR_DETAIL_CHARS = 4_000
+
+@Composable
+private fun ErrorDetailsDisclosure(details: String) {
+    val colors = CodegTheme.colors
+    var expanded by remember { mutableStateOf(false) }
+    val label = stringResource(R.string.timeline_error_details)
+    val stateLabel = stringResource(
+        if (expanded) R.string.common_expanded else R.string.common_collapsed,
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { expanded = !expanded }
+                // The label is 11sp to sit under the error line without competing with it,
+                // which leaves the text itself well under the 48dp minimum target. Grow the
+                // hit area instead of the type: the row is inside a scrolling transcript, so
+                // a target that has to be aimed at costs a scroll every miss.
+                .heightIn(min = 44.dp)
+                .padding(horizontal = 6.dp)
+                // The chevron carries the state visually and is decorative, so the row that is
+                // actually clickable has to carry it for a screen reader. `stateDescription`,
+                // not `toggleableState`: the latter is announced as checked/unchecked, which
+                // describes a checkbox rather than a section that opens.
+                .semantics {
+                    contentDescription = label
+                    stateDescription = stateLabel
+                    role = Role.Button
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colors.danger.copy(alpha = 0.85f))
+            Icon(
+                if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                tint = colors.danger.copy(alpha = 0.85f),
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        if (expanded) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.bgElevated.copy(alpha = 0.6f))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    details.take(MAX_ERROR_DETAIL_CHARS),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = colors.textSecondary,
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    softWrap = false,
+                )
+                // Copying a stderr tail into a bug report is the reason this is on screen at
+                // all. The server's containment rule is that the payload must not be
+                // FORWARDED automatically to anything outliving the app (an OS notification,
+                // a persisted tooltip) — it is redacted at the source precisely so it can be
+                // shown here, and handed to the clipboard only when the user asks.
+                CopyButton(details.take(MAX_ERROR_DETAIL_CHARS), Modifier.heightIn(min = 44.dp))
+            }
+        }
     }
 }
 

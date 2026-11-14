@@ -42,7 +42,10 @@ sealed interface NodeContent {
     data class Footer(val turn: MessageTurn, val questionId: String?) : NodeContent
     data class Plan(val entries: List<PlanEntry>) : NodeContent
     data object Thinking : NodeContent
-    data class Error(val message: String) : NodeContent
+    /** [details] is the server's redacted diagnostic evidence, shown behind a disclosure (see
+     *  [LiveTurnError]). Present only for failures codeg *inferred* — an ordinary error, and a
+     *  cancellation, carry none. */
+    data class Error(val message: String, val details: String? = null) : NodeContent
     data class Unsupported(val type: String) : NodeContent
 }
 
@@ -232,7 +235,9 @@ object TranscriptTimeline {
             }
         }
         out.addAll(partNodes)
-        live.errorMessage?.let { out.add(TimelineNode("${live.id}#error", NodeContent.Error(it), agent)) }
+        live.error?.let {
+            out.add(TimelineNode("${live.id}#error", NodeContent.Error(it.message, it.details), agent))
+        }
         return out
     }
 

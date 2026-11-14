@@ -44,6 +44,41 @@ val ApiError.isStaleConnection: Boolean
         (status == 404 || code == "connection_not_found" || code == "unknown_connection")
 
 /**
+ * The server refused a mid-turn steering note because the turn had already finished
+ * (`AcpError::NoActiveTurn`) — an expected race, not a fault: the agent can stop between
+ * the user typing the note and tapping send.
+ *
+ * Matched on the message rather than [ApiError.Server.code] because the code cannot tell
+ * this apart. The HTTP layer maps every recoverable feedback refusal — turn ended, no
+ * channel on this session, empty/oversized text — onto one `AppErrorCode::InvalidInput`, so
+ * they all arrive as 400 `invalid_input`; only the `AcpError` Display string survives. The
+ * web client recognizes it the same way (`turn-busy.ts`), which is what keeps the marker
+ * stable on the server side.
+ */
+val ApiError.isNoActiveTurn: Boolean
+    get() = this is ApiError.Server && serverMessage.contains(NO_ACTIVE_TURN_MARKER, ignoreCase = true)
+
+/**
+ * The session has no channel left to carry a steering note (`AcpError::FeedbackDisabled`).
+ *
+ * Reachable mid-session, not just at launch: a native-only session (steering advertised, but
+ * the `check_user_feedback` tool never injected) whose adapter mishandles the push gets its
+ * native channel revoked server-side, and from then on has neither. The client has to stop
+ * offering to send — the refusal is the only notice it gets.
+ *
+ * Matched on the message for the same reason as [isNoActiveTurn].
+ */
+val ApiError.isFeedbackDisabled: Boolean
+    get() = this is ApiError.Server && serverMessage.contains(FEEDBACK_DISABLED_MARKER, ignoreCase = true)
+
+/** Substring of `AcpError::NoActiveTurn`'s Display text ("no active turn to send feedback
+ *  to"). A substring so the recognition survives the server elaborating the message. */
+private const val NO_ACTIVE_TURN_MARKER = "no active turn"
+
+/** Substring of `AcpError::FeedbackDisabled`'s Display text ("live feedback is disabled"). */
+private const val FEEDBACK_DISABLED_MARKER = "live feedback is disabled"
+
+/**
  * A **git remote** authentication failure (push/pull/fetch), signalling the
  * credential-retry flow to prompt for a token / username+password and retry.
  * Mirrors iOS `APIError.isAuthFailure`: the `authentication_failed` server code, or

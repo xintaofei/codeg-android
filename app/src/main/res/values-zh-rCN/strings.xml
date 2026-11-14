@@ -60,6 +60,7 @@
     <string name="sessions_empty_message">新建一个任务，它就会显示在这里。</string>
     <string name="session_load_failed">无法加载该会话</string>
     <string name="session_empty_title">还没有消息</string>
+    <string name="session_older_history">更早的消息</string>
     <string name="session_empty_message">该会话的消息会显示在这里。</string>
     <string name="session_jump_to_latest">回到最新</string>
     <string name="session_agent_options">智能体选项</string>
@@ -107,6 +108,8 @@
     <string name="common_ok">确定</string>
     <string name="common_done">完成</string>
     <string name="common_back">返回</string>
+    <string name="common_expanded">已展开</string>
+    <string name="common_collapsed">已折叠</string>
     <string name="common_loading">加载中…</string>
     <string name="common_error_generic">出错了。</string>
 
@@ -597,7 +600,10 @@
     <string name="agentopts_title">智能体选项</string>
     <string name="agentopts_mode">模式</string>
     <string name="agentopts_apply_failed">更改未能应用，请检查网络后重试。</string>
+    <string name="agentopts_not_remembered">已发送到本次会话，但未能保存为下次的默认值。</string>
+    <string name="agentopts_revert_incomplete">更改未能应用，且保存的设置可能仍是新值。</string>
     <string name="agentopts_no_options">该智能体没有可调整的选项。</string>
+    <string name="agentopts_unsupported_option">此处无法调整。</string>
     <string name="agentopts_new_session_title">新建会话</string>
     <string name="agentopts_agent_section">智能体</string>
     <string name="agentopts_workspace">工作区</string>
@@ -613,6 +619,15 @@
     <string name="compose_message_placeholder">输入消息</string>
     <string name="compose_stop">停止</string>
     <string name="compose_send">发送</string>
+
+    <!-- ===== Session Detail · Mid-turn notes ===== -->
+    <string name="feedback_placeholder_instant">给本回合补充一句…</string>
+    <string name="feedback_placeholder_pending">给智能体留言…</string>
+    <string name="feedback_send">发送留言</string>
+    <string name="feedback_waiting">等待中</string>
+    <string name="feedback_read">已送达</string>
+    <string name="feedback_turn_ended">智能体已结束本轮，留言未能发出。</string>
+    <string name="feedback_not_instant">本会话无法向进行中的回合插入留言。留言已保存，智能体下次检查时会读取。</string>
 
     <!-- ===== Session Detail · Ask / Permission / Tool / Plan / Timeline ===== -->
     <string name="ask_needs_input_title">智能体需要你的输入</string>
@@ -634,6 +649,8 @@
     <string name="timeline_copy">复制</string>
     <string name="timeline_scroll_to_question">滚动到问题</string>
     <string name="timeline_question">问题</string>
+    <string name="timeline_error_details">详细信息</string>
+    <string name="timeline_error_generic">智能体报告了一个错误。</string>
 
     <!-- ===== Projects · Clone / Browse / Branch ===== -->
     <string name="clone_close">关闭</string>

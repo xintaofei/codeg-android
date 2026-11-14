@@ -53,6 +53,11 @@ data class SessionStats(
  * Full session detail incl. message history (Rust `DbConversationDetail`).
  * Decode-only. [turns] uses the hand-written `ContentBlock` serializer for its
  * polymorphic blocks.
+ *
+ * When the request asked for a window ([TurnWindow]), [turns] holds only the
+ * full transcript from [turnsOffset] onward, and the five window fields describe
+ * it. Every OTHER field — [summary] (incl. its `messageCount`), [sessionStats],
+ * [inFlightUserTurnId] — still describes the FULL transcript.
  */
 @Serializable
 data class ConversationDetail(
@@ -60,7 +65,86 @@ data class ConversationDetail(
     val turns: List<MessageTurn> = emptyList(),
     val sessionStats: SessionStats? = null,
     val inFlightUserTurnId: String? = null,
+    /** Global index of `turns[0]`; absent on a legacy (pre-0.24.0) full response. */
+    val turnsOffset: Int? = null,
+    /** Full-transcript turn count. */
+    val turnsTotal: Int? = null,
+    /** Assistant turns in `full[0..turnsOffset)` — converts a history baseline
+     * between global and window coordinates. */
+    val assistantTurnsBeforeOffset: Int? = null,
+    /** Structural fingerprint of `full[0..turnsOffset)` as fixed-width 16-hex. */
+    val prefixHash: String? = null,
+    /** Max timestamp across `full[0..turnsOffset)`; absent when the window covers
+     * everything. */
+    @Serializable(with = InstantSerializer::class)
+    val uncoveredPrefixMaxTs: Instant? = null,
+) {
+    /**
+     * The window this response describes, or null when the server answered with
+     * a legacy full transcript. The server sets the fields together, so one
+     * check gates every windowed behaviour: paging, seam verification, and the
+     * `turnsTotal`-based progress comparisons all disable themselves against an
+     * older server and the client keeps its pre-0.24.0 behaviour.
+     */
+    val window: TurnWindowState?
+        get() {
+            val offset = turnsOffset ?: return null
+            val total = turnsTotal ?: return null
+            val hash = prefixHash ?: return null
+            return TurnWindowState(offset = offset, total = total, prefixHash = hash)
+        }
+
+    /**
+     * Full-transcript turn count, falling back to the loaded length for a legacy
+     * response. Read through [window] rather than off [turnsTotal] directly, so a
+     * half-populated payload — which [window] already refuses to trust — cannot
+     * feed a total into the reconcile comparisons by the side door.
+     */
+    val effectiveTotal: Int get() = window?.total ?: turns.size
+}
+
+/**
+ * One page of older history (Rust `ConversationTurnsPage`), covering
+ * `full[turnsOffset until turnsOffset + turns.size)` and ending just before the
+ * requested `beforeIndex`. A light response — no summary, no stats, no live
+ * correlation.
+ */
+@Serializable
+data class ConversationTurnsPage(
+    val turns: List<MessageTurn> = emptyList(),
+    val turnsOffset: Int,
+    val turnsTotal: Int,
+    val assistantTurnsBeforeOffset: Int = 0,
+    /** Fingerprint of `full[0..turnsOffset)` — the client's new window
+     * fingerprint after a successful prepend. */
+    val prefixHash: String,
+    /**
+     * Fingerprint of `full[0..min(beforeIndex, total))` — the seam proof. It
+     * MUST equal the window fingerprint the client held when it asked, or the
+     * prefix was rewritten between the two requests and this page cannot legally
+     * join what is already loaded.
+     */
+    val prefixHashBeforeIndex: String,
+    @Serializable(with = InstantSerializer::class)
+    val uncoveredPrefixMaxTs: Instant? = null,
 )
+
+/**
+ * Where the loaded transcript sits inside the full one. Held by the session so
+ * a refresh can ask for the same coordinates ([TurnWindow.FromIndex]) and a page
+ * request can prove its seam.
+ */
+data class TurnWindowState(
+    /** Global index of the first loaded turn. */
+    val offset: Int,
+    /** Full-transcript turn count. */
+    val total: Int,
+    /** Fingerprint of the turns BEFORE [offset] — what a page must match. */
+    val prefixHash: String,
+) {
+    /** Whether older history exists above the loaded window. */
+    val hasOlder: Boolean get() = offset > 0
+}
 
 /** Returned by `acp_find_connection_for_conversation` when a live ACP
  * connection already owns a conversation. */

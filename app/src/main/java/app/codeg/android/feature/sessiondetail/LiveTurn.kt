@@ -1,5 +1,6 @@
 package app.codeg.android.feature.sessiondetail
 
+import app.codeg.android.core.model.AcpEvent
 import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.LiveContentBlockSnapshot
 import app.codeg.android.core.model.LiveSessionSnapshot
@@ -43,6 +44,17 @@ sealed interface LiveSegment {
     }
 }
 
+/**
+ * A turn's terminal failure: the line the error card states, plus the server's diagnostic
+ * evidence behind it.
+ *
+ * One value rather than two fields because [details] is meaningless alone — it renders as a
+ * disclosure hanging under the message, so a details-without-message state would draw an
+ * unlabelled expander. Only errors codeg *inferred* (the `turn_failed_empty*` family) carry
+ * evidence; every other failure leaves it null.
+ */
+data class LiveTurnError(val message: String, val details: String? = null)
+
 /** Immutable snapshot of the streaming assistant reply, emitted to the UI. */
 data class LiveTurnState(
     val id: String,
@@ -50,9 +62,9 @@ data class LiveTurnState(
     val livePlan: List<PlanEntry>,
     val isStreaming: Boolean,
     val stopReason: String?,
-    val errorMessage: String?,
+    val error: LiveTurnError?,
 ) {
-    val isEmpty: Boolean get() = segments.isEmpty() && errorMessage == null && livePlan.isEmpty()
+    val isEmpty: Boolean get() = segments.isEmpty() && error == null && livePlan.isEmpty()
 }
 
 /**
@@ -87,7 +99,7 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
     var livePlan: List<PlanEntry> = emptyList()
     var isStreaming: Boolean = true
     var stopReason: String? = null
-    var errorMessage: String? = null
+    var error: LiveTurnError? = null
 
     fun appendText(delta: String) {
         if (delta.isEmpty()) return
@@ -99,6 +111,32 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         if (delta.isEmpty()) return
         (segments.lastOrNull() as? Seg.Thinking)?.let { it.text.append(delta); return }
         segments.add(Seg.Thinking("think-${seq++}", StringBuilder(delta)))
+    }
+
+    /**
+     * Fold a streamed text chunk into this turn. Returns false when the chunk was
+     * DROPPED because it belongs to a subagent, so the caller can skip a pointless
+     * UI emit.
+     *
+     * A chunk carrying [AcpEvent.ContentDelta.parentToolUseId] came from a Claude
+     * subagent and belongs to the Agent tool call that launched it, not to the
+     * assistant's own message — appending it here would splice two voices together
+     * mid-sentence. It is live-only (reloaded history rebuilds the Agent capsule from
+     * the tool result, never from these chunks), so dropping it makes the live turn
+     * match the settled one. The rule lives here, not at the call sites, so every path
+     * that feeds the turn — live events, replay, and [seedFrom] — obeys it.
+     */
+    fun append(chunk: AcpEvent.ContentDelta): Boolean {
+        if (chunk.isSubagent) return false
+        appendText(chunk.text)
+        return true
+    }
+
+    /** Fold a streamed reasoning chunk into this turn; see [append]. */
+    fun append(chunk: AcpEvent.Thinking): Boolean {
+        if (chunk.isSubagent) return false
+        appendThinking(chunk.text)
+        return true
     }
 
     fun upsertToolCall(
@@ -180,8 +218,11 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         val byId = snapshot.activeToolCalls.associateBy { it.id }
         for (block in snapshot.liveMessage?.content.orEmpty()) {
             when (block) {
-                is LiveContentBlockSnapshot.Text -> appendText(block.text)
-                is LiveContentBlockSnapshot.Thinking -> appendThinking(block.text)
+                // Subagent-attributed blocks are the Agent tool call's, not the main
+                // thread's — same rule the live event path applies, so a mid-turn
+                // reattach rebuilds exactly the turn a client that never dropped saw.
+                is LiveContentBlockSnapshot.Text -> if (!block.isSubagent) appendText(block.text)
+                is LiveContentBlockSnapshot.Thinking -> if (!block.isSubagent) appendThinking(block.text)
                 is LiveContentBlockSnapshot.ToolCallRef -> byId[block.toolCallId]?.let(::seedTool)
                 is LiveContentBlockSnapshot.Plan -> updatePlan(block.entries)
                 LiveContentBlockSnapshot.Unknown -> Unit
@@ -203,7 +244,7 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         )
     }
 
-    val isEmpty: Boolean get() = segments.isEmpty() && errorMessage == null && livePlan.isEmpty()
+    val isEmpty: Boolean get() = segments.isEmpty() && error == null && livePlan.isEmpty()
 
     /** The active (unfinished) tool's title, for the compose status line. */
     fun activeToolTitle(): String? {
@@ -238,7 +279,7 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         livePlan = livePlan,
         isStreaming = isStreaming,
         stopReason = stopReason,
-        errorMessage = errorMessage,
+        error = error,
     )
 
     /** Fold this (finished) turn into an immutable assistant [MessageTurn]. */

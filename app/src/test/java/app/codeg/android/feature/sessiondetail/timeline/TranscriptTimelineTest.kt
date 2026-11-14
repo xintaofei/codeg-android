@@ -6,9 +6,11 @@ import app.codeg.android.core.model.MessageTurn
 import app.codeg.android.core.model.TurnRole
 import app.codeg.android.core.model.TurnUsage
 import app.codeg.android.feature.sessiondetail.LiveSegment
+import app.codeg.android.feature.sessiondetail.LiveTurnError
 import app.codeg.android.feature.sessiondetail.LiveTurnState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -132,7 +134,7 @@ class TranscriptTimelineTest {
             livePlan = emptyList(),
             isStreaming = true,
             stopReason = null,
-            errorMessage = null,
+            error = null,
         )
         val nodes = TranscriptTimeline.build(emptyList(), emptyList(), live, agent)
         val blocks = nodes.filter { it.content is NodeContent.AssistantBlock }
@@ -142,6 +144,46 @@ class TranscriptTimelineTest {
         assertTrue("caret rides the final block", last.streaming)
         assertFalse("rail terminates at the streaming tail", blocks.last().connectBottom)
         assertEquals(RailStyle.Tail, blocks.last().rail)
+    }
+
+    @Test
+    fun `a failed turn's node carries the evidence alongside the message`() {
+        // The evidence has to reach the node as its OWN field: folded into the message it
+        // would land in the one-line danger banner (and, via the same string, in the status
+        // line and notices) instead of the disclosure it was bounded and redacted for.
+        val live = LiveTurnState(
+            id = "live1",
+            segments = emptyList(),
+            livePlan = emptyList(),
+            isStreaming = false,
+            stopReason = "empty",
+            error = LiveTurnError("The agent produced no reply.", "stderr:\n  Error: 401"),
+        )
+        val error = TranscriptTimeline.build(emptyList(), emptyList(), live, agent)
+            .map { it.content }
+            .filterIsInstance<NodeContent.Error>()
+            .single()
+
+        assertEquals("The agent produced no reply.", error.message)
+        assertEquals("stderr:\n  Error: 401", error.details)
+    }
+
+    @Test
+    fun `an ordinary failure renders without a disclosure`() {
+        val live = LiveTurnState(
+            id = "live1",
+            segments = listOf(LiveSegment.Text("t0", "partial")),
+            livePlan = emptyList(),
+            isStreaming = false,
+            stopReason = null,
+            error = LiveTurnError("Cancelled"),
+        )
+        val error = TranscriptTimeline.build(emptyList(), emptyList(), live, agent)
+            .map { it.content }
+            .filterIsInstance<NodeContent.Error>()
+            .single()
+
+        assertNull(error.details)
     }
 
     @Test

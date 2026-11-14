@@ -3,7 +3,11 @@ package app.codeg.android.core.network
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.ConversationConnectionInfo
 import app.codeg.android.core.model.ConversationDetail
+import app.codeg.android.core.model.ConversationDetailBody
 import app.codeg.android.core.model.ConversationIdBody
+import app.codeg.android.core.model.ConversationTurnsBody
+import app.codeg.android.core.model.ConversationTurnsPage
+import app.codeg.android.core.model.TurnWindow
 import app.codeg.android.core.model.ConnectBody
 import app.codeg.android.core.model.ConnectionIdBody
 import app.codeg.android.core.model.AnswerPlanApprovalBody
@@ -12,6 +16,7 @@ import app.codeg.android.core.model.PlanApprovalAnswer
 import app.codeg.android.core.model.PlanApprovalDecision
 import app.codeg.android.core.model.CreateConversationBody
 import app.codeg.android.core.model.EmptyBody
+import app.codeg.android.core.model.FeedbackNote
 import app.codeg.android.core.model.FetchKimiModelsBody
 import app.codeg.android.core.model.FindConnectionBody
 import app.codeg.android.core.model.PiCommandValidation
@@ -118,6 +123,7 @@ import app.codeg.android.core.model.ChatPrefixBody
 import app.codeg.android.core.model.ChatLanguageBody
 import app.codeg.android.core.model.ChatWebhooksBody
 import app.codeg.android.core.model.SessionSnapshot
+import app.codeg.android.core.model.SubmitFeedbackBody
 import app.codeg.android.core.model.AgentOptionsSnapshot
 import app.codeg.android.core.model.DescribeAgentOptionsBody
 import app.codeg.android.core.model.SetModeBody
@@ -198,11 +204,34 @@ class CodegClient(
             ListSerializer(ConversationSummary.serializer()),
         )
 
-    /** Full session detail incl. message history. */
-    suspend fun conversationDetail(id: Int): ConversationDetail =
+    /**
+     * Session detail incl. message history. [window] asks for a slice instead of
+     * the whole transcript; the response then carries window coordinates and a
+     * prefix fingerprint (see [ConversationDetail.window]).
+     *
+     * A pre-0.24.0 server ignores the selector and answers with the full
+     * transcript and no window fields — which is exactly the legacy behaviour,
+     * so callers need no version check, only a null-window branch.
+     */
+    suspend fun conversationDetail(id: Int, window: TurnWindow? = null): ConversationDetail =
         decode(
-            send("get_folder_conversation", encode(ConversationIdBody(id))),
+            send("get_folder_conversation", encode(ConversationDetailBody.of(id, window))),
             ConversationDetail.serializer(),
+        )
+
+    /**
+     * One page of older history, ending just before [beforeIndex]. Verify
+     * [ConversationTurnsPage.prefixHashBeforeIndex] against the window
+     * fingerprint held when the request was made before joining the page —
+     * otherwise the prefix was rewritten in between and the two do not abut.
+     *
+     * A pre-0.24.0 server has no such route and fails the call; callers only
+     * reach it when a windowed response already proved the server is new enough.
+     */
+    suspend fun conversationTurnsPage(id: Int, beforeIndex: Int, limit: Int): ConversationTurnsPage =
+        decode(
+            send("get_folder_conversation_turns", encode(ConversationTurnsBody(id, beforeIndex, limit))),
+            ConversationTurnsPage.serializer(),
         )
 
     /** Create a conversation row up front and return its id (a bare JSON int). */
@@ -932,6 +961,24 @@ class CodegClient(
     suspend fun acpSetConfigOption(connectionId: String, configId: String, valueId: String) {
         send("acp_set_config_option", encode(SetConfigOptionBody(connectionId, configId, valueId)))
     }
+
+    /**
+     * Send a mid-turn steering note to a running connection, returning the note the server
+     * recorded. Its `status` reveals which channel carried it: `delivered` means the native
+     * `_session/steering` push already handed the text to the turn, `pending` means it waits
+     * for the agent's next `check_user_feedback`.
+     *
+     * The same note also arrives as a `feedback_submitted` event (dedup by `id`) — this
+     * return value exists so the sender sees its own note without waiting for the broadcast.
+     *
+     * Throws [ApiError.Server] for the three expected refusals, all HTTP 400: the turn ended
+     * ([isNoActiveTurn]), the session has neither channel, or the text is empty/oversized.
+     */
+    suspend fun submitSessionFeedback(connectionId: String, text: String): FeedbackNote =
+        decode(
+            send("submit_session_feedback", encode(SubmitFeedbackBody(connectionId, text))),
+            FeedbackNote.serializer(),
+        )
 
     // endregion
 

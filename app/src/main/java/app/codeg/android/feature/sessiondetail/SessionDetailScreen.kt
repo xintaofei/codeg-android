@@ -23,20 +23,27 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -74,6 +81,7 @@ import app.codeg.android.core.designsystem.component.EmptyState
 import app.codeg.android.core.designsystem.component.InlineError
 import app.codeg.android.core.designsystem.component.LoadingView
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.core.model.FeedbackNote
 import app.codeg.android.feature.sessiondetail.interactive.AskQuestionCard
 import app.codeg.android.feature.sessiondetail.interactive.PermissionRequestCard
 import app.codeg.android.feature.sessiondetail.interactive.PlanApprovalCard
@@ -83,6 +91,14 @@ import app.codeg.android.feature.sessiondetail.timeline.NodeContent
 import app.codeg.android.feature.sessiondetail.timeline.TimelineRow
 import app.codeg.android.feature.sessiondetail.timeline.TranscriptTimeline
 import kotlinx.coroutines.launch
+
+/**
+ * How close to the head of the list the viewport has to come before the next page
+ * of older history is requested. Rows, not turns — one turn is many rows — so this
+ * fires while the loader is still comfortably below the fold and the page lands
+ * before the user reaches the top.
+ */
+private const val OLDER_HISTORY_TRIGGER_ROWS = 6
 
 /**
  * The session detail screen: the transcript rendered as a vertical **timeline**
@@ -144,6 +160,9 @@ fun SessionDetailScreen(
         TranscriptTimeline.withLive(persistedNodes, ui.live, ui.agent)
     }
     val hasContent = nodes.isNotEmpty()
+    // The "load older" row sits at the head of the list, so every list index the
+    // screen computes from a NODE index has to step over it.
+    val headerCount = if (ui.hasOlderTurns) 1 else 0
 
     // Native stick-to-bottom: auto-follow only while the bottom anchor is in view.
     val isAtBottom by remember {
@@ -167,16 +186,81 @@ fun SessionDetailScreen(
     }
     // Follow new / streamed content while pinned.
     LaunchedEffect(nodes.size, ui.live, stick) {
-        if (stick && nodes.isNotEmpty()) listState.scrollToItem(nodes.size)
+        if (stick && nodes.isNotEmpty()) listState.scrollToItem(nodes.size + headerCount)
     }
-    val scrollToId: (String) -> Unit = remember(nodes) {
+    // Set by a deliberate jump (a transcript link, "jump to latest") so a scroll
+    // restore queued before it does not undo it. `stick` alone does not cover
+    // these: a link jump explicitly unpins.
+    var jumped by remember { mutableStateOf(false) }
+    val scrollToId: (String) -> Unit = remember(nodes, headerCount) {
         { id ->
             val idx = nodes.indexOfFirst { it.id == id }
             if (idx >= 0) {
                 stick = false // unpin so the stream doesn't immediately yank us back down
-                scope.launch { listState.animateScrollToItem(idx) }
+                jumped = true
+                scope.launch { listState.animateScrollToItem(idx + headerCount) }
             }
         }
+    }
+
+    // ── Reverse infinite scroll over older history ───────────────────────────
+    // Ask for the next page once the viewport nears the top, handing the ViewModel
+    // the row to keep in place; it comes back on `ui.prepend` with the turns.
+    //
+    // Gated on `!stick`, because the follow-the-bottom effect above would fight it:
+    // the two would take turns paging and yanking the view back down. A list too
+    // short to scroll is exempt — it is at the top and the bottom at once, so it
+    // would never page at all, and with nothing to scroll there is no fight.
+    LaunchedEffect(listState, nodes, headerCount, ui.hasOlderTurns, stick, ui.loadingOlder) {
+        if (!ui.hasOlderTurns || ui.loadingOlder) return@LaunchedEffect
+        snapshotFlow {
+            Triple(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                // Not `visibleItemsInfo.size >= totalItemsCount` — a partially clipped
+                // row still counts as visible, so that reads "fits" for a list that
+                // does scroll. Whether either direction can move is the actual question.
+                !listState.canScrollForward && !listState.canScrollBackward,
+            )
+        }.collect { (first, offset, fitsOnScreen) ->
+            if (stick && !fitsOnScreen) return@collect
+            if (first > OLDER_HISTORY_TRIGGER_ROWS) return@collect
+            // The loader row is not a node; while it is the first visible row, the
+            // row to keep in place is the one right after it, aligned to the top.
+            val nodeIndex = first - headerCount
+            jumped = false
+            viewModel.loadOlderTurns( // single-flight in the ViewModel
+                PrependAnchor(
+                    epoch = 0, // assigned by the ViewModel when the page lands
+                    rowId = nodes.getOrNull(nodeIndex.coerceAtLeast(0))?.id,
+                    rowIndex = nodeIndex.coerceAtLeast(0),
+                    rowCount = nodes.size,
+                    offset = if (nodeIndex < 0) 0 else offset,
+                ),
+            )
+        }
+    }
+    // Put the viewport back. Compose does re-anchor by the first visible item's
+    // key, but only across the lazy layout's nearest-item range (~130 rows) — a
+    // page expands to more rows than that, so the correction misses and everything
+    // the user was reading slides off the bottom.
+    LaunchedEffect(ui.prepend) {
+        val anchor = ui.prepend ?: return@LaunchedEffect
+        // Consumed either way: left pending it would replay on a fresh composition
+        // (a rotation, a navigation return) and scroll back to a position the user
+        // has long left.
+        viewModel.consumePrepend()
+        // `stick` means the user went to the bottom while the page was in flight —
+        // by scrolling there, or by tapping "jump to latest". That is newer intent
+        // than the anchor, and the follow-the-bottom effect is about to act on it;
+        // restoring here would drag them back up and the two would fight.
+        if (stick || jumped) return@LaunchedEffect
+        // By id first: exact, and unaffected by anything that arrived at the tail
+        // while the page was in flight. By growth otherwise — the id is gone when
+        // the prepend re-keyed the run it belonged to.
+        val byId = anchor.rowId?.let { id -> nodes.indexOfFirst { it.id == id } } ?: -1
+        val idx = if (byId >= 0) byId else anchor.rowIndex + (nodes.size - anchor.rowCount)
+        if (idx in nodes.indices) listState.scrollToItem(idx + headerCount, anchor.offset)
     }
 
     val title = when {
@@ -264,6 +348,20 @@ fun SessionDetailScreen(
                     SendStatusLine(ui.sendStatus ?: "")
                 }
                 if (ui.attachments.isNotEmpty()) AttachmentStrip(ui.attachments, onRemove = viewModel::removeAttachment)
+                // Notes belong to the turn that is running; once it ends they describe
+                // nothing the user can still act on, so they go with it.
+                //
+                // BOTH conditions, and neither is redundant. `noteTurnOpen` is the narrow
+                // one — the server's own turn, not the optimistic `isInFlight` that is set
+                // the moment Send is tapped and so also covers connect and attach. Most of
+                // that window simply has no turn to steer (the note bounces), but the tail of
+                // it does the real damage: once the server arms the turn and before it emits
+                // `user_message`, a note is accepted and then wiped unread. `isInFlight` is
+                // the broad backstop: several turn-end paths (transcript reconcile,
+                // unreconciled-turn promotion) clear only that flag, and leaving a live note
+                // button on a finished turn is worse than losing it a moment early.
+                val noteChannelLive = ui.noteTurnOpen && ui.isInFlight
+                if (ui.feedbackNotes.isNotEmpty() && noteChannelLive) FeedbackNotesStrip(ui.feedbackNotes)
                 ComposeBar(
                     text = draft,
                     onTextChange = { draft = it },
@@ -276,6 +374,22 @@ fun SessionDetailScreen(
                     onPlus = { showInsert = true },
                     onAttach = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     canSendOverride = ui.attachments.isNotEmpty(),
+                    onSendNote = if (ui.supportsNotes && noteChannelLive) {
+                        {
+                            val sent = draft
+                            scope.launch {
+                                // Clear only once the note is really with the server, and
+                                // only if the composer still holds what was sent — a refusal
+                                // (or an edit made while it was in flight) leaves the text
+                                // exactly where the user can see it.
+                                if (viewModel.sendNote(sent).await() && draft == sent) draft = ""
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    noteLandsInstantly = ui.notesLandInstantly,
+                    sendingNote = ui.sendingNote,
                 )
             }
         },
@@ -317,6 +431,11 @@ fun SessionDetailScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 12.dp),
                     ) {
+                        if (ui.hasOlderTurns) {
+                            item(key = "__timeline_older_loader__", contentType = "older-loader") {
+                                OlderHistoryRow(loading = ui.loadingOlder)
+                            }
+                        }
                         items(nodes, key = { it.id }, contentType = { it.contentTypeKey }) { node ->
                             TimelineRow(
                                 marker = node.marker,
@@ -347,10 +466,40 @@ fun SessionDetailScreen(
             ) {
                 JumpToLatestButton {
                     stick = true
-                    scope.launch { listState.animateScrollToItem(nodes.size) }
+                    jumped = true
+                    scope.launch { listState.animateScrollToItem(nodes.size + headerCount) }
                 }
             }
         }
+    }
+}
+
+/**
+ * Head-of-transcript row for the history still on the server. It is a status
+ * line, not a button: the page is requested by scrolling near it, and a row that
+ * looks tappable but loads on approach reads as broken when it starts by itself.
+ */
+@Composable
+private fun OlderHistoryRow(loading: Boolean) {
+    val colors = CodegTheme.colors
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                Modifier.size(14.dp),
+                strokeWidth = 1.5.dp,
+                color = colors.textTertiary,
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(
+            stringResource(R.string.session_older_history),
+            fontSize = 12.sp,
+            color = colors.textTertiary,
+        )
     }
 }
 
@@ -388,6 +537,68 @@ private fun SendStatusLine(status: String) {
             .background(colors.bgElevated.copy(alpha = 0.92f))
             .padding(horizontal = 16.dp, vertical = 4.dp),
     )
+}
+
+/**
+ * The steering notes sent during the running turn, listed just above the composer.
+ *
+ * Read-only — a note can't be edited or withdrawn once the server has it. What each row
+ * really carries is whether the note has *reached* the agent: delivery here is cooperative
+ * (on the pull channel the agent picks notes up when it next checks), so "sent" and
+ * "received" are different states, and only the second one can still change the turn.
+ */
+@Composable
+private fun FeedbackNotesStrip(notes: List<FeedbackNote>) {
+    val colors = CodegTheme.colors
+    val scroll = rememberScrollState()
+    // Past ~four rows the strip is capped and the newest note lands below the fold — where
+    // the user would never see the note they just sent, nor its "received" flip. Follow the
+    // tail on every append.
+    LaunchedEffect(notes.size) { scroll.animateScrollTo(scroll.maxValue) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.bgElevated.copy(alpha = 0.92f))
+            // A long turn can collect more notes than the composer should give up room for.
+            .heightIn(max = 104.dp)
+            .verticalScroll(scroll)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        notes.forEach { note ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.codeSurface)
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // Decorative: the trailing label already states the status in words, and
+                // announcing it twice is worse than not at all.
+                Icon(
+                    imageVector = if (note.isDelivered) Icons.Rounded.Check else Icons.Rounded.Schedule,
+                    contentDescription = null,
+                    tint = if (note.isDelivered) colors.accent else colors.textTertiary,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    note.text,
+                    fontSize = 12.sp,
+                    color = colors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    stringResource(if (note.isDelivered) R.string.feedback_read else R.string.feedback_waiting),
+                    fontSize = 11.sp,
+                    color = colors.textTertiary,
+                )
+            }
+        }
+    }
 }
 
 @Composable

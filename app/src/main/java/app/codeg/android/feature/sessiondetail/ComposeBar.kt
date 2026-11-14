@@ -21,10 +21,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
@@ -38,6 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.codeg.android.R
@@ -50,6 +55,11 @@ import app.codeg.android.core.designsystem.theme.CodegTheme
  * scale-and-fade transition and an accent↔danger colour tween. All actions are
  * Material [FilledIconButton] / [FilledTonalIconButton]s, so they carry native
  * ripples and 40dp touch targets.
+ *
+ * While a turn is running the bar has a second job: on sessions that accept mid-turn
+ * steering notes ([onSendNote]) the text field stays live and grows a note button beside
+ * Stop. Stop keeps the trailing slot it has always had — the destructive action must not
+ * slide under a finger that was already reaching for it.
  */
 @Composable
 fun ComposeBar(
@@ -62,9 +72,22 @@ fun ComposeBar(
     onPlus: (() -> Unit)? = null,
     onAttach: (() -> Unit)? = null,
     canSendOverride: Boolean = false,
+    /** Send the draft to the running agent as a steering note. Null when this session
+     *  can't take one, or when no turn is running — the affordance is absent, not disabled. */
+    onSendNote: (() -> Unit)? = null,
+    /** Whether a note lands in the running turn at once (native steering) or waits for the
+     *  agent to check for it. Chooses the placeholder and the button's icon. */
+    noteLandsInstantly: Boolean = false,
+    /** A note submit is awaiting the server. */
+    sendingNote: Boolean = false,
 ) {
     val colors = CodegTheme.colors
-    val canSend = (text.isNotBlank() || canSendOverride) && !isInFlight
+    // `sendingNote` blocks the ordinary Send too. The draft is deliberately still on screen
+    // while a note is in flight, and the turn can finish underneath it — a native note is
+    // allowed to complete after `turn_complete`. Without this the Stop would flip back to
+    // Send with the note's own text sitting there, one tap from being delivered twice.
+    val canSend = (text.isNotBlank() || canSendOverride) && !isInFlight && !sendingNote
+    val canSendNote = onSendNote != null && text.isNotBlank() && !sendingNote
     val sendContainer by animateColorAsState(
         targetValue = if (isInFlight) colors.danger else colors.accent,
         animationSpec = tween(220),
@@ -117,7 +140,16 @@ fun ComposeBar(
             ) {
                 if (text.isEmpty()) {
                     Text(
-                        stringResource(R.string.compose_message_placeholder),
+                        // Mid-turn the field means something different, and the two note
+                        // channels differ in when the agent sees it — say which before the
+                        // user commits to typing, not after.
+                        stringResource(
+                            when {
+                                onSendNote == null -> R.string.compose_message_placeholder
+                                noteLandsInstantly -> R.string.feedback_placeholder_instant
+                                else -> R.string.feedback_placeholder_pending
+                            },
+                        ),
                         color = colors.textTertiary,
                         style = MaterialTheme.typography.bodyLarge,
                     )
@@ -130,6 +162,38 @@ fun ComposeBar(
                     maxLines = 6,
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+
+            if (onSendNote != null) {
+                val noteLabel = stringResource(R.string.feedback_send)
+                FilledIconButton(
+                    onClick = onSendNote,
+                    enabled = canSendNote,
+                    // The name lives on the button, not the icon: the icon is swapped for a
+                    // progress spinner mid-submit, and a label that comes and goes with the
+                    // child would leave the control unnamed exactly while it is busy.
+                    modifier = Modifier.semantics { contentDescription = noteLabel },
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = colors.accent,
+                        contentColor = colors.onAccent,
+                        disabledContainerColor = colors.accent.copy(alpha = 0.4f),
+                        disabledContentColor = colors.onAccent.copy(alpha = 0.7f),
+                    ),
+                ) {
+                    if (sendingNote) {
+                        CircularProgressIndicator(
+                            color = colors.onAccent,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = if (noteLandsInstantly) Icons.Rounded.Bolt else Icons.AutoMirrored.Rounded.Send,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
             }
 
             FilledIconButton(

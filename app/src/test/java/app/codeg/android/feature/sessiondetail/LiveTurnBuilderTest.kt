@@ -1,7 +1,11 @@
 package app.codeg.android.feature.sessiondetail
 
+import app.codeg.android.core.model.AcpEvent
 import app.codeg.android.core.model.ContentBlock
+import app.codeg.android.core.model.LiveSessionSnapshot
 import app.codeg.android.core.model.TurnRole
+import app.codeg.android.core.network.CodegJson
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -46,6 +50,54 @@ class LiveTurnBuilderTest {
         assertEquals("completed", call.status)
         assertTrue(call.isFinished)
         assertFalse(call.isError)
+    }
+
+    @Test
+    fun `a subagent chunk is dropped instead of folded into the turn`() {
+        // The live-event path (and replay, which shares it) folds chunks through
+        // `append`. A Claude subagent's prose must not reach the assistant's message.
+        val b = LiveTurnBuilder("t")
+        assertTrue(b.append(AcpEvent.ContentDelta("main ")))
+        assertFalse(b.append(AcpEvent.ContentDelta("SUBAGENT", parentToolUseId = "toolu_1")))
+        assertFalse(b.append(AcpEvent.Thinking("SUBTHINK", parentToolUseId = "toolu_1")))
+        assertTrue(b.append(AcpEvent.ContentDelta("thread")))
+
+        val segs = b.snapshot().segments
+        assertEquals(1, segs.size)
+        assertEquals("main thread", (segs[0] as LiveSegment.Text).text)
+    }
+
+    @Test
+    fun `main-thread thinking still folds in`() {
+        val b = LiveTurnBuilder("t")
+        assertTrue(b.append(AcpEvent.Thinking("reasoning")))
+        val segs = b.snapshot().segments
+        assertEquals(1, segs.size)
+        assertEquals("reasoning", (segs[0] as LiveSegment.Thinking).text)
+    }
+
+    @Test
+    fun `seeding a snapshot skips subagent-attributed blocks`() {
+        // A mid-turn reattach must rebuild the same turn a client that never dropped
+        // saw: a Claude subagent's text belongs to its Agent tool call, so seeding it
+        // into the main thread would splice a second voice into the assistant's reply.
+        val snapshot = LiveSessionSnapshot.fromWire(
+            CodegJson.response.parseToJsonElement(
+                """{"connection_id":"c1","live_message":{"content":[
+                     {"kind":"text","text":"before "},
+                     {"kind":"text","text":"SUBAGENT","parent_tool_use_id":"toolu_1"},
+                     {"kind":"thinking","text":"SUBTHINK","parent_tool_use_id":"toolu_1"},
+                     {"kind":"text","text":"after"}]}}""",
+            ).jsonObject,
+            CodegJson.response,
+        )
+        val b = LiveTurnBuilder("t")
+        b.seedFrom(snapshot)
+
+        val segs = b.snapshot().segments
+        // The two main-thread runs coalesce; nothing of the subagent survives.
+        assertEquals(1, segs.size)
+        assertEquals("before after", (segs[0] as LiveSegment.Text).text)
     }
 
     @Test

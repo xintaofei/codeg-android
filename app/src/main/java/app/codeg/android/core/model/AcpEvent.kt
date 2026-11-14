@@ -58,8 +58,27 @@ sealed interface UserMessageBlock {
  * iOS decoder does.
  */
 sealed interface AcpEvent {
-    data class ContentDelta(val text: String) : AcpEvent
-    data class Thinking(val text: String) : AcpEvent
+    /**
+     * Streamed assistant text. [parentToolUseId] is the launching Agent tool call's
+     * id when the chunk came from a Claude *subagent* rather than the main thread
+     * (`_meta.claudeCode.parentToolUseId`; claude-agent-acp ≥0.63, which codeg opts
+     * into for Claude Code only). Null for main-thread content and for every other
+     * agent — the server omits the key entirely there.
+     *
+     * A parented chunk belongs to the Agent tool call, NOT to the assistant's own
+     * message; see [ContentDelta.isSubagent].
+     */
+    data class ContentDelta(val text: String, val parentToolUseId: String? = null) : AcpEvent {
+        /** True when this chunk is a subagent's, so the main thread must skip it. */
+        val isSubagent: Boolean get() = parentToolUseId != null
+    }
+
+    /** Streamed reasoning. [parentToolUseId] has the same contract as
+     *  [ContentDelta.parentToolUseId]. */
+    data class Thinking(val text: String, val parentToolUseId: String? = null) : AcpEvent {
+        /** True when this chunk is a subagent's, so the main thread must skip it. */
+        val isSubagent: Boolean get() = parentToolUseId != null
+    }
     /** [meta] is the agent's opaque ACP extensibility metadata (context compaction,
      *  Grok's `x.ai/tool` identity, …). Absent for most tools/hosts. */
     data class ToolCall(
@@ -92,7 +111,14 @@ sealed interface AcpEvent {
     data class UsageUpdate(val used: Long, val size: Long) : AcpEvent
     data class UserMessage(val messageId: String, val blocks: List<UserMessageBlock>) : AcpEvent
     data class UserPromptSent(val textPreview: String) : AcpEvent
-    data class Error(val message: String, val code: String?) : AcpEvent
+    /**
+     * A turn or connection failure. [details] is out-of-band diagnostic evidence for errors
+     * codeg *inferred* rather than received — the `turn_failed_empty*` family, where the agent
+     * reported success and the wire carried no error at all. It holds the turn's agent stderr
+     * tail and a count of updates codeg failed to parse, already redacted and length-bounded
+     * server-side. Absent for every ordinary error.
+     */
+    data class Error(val message: String, val code: String?, val details: String? = null) : AcpEvent
     /** Agent asks to approve a tool call (also carries ExitPlanMode — the plan
      * rides inside [toolCall]). Resolve via `acp_respond_permission`. */
     data class PermissionRequest(
@@ -121,6 +147,49 @@ sealed interface AcpEvent {
     data class PlanApprovalResolved(val approvalId: String) : AcpEvent
     /** The agent's live plan / TODO list (display only; does not block the turn). */
     data class PlanUpdate(val entries: List<PlanEntry>) : AcpEvent
+    /**
+     * A mid-turn steering note was submitted — by this client or any other one viewing the
+     * same conversation. The sending client also receives its own echo and dedups it against
+     * the note the submit call returned (both carry the same `id`).
+     */
+    data class FeedbackSubmitted(val note: FeedbackNote) : AcpEvent
+    /**
+     * The agent read one or more pending notes. Carries only ids: clients already hold the
+     * text and just flip those notes to delivered.
+     *
+     * The event's `delivered_at` is dropped — nothing renders a delivery time, and modelling
+     * a field no surface reads would only invite it to drift from the server's.
+     */
+    data class FeedbackConsumed(val ids: List<String>) : AcpEvent
+
+    /**
+     * The agent's config-option catalog **and** its current values.
+     *
+     * Emitted whenever either moves — the agent flipping an option itself (cline's
+     * `auto_approve`), a `set_config_option` from any client, or the catalog landing late
+     * during session setup. The server sends the WHOLE list every time and assigns it
+     * wholesale (`SessionState::apply_event`), so this replaces what was held rather than
+     * merging into it.
+     */
+    data class SessionConfigOptions(val configOptions: List<SessionConfigOption>) : AcpEvent
+
+    /** The agent's mode catalog + current mode. Same whole-list contract as
+     *  [SessionConfigOptions]. */
+    data class SessionModes(val modes: SessionModeState) : AcpEvent
+
+    /** Only the *current* mode moved; the catalog is unchanged and is not repeated here. */
+    data class ModeChanged(val modeId: String) : AcpEvent
+
+    /**
+     * The agent has finished publishing its initial selectors.
+     *
+     * Latched once per connection and carried on every snapshot thereafter. It is the only
+     * thing that tells an empty [SessionConfigOptions] apart from the setup transient — some
+     * agents publish an empty catalog and push the real one right after, which the backend's
+     * own probe has to wait out (`manager.rs::wait_for_session_options`).
+     */
+    data object SelectorsReady : AcpEvent
+
     data class Unknown(val type: String) : AcpEvent
 
     companion object {
@@ -131,8 +200,14 @@ sealed interface AcpEvent {
          */
         fun fromWire(obj: JsonObject, json: Json): AcpEvent {
             return when (val type = obj.stringOrNull("type").orEmpty()) {
-                "content_delta" -> ContentDelta(obj.stringOrNull("text").orEmpty())
-                "thinking" -> Thinking(obj.stringOrNull("text").orEmpty())
+                "content_delta" -> ContentDelta(
+                    text = obj.stringOrNull("text").orEmpty(),
+                    parentToolUseId = obj.stringOrNull("parent_tool_use_id"),
+                )
+                "thinking" -> Thinking(
+                    text = obj.stringOrNull("text").orEmpty(),
+                    parentToolUseId = obj.stringOrNull("parent_tool_use_id"),
+                )
                 "tool_call" -> ToolCall(
                     id = obj.stringOrNull("tool_call_id").orEmpty(),
                     title = obj.stringOrNull("title").orEmpty(),
@@ -178,6 +253,7 @@ sealed interface AcpEvent {
                 "error" -> Error(
                     message = obj.stringOrNull("message") ?: "Unknown error",
                     code = obj.stringOrNull("code"),
+                    details = obj.stringOrNull("details"),
                 )
                 "permission_request" -> PermissionRequest(
                     requestId = obj.stringOrNull("request_id").orEmpty(),
@@ -201,6 +277,36 @@ sealed interface AcpEvent {
                 "plan_update" -> PlanUpdate(
                     entries = decodeList(json, obj["entries"], PlanEntry.serializer()),
                 )
+                // A submitted note with no `item` is a shape surprise, not an empty note:
+                // decoding it into a blank one would put an untitled row on screen that no
+                // `feedback_consumed` can ever resolve (its id would match nothing).
+                "feedback_submitted" -> obj.objectOrNull("item")
+                    ?.let { FeedbackSubmitted(FeedbackNote.fromWire(it)) }
+                    ?: Unknown(type)
+                "feedback_consumed" -> FeedbackConsumed(
+                    ids = obj.arrayOrNull("ids")
+                        ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+                        ?: emptyList(),
+                )
+                // A genuinely empty list decodes as one — whether that means "nothing to
+                // configure" or "the real options are still coming" is the consumer's call, not
+                // the decoder's (see `SessionDetailViewModel.applyEvent`). An absent or
+                // unreadable payload is dropped instead, because the consumer adopts an empty
+                // catalog wholesale: collapsing "one option failed to parse" into "the agent has
+                // no options" would clear every control off the sheet.
+                "session_config_options" -> decodeListOrNull(
+                    json, obj["config_options"], SessionConfigOption.serializer(),
+                )?.let(::SessionConfigOptions) ?: Unknown(type)
+                "selectors_ready" -> SelectorsReady
+                "session_modes" -> decodeOrNull(json, obj["modes"], SessionModeState.serializer())
+                    ?.let(::SessionModes)
+                    ?: Unknown(type)
+                // An empty mode id names no mode, so adopting it would silently CLEAR the
+                // picker's selection rather than move it — worse than ignoring a payload
+                // this build can't read.
+                "mode_changed" -> obj.stringOrNull("mode_id")?.takeIf { it.isNotEmpty() }
+                    ?.let(::ModeChanged)
+                    ?: Unknown(type)
                 else -> Unknown(type)
             }
         }
@@ -213,6 +319,22 @@ sealed interface AcpEvent {
             val arr = element as? JsonArray ?: return emptyList()
             return runCatching { json.decodeFromJsonElement(ListSerializer(serializer), arr) }
                 .getOrDefault(emptyList())
+        }
+
+        private fun <T> decodeOrNull(json: Json, element: JsonElement?, serializer: KSerializer<T>): T? {
+            val obj = element as? JsonObject ?: return null
+            return runCatching { json.decodeFromJsonElement(serializer, obj) }.getOrNull()
+        }
+
+        /** [decodeList], but reporting "absent or unreadable" as null instead of collapsing it
+         *  onto the same empty list a real empty array decodes to. */
+        internal fun <T> decodeListOrNull(
+            json: Json,
+            element: JsonElement?,
+            serializer: KSerializer<T>,
+        ): List<T>? {
+            val arr = element as? JsonArray ?: return null
+            return runCatching { json.decodeFromJsonElement(ListSerializer(serializer), arr) }.getOrNull()
         }
     }
 }
@@ -258,6 +380,66 @@ data class LiveSessionSnapshot(
     val pendingPermission: PendingPermissionSnapshot?,
     val pendingQuestion: PendingQuestionSnapshot?,
     val pendingPlanApproval: PendingPlanApprovalSnapshot?,
+    /**
+     * The turn's mid-turn steering notes, and whether it can take more.
+     *
+     * Carried here as well as on the HTTP snapshot because this is the ONLY recovery path
+     * when a reconnect's gap is too wide to replay: the missed `feedback_submitted` /
+     * `feedback_consumed` events are never re-sent, so without these the strip keeps showing
+     * whatever it held when the socket dropped.
+     */
+    val feedback: List<FeedbackNote>,
+    val feedbackToolAvailable: Boolean,
+    val nativeSteeringAvailable: Boolean,
+    /**
+     * Whether the server has broadcast this turn's `user_message` yet (presence of
+     * `pending_user_message`, which it sets from that event and clears at `turn_complete`).
+     *
+     * Only the presence is modelled, because only the presence is used: it is the proof a
+     * steering note would survive. [status] alone isn't — the connection loop reports
+     * `prompting` first and emits `user_message` after, and that event CLEARS the turn's
+     * notes, so a note sent in between is accepted and then wiped unread.
+     */
+    val hasPendingUserMessage: Boolean,
+    /**
+     * The connection's most recent error. Attaching is the ONLY channel for it — the live
+     * `error` event already fired — so without this a client that opened the session a beat
+     * too late shows a turn that produced nothing and said nothing.
+     */
+    val lastError: SessionLastError?,
+    /**
+     * The connection's mode catalog + current mode, or null when the agent has published none.
+     *
+     * Carried for the same reason as [feedback]: a reconnect whose gap is too wide to replay
+     * gets a snapshot INSTEAD of the events it missed, and those `session_modes` /
+     * `mode_changed` pushes are never re-sent. Without this the attach advances the event
+     * cursor past them and the selectors stay on whatever they held when the socket dropped.
+     *
+     * The separate `current_mode` field is deliberately not modelled: the server keeps
+     * `modes.current_mode_id` in sync on every `mode_changed` precisely so snapshot consumers
+     * read it from here (`SessionState::apply_event`), and a second copy would only invite the
+     * two to disagree.
+     */
+    val modes: SessionModeState?,
+    /**
+     * The connection's config-option catalog + current values, or null when the agent has
+     * published none. Same recovery role as [modes].
+     *
+     * Null and empty mean different things — "never published" versus "published, and there is
+     * nothing to configure" — so this stays nullable rather than defaulting to an empty list.
+     * An unreadable payload also lands as null: adopting it as empty would report an agent with
+     * options as having none.
+     */
+    val configOptions: List<SessionConfigOption>?,
+    /**
+     * Whether the agent has finished publishing its initial selectors — the server's latch
+     * (false until its `selectors_ready` event, true on every snapshot after).
+     *
+     * Needed alongside [configOptions] because an empty catalog is ambiguous without it: during
+     * the connect→`initialize` window some agents publish an empty list and push the real one
+     * moments later. See [AcpEvent.SelectorsReady].
+     */
+    val selectorsReady: Boolean,
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -279,11 +461,50 @@ data class LiveSessionSnapshot(
                     ?.let { PendingQuestionSnapshot.fromWire(it, json) },
                 pendingPlanApproval = obj.objectOrNull("pending_plan_approval")
                     ?.let(PendingPlanApprovalSnapshot::fromWire),
+                feedback = obj.arrayOrNull("feedback")
+                    ?.mapNotNull { (it as? JsonObject)?.let(FeedbackNote::fromWire) }
+                    ?: emptyList(),
+                feedbackToolAvailable = obj.boolOrNull("feedback_tool_available") ?: false,
+                nativeSteeringAvailable = obj.boolOrNull("native_steering_available") ?: false,
+                hasPendingUserMessage = obj.objectOrNull("pending_user_message") != null,
+                lastError = obj.objectOrNull("last_error")?.let(SessionLastError::fromWire),
+                modes = obj.objectOrNull("modes")?.let {
+                    runCatching { json.decodeFromJsonElement(SessionModeState.serializer(), it) }.getOrNull()
+                },
+                configOptions = AcpEvent.decodeListOrNull(
+                    json, obj["config_options"], SessionConfigOption.serializer(),
+                ),
+                selectorsReady = obj.boolOrNull("selectors_ready") ?: false,
             )
 
         private fun JsonObject.intOrNull(key: String): Int? =
             (this[key] as? JsonPrimitive)
                 ?.let { runCatching { it.content.toInt() }.getOrNull() }
+    }
+}
+
+/**
+ * The connection's last error, carried on the attach snapshot (Rust `SessionLastError`).
+ *
+ * **Undated.** The server clears it in the `StatusChanged(Prompting)` arm, which is late — a
+ * prompt is enqueued, and its conversation row already says `in_progress`, well before the
+ * loop emits that status. So a snapshot taken in between still carries the PREVIOUS turn's
+ * failure, and nothing on the record distinguishes that from a session whose last turn really
+ * did fail. Never attribute one of these to a turn without a proof that dates it; the only
+ * one available is the snapshot's own `status` — see `snapshotTurnError`.
+ */
+data class SessionLastError(
+    val message: String,
+    val code: String?,
+    /** See [AcpEvent.Error.details]. Already redacted server-side. */
+    val details: String?,
+) {
+    companion object {
+        fun fromWire(obj: JsonObject): SessionLastError = SessionLastError(
+            message = obj.stringOrNull("message").orEmpty(),
+            code = obj.stringOrNull("code"),
+            details = obj.stringOrNull("details"),
+        )
     }
 }
 
@@ -302,8 +523,19 @@ data class LiveMessageSnapshot(val content: List<LiveContentBlockSnapshot>) {
 /** One ordered block of the in-flight message (Rust `LiveContentBlock`,
  *  `kind`-tagged). [ToolCallRef] points into [LiveSessionSnapshot.activeToolCalls]. */
 sealed interface LiveContentBlockSnapshot {
-    data class Text(val text: String) : LiveContentBlockSnapshot
-    data class Thinking(val text: String) : LiveContentBlockSnapshot
+    /** [parentToolUseId] carries the same subagent attribution as
+     *  [AcpEvent.ContentDelta.parentToolUseId] — the backend splits blocks at
+     *  attribution boundaries, so a parented block is wholly a subagent's. */
+    data class Text(val text: String, val parentToolUseId: String? = null) : LiveContentBlockSnapshot {
+        /** True when this block is a subagent's, so the main thread must skip it. */
+        val isSubagent: Boolean get() = parentToolUseId != null
+    }
+
+    /** [parentToolUseId]: see [Text]. */
+    data class Thinking(val text: String, val parentToolUseId: String? = null) : LiveContentBlockSnapshot {
+        /** True when this block is a subagent's, so the main thread must skip it. */
+        val isSubagent: Boolean get() = parentToolUseId != null
+    }
     data class ToolCallRef(val toolCallId: String) : LiveContentBlockSnapshot
     data class Plan(val entries: List<PlanEntry>) : LiveContentBlockSnapshot
     data object Unknown : LiveContentBlockSnapshot
@@ -311,8 +543,14 @@ sealed interface LiveContentBlockSnapshot {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveContentBlockSnapshot =
             when (obj.stringOrNull("kind")) {
-                "text" -> Text(obj.stringOrNull("text").orEmpty())
-                "thinking" -> Thinking(obj.stringOrNull("text").orEmpty())
+                "text" -> Text(
+                    text = obj.stringOrNull("text").orEmpty(),
+                    parentToolUseId = obj.stringOrNull("parent_tool_use_id"),
+                )
+                "thinking" -> Thinking(
+                    text = obj.stringOrNull("text").orEmpty(),
+                    parentToolUseId = obj.stringOrNull("parent_tool_use_id"),
+                )
                 "tool_call_ref" -> ToolCallRef(obj.stringOrNull("tool_call_id").orEmpty())
                 "plan" -> Plan(
                     (obj["entries"] as? JsonArray)?.let {

@@ -60,6 +60,9 @@
     <string name="sessions_empty_message">Start a new task and it\'ll show up here.</string>
     <string name="session_load_failed">Couldn\'t load this session</string>
     <string name="session_empty_title">No messages yet</string>
+    <!-- Head of the transcript when older history is still on the server; it pages
+         in as the user scrolls, so this states what is there rather than inviting a tap. -->
+    <string name="session_older_history">Earlier messages</string>
     <string name="session_empty_message">Messages in this session will appear here.</string>
     <string name="session_jump_to_latest">Jump to latest</string>
     <string name="session_agent_options">Agent options</string>
@@ -107,6 +110,9 @@
     <string name="common_ok">OK</string>
     <string name="common_done">Done</string>
     <string name="common_back">Back</string>
+    <!-- Screen-reader state for a disclosure. Announced as the control's state, not its name. -->
+    <string name="common_expanded">Expanded</string>
+    <string name="common_collapsed">Collapsed</string>
     <string name="common_loading">Loading…</string>
     <string name="common_error_generic">Something went wrong.</string>
 
@@ -599,7 +605,10 @@
     <string name="agentopts_title">Agent Options</string>
     <string name="agentopts_mode">MODE</string>
     <string name="agentopts_apply_failed">Couldn\'t apply that change. Check your connection and try again.</string>
+    <string name="agentopts_not_remembered">Sent to this session, but it couldn\'t be saved for next time.</string>
+    <string name="agentopts_revert_incomplete">Couldn\'t apply that change, and the saved setting may still hold the new value.</string>
     <string name="agentopts_no_options">This agent has no adjustable options.</string>
+    <string name="agentopts_unsupported_option">Not adjustable here.</string>
     <string name="agentopts_new_session_title">New Session</string>
     <string name="agentopts_agent_section">AGENT</string>
     <string name="agentopts_workspace">WORKSPACE</string>
@@ -615,6 +624,17 @@
     <string name="compose_message_placeholder">Message</string>
     <string name="compose_stop">Stop</string>
     <string name="compose_send">Send</string>
+
+    <!-- ===== Session Detail · Mid-turn notes ===== -->
+    <!-- Composer placeholder while the agent works. Two channels: the note either lands in
+         the running turn at once, or waits for the agent to check for it. -->
+    <string name="feedback_placeholder_instant">Add a note to this turn…</string>
+    <string name="feedback_placeholder_pending">Leave a note for the agent…</string>
+    <string name="feedback_send">Send note</string>
+    <string name="feedback_waiting">Waiting</string>
+    <string name="feedback_read">Received</string>
+    <string name="feedback_turn_ended">The agent finished before your note could be sent.</string>
+    <string name="feedback_not_instant">This session can\'t add notes to a running turn. Your note is waiting for the agent to read at its next check.</string>
 
     <!-- ===== Session Detail · Ask / Permission / Tool / Plan / Timeline ===== -->
     <string name="ask_needs_input_title">The agent needs your input</string>
@@ -636,6 +656,10 @@
     <string name="timeline_copy">Copy</string>
     <string name="timeline_scroll_to_question">Scroll to question</string>
     <string name="timeline_question">Question</string>
+    <string name="timeline_error_details">Details</string>
+    <!-- Headline for a failure recovered from the connection snapshot rather than from the
+         live event: the server records the message, but an empty one is possible. -->
+    <string name="timeline_error_generic">The agent reported an error.</string>
 
     <!-- ===== Projects · Clone / Browse / Branch ===== -->
     <string name="clone_close">Close</string>

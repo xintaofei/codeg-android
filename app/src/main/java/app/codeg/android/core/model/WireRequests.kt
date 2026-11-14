@@ -43,6 +43,65 @@ data class ListConversationsBody(
 @Serializable
 data class ConversationIdBody(val conversationId: Int)
 
+/**
+ * Which slice of a transcript to fetch. Mutually exclusive on the wire — the
+ * server rejects both selectors at once — so this is a sealed choice rather than
+ * two nullable ints.
+ */
+sealed interface TurnWindow {
+    /**
+     * The last [n] turns, with the start aligned BACKWARD to a user-round
+     * boundary. Alignment only ever adds earlier turns, and walks back at most
+     * 200 of them, so a single degenerate round cannot re-expand the window into
+     * a full transfer.
+     *
+     * That cap means the window usually — but NOT always — opens on a user turn:
+     * a round with more than 200 replies exhausts the walk and the window starts
+     * mid-reply. Anything keyed on the first loaded turn has to tolerate that.
+     */
+    data class Tail(val n: Int) : TurnWindow
+
+    /**
+     * The exact slice starting at [from], NEVER round-aligned: the response
+     * offset has to match the coordinate the caller refreshed against, or the
+     * two prefix fingerprints describe different prefixes and cannot be
+     * compared.
+     */
+    data class FromIndex(val from: Int) : TurnWindow
+
+    companion object {
+        /** Server-side clamp on [Tail.n] and on a page `limit`. */
+        const val MAX_TURNS = 500
+    }
+}
+
+/**
+ * `get_folder_conversation`. Both selectors omitted asks for the whole
+ * transcript, which is also what a pre-0.24.0 server always answers with.
+ */
+@Serializable
+data class ConversationDetailBody(
+    val conversationId: Int,
+    val tailTurns: Int? = null,
+    val fromIndex: Int? = null,
+) {
+    companion object {
+        fun of(conversationId: Int, window: TurnWindow?): ConversationDetailBody = when (window) {
+            null -> ConversationDetailBody(conversationId)
+            is TurnWindow.Tail -> ConversationDetailBody(conversationId, tailTurns = window.n)
+            is TurnWindow.FromIndex -> ConversationDetailBody(conversationId, fromIndex = window.from)
+        }
+    }
+}
+
+/** `get_folder_conversation_turns` — one page of history ending before [beforeIndex]. */
+@Serializable
+data class ConversationTurnsBody(
+    val conversationId: Int,
+    val beforeIndex: Int,
+    val limit: Int,
+)
+
 @Serializable
 data class CreateConversationBody(
     val folderId: Int,
@@ -357,6 +416,10 @@ data class SetModeBody(val connectionId: String, val modeId: String)
 
 @Serializable
 data class SetConfigOptionBody(val connectionId: String, val configId: String, val valueId: String)
+
+/** Body for `submit_session_feedback` — a mid-turn steering note for a running connection. */
+@Serializable
+data class SubmitFeedbackBody(val connectionId: String, val text: String)
 
 // MARK: - GitHub credential request bodies
 
