@@ -58,6 +58,7 @@ import app.codeg.android.feature.sessiondetail.rendering.ActivityLive
 import app.codeg.android.feature.sessiondetail.timeline.launchCardTitle
 import app.codeg.android.feature.sessiondetail.timeline.runningSubAgents
 import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
+import app.codeg.android.feature.sessiondetail.rendering.LocalOpenConversation
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
@@ -127,6 +128,8 @@ private const val OLDER_HISTORY_TRIGGER_ROWS = 6
 fun SessionDetailScreen(
     onBack: () -> Unit,
     onOpenSession: (Int) -> Unit = {},
+    /** Open another conversation by id — a delegated child's session. */
+    onOpenConversation: ((Int) -> Unit)? = null,
     viewModel: SessionDetailViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
@@ -202,11 +205,12 @@ fun SessionDetailScreen(
     val hasContent = nodes.isNotEmpty()
     // What the connection knows that the transcript doesn't: the call a permission request
     // waits on, and how the answered ones went (the chips on their rows).
-    val activityLive = remember(ui.pendingPermission, ui.pendingQuestion, ui.pendingPlanApproval, ui.toolApprovals) {
+    val activityLive = remember(ui.pendingPermission, ui.pendingQuestion, ui.pendingPlanApproval, ui.toolApprovals, ui.delegations) {
         ActivityLive(
             awaitingToolCallId = ui.pendingPermission?.parsed?.toolCallId,
             awaitingUser = ui.pendingPermission != null || ui.pendingQuestion != null || ui.pendingPlanApproval != null,
             approvals = ui.toolApprovals,
+            delegations = ui.delegations,
         )
     }
     // The "load older" row sits at the head of the list, so every list index the
@@ -425,16 +429,17 @@ fun SessionDetailScreen(
                     NoticeBanner(lastNotice, onDismiss = viewModel::dismissNotice)
                 }
                 // What runs beyond the reply — and outlives its turn.
-                val runs = remember(ui.asyncTasks, ui.backgroundTasks, ui.delegatedChildren, ui.live, ui.turns, ui.localTurns) {
+                val runs = remember(ui.asyncTasks, ui.backgroundTasks, ui.delegatedChildren, ui.delegations, ui.live, ui.turns, ui.localTurns) {
                     LiveRuns.collect(
                         asyncTasks = ui.asyncTasks,
                         foreground = runningSubAgents(ui.live),
                         background = ui.backgroundTasks,
                         delegatedChildren = ui.delegatedChildren,
                         launchTitle = { id -> launchCardTitle(ui.localTurns, id) ?: launchCardTitle(ui.turns, id) },
+                        delegationBindings = ui.delegations.values,
                     )
                 }
-                LiveRunsBar(runs, ui.agent.displayName, onStopTask = viewModel::stopAsyncTask)
+                LiveRunsBar(runs, ui.agent.displayName, onStopTask = viewModel::stopAsyncTask, onOpenConversation = onOpenConversation)
                 ComposerStatusStrips(
                     retry = ui.apiRetry,
                     failures = ui.sessionFailures,
@@ -570,6 +575,7 @@ fun SessionDetailScreen(
                     LocalReplyFoldActions provides foldActions,
                     LocalDisclosures provides disclosures,
                     LocalActivityLive provides activityLive,
+                    LocalOpenConversation provides onOpenConversation,
                 ) {
                     LazyColumn(
                         state = listState,

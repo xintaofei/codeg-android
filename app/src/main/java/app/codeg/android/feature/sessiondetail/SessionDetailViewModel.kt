@@ -1205,6 +1205,19 @@ class SessionDetailViewModel @Inject constructor(
                 if (tasks === it.asyncTasks) it else it.copy(asyncTasks = tasks)
             }
             is AcpEvent.BackgroundActivity -> onBackgroundActivity(event)
+            // A completion carries the identity again, for a client that missed the start.
+            is AcpEvent.DelegationStarted -> _ui.update {
+                it.copy(delegations = it.delegations + (event.delegation.parentToolUseId to event.delegation))
+            }
+            is AcpEvent.DelegationCompleted -> _ui.update {
+                val known = it.delegations[event.delegation.parentToolUseId]
+                val done = event.delegation.copy(
+                    task = event.delegation.task ?: known?.task,
+                    taskId = event.delegation.taskId ?: known?.taskId,
+                    assistantName = event.delegation.assistantName ?: known?.assistantName,
+                )
+                it.copy(delegations = it.delegations + (done.parentToolUseId to done))
+            }
             is AcpEvent.DelegationChildRunning -> _ui.update {
                 val running = event.childConnectionId in it.delegatedChildren
                 when {
@@ -1793,6 +1806,11 @@ class SessionDetailViewModel @Inject constructor(
                 // Whole sets, the server's current state.
                 backgroundTasks = snapshot.backgroundOutstandingTasks,
                 delegatedChildren = snapshot.delegatedChildren,
+                // The running ones it still holds; a finished binding seen here stays finished.
+                delegations = snapshot.activeDelegations.fold(it.delegations) { acc, d ->
+                    if (acc[d.parentToolUseId]?.status?.let { s -> s != app.codeg.android.core.model.DelegationBinding.Status.RUNNING } == true) acc
+                    else acc + (d.parentToolUseId to d)
+                },
             )
         }
     }

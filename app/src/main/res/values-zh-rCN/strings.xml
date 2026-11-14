@@ -735,6 +735,13 @@
     <string name="background_card_interim">后台任务：阶段性结果</string>
     <string name="background_card_finished_status">后台任务已结束（%1$s）</string>
     <string name="background_card_result_pending">结果尚未返回</string>
+    <string name="delegation_running">运行中</string>
+    <string name="delegation_done">已完成</string>
+    <string name="delegation_failed">失败</string>
+    <string name="delegation_open_session">打开会话</string>
+    <plurals name="delegation_polls">
+        <item quantity="other">查看了 %d 次委派进度</item>
+    </plurals>
     <string name="activity_expand">展开执行过程</string>
     <string name="activity_collapse">收起</string>
 

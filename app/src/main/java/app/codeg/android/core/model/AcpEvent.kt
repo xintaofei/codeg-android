@@ -258,6 +258,16 @@ sealed interface AcpEvent {
     data class DelegationChildRunning(val childConnectionId: String, val running: Boolean) : AcpEvent
 
     /**
+     * A `delegate_to_agent` call of this connection spawned a child session and its prompt is in
+     * flight: the binding between the call ([delegation]`.parentToolUseId`) and the child.
+     */
+    data class DelegationStarted(val delegation: DelegationBinding) : AcpEvent
+
+    /** That child finished, errored, timed out or was cancelled; its result went to the parent.
+     *  Carries the identity again for a client that missed the start. */
+    data class DelegationCompleted(val delegation: DelegationBinding) : AcpEvent
+
+    /**
      * The agent settled a `set_config_option` on a value other than the one asked for (pi for a
      * model that can't reason, grok for a mid-conversation model switch) — which otherwise reads
      * as the selector springing back for no reason. Labels for the message, raw ids beside them.
@@ -484,6 +494,20 @@ sealed interface AcpEvent {
                         ?: emptyList(),
                     watermark = obj.longOrNull("watermark") ?: 0,
                 )
+                "delegation_started" -> DelegationBinding.fromWire(obj, DelegationBinding.Status.RUNNING)
+                    ?.let(::DelegationStarted)
+                    ?: Unknown(type)
+                "delegation_completed" -> {
+                    val result = obj.objectOrNull("result")
+                    val ok = result?.stringOrNull("kind") == "ok"
+                    DelegationBinding.fromWire(obj, if (ok) DelegationBinding.Status.OK else DelegationBinding.Status.ERR)
+                        ?.copy(
+                            durationMs = result?.longOrNull("duration_ms"),
+                            errorCode = result?.stringOrNull("error_code"),
+                        )
+                        ?.let(::DelegationCompleted)
+                        ?: Unknown(type)
+                }
                 "delegation_child_running" -> obj.stringOrNull("child_connection_id")?.takeIf { it.isNotEmpty() }
                     ?.let { DelegationChildRunning(it, obj.boolOrNull("running") ?: false) }
                     ?: Unknown(type)
@@ -666,6 +690,8 @@ data class LiveSessionSnapshot(
     val backgroundOutstandingTasks: List<BackgroundOutstandingTask> = emptyList(),
     /** Child connection ids of every delegation this connection still has running. */
     val delegatedChildren: List<String> = emptyList(),
+    /** The running delegations bound to a card, for a client that missed their start. */
+    val activeDelegations: List<DelegationBinding> = emptyList(),
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -726,6 +752,9 @@ data class LiveSessionSnapshot(
                     ?: emptyList(),
                 backgroundOutstandingTasks = obj.arrayOrNull("background_outstanding_tasks")
                     ?.mapNotNull { AcpEvent.decodeOrNull(json, it, BackgroundOutstandingTask.serializer()) }
+                    ?: emptyList(),
+                activeDelegations = obj.arrayOrNull("active_delegations")
+                    ?.mapNotNull { (it as? JsonObject)?.let { d -> DelegationBinding.fromWire(d, DelegationBinding.Status.RUNNING) } }
                     ?: emptyList(),
                 delegatedChildren = obj.arrayOrNull("delegated_children")
                     ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.takeIf { c -> c.isNotEmpty() } }

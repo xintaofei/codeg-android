@@ -571,3 +571,44 @@ class AcpEventBackgroundTest {
         assertEquals(listOf("a"), snap.backgroundOutstandingTasks.map { it.taskId })
     }
 }
+
+/** A delegation's binding, live and on the snapshot. */
+class AcpEventDelegationTest {
+
+    private val json: Json = CodegJson.response
+
+    private fun obj(raw: String) = json.parseToJsonElement(raw).jsonObject
+
+    @Test
+    fun `a delegation starts and completes`() {
+        val started = AcpEvent.fromWire(
+            obj("""{"type":"delegation_started","parent_connection_id":"p","parent_tool_use_id":"call-1","child_connection_id":"c","child_conversation_id":12,"agent_type":"codex","task_preview":"Port it","task_id":"t-1","assistant_name":"Reviewer"}"""),
+            json,
+        ) as AcpEvent.DelegationStarted
+        assertEquals(DelegationBinding("call-1", "c", 12, "codex", DelegationBinding.Status.RUNNING, "Port it", "t-1", "Reviewer"), started.delegation)
+        val ok = AcpEvent.fromWire(
+            obj("""{"type":"delegation_completed","parent_connection_id":"p","parent_tool_use_id":"call-1","child_connection_id":"c","child_conversation_id":12,"agent_type":"codex","result":{"kind":"ok","duration_ms":61000}}"""),
+            json,
+        ) as AcpEvent.DelegationCompleted
+        assertEquals(DelegationBinding.Status.OK, ok.delegation.status)
+        assertEquals(61000L, ok.delegation.durationMs)
+        val err = AcpEvent.fromWire(
+            obj("""{"type":"delegation_completed","parent_tool_use_id":"call-1","child_connection_id":"c","child_conversation_id":12,"agent_type":"codex","result":{"kind":"err","error_code":"timeout"}}"""),
+            json,
+        ) as AcpEvent.DelegationCompleted
+        assertEquals("timeout", err.delegation.errorCode)
+        assertTrue(AcpEvent.fromWire(obj("""{"type":"delegation_started","child_connection_id":"c"}"""), json) is AcpEvent.Unknown)
+    }
+
+    @Test
+    fun `the snapshot recovers the running delegations`() {
+        val snap = LiveSessionSnapshot.fromWire(
+            obj("""{"active_delegations":[{"parent_tool_use_id":"call-1","child_connection_id":"c","child_conversation_id":12,"agent_type":"codex","task_preview":"","task_id":""}]}"""),
+            json,
+        )
+        val d = snap.activeDelegations.single()
+        assertEquals("call-1", d.parentToolUseId)
+        assertNull("an empty preview is none", d.task)
+        assertEquals(DelegationBinding.Status.RUNNING, d.status)
+    }
+}

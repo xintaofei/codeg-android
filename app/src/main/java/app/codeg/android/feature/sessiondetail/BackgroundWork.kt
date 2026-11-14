@@ -5,6 +5,7 @@ import app.codeg.android.core.model.AsyncTaskRecord
 import app.codeg.android.core.model.BackgroundOutstandingTask
 import app.codeg.android.core.model.BackgroundSettledInfo
 import app.codeg.android.core.model.ContentBlock
+import app.codeg.android.core.model.DelegationBinding
 import app.codeg.android.core.model.MessageTurn
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -259,10 +260,14 @@ data class LiveRuns(
     /** Async tasks still going. */
     val tasks: List<AsyncTaskRecord>,
     val subagents: List<SubAgentRun>,
-    /** Delegated children still running, by connection id. */
-    val delegations: List<String>,
+    /** Delegated children still running, with their binding when one was seen. */
+    val delegations: List<DelegationRun>,
 ) {
     val count: Int get() = tasks.size + subagents.size + delegations.size
+
+    /** A delegation still running: the connection's own word ([childConnectionId]), its
+     *  identity from the binding. */
+    data class DelegationRun(val childConnectionId: String, val binding: DelegationBinding?)
 
     /** A sub-agent at work: a launch running in the reply, or one running in the background. */
     data class SubAgentRun(val key: String, val title: String?, val background: Boolean, val description: String?, val startedAtMs: Long?)
@@ -281,6 +286,7 @@ data class LiveRuns(
             background: List<BackgroundOutstandingTask>,
             delegatedChildren: List<String>,
             launchTitle: (String) -> String? = { null },
+            delegationBindings: Collection<DelegationBinding> = emptyList(),
         ): LiveRuns {
             val subagents = mutableListOf<SubAgentRun>()
             val seen = HashSet<String>()
@@ -299,7 +305,18 @@ data class LiveRuns(
                     startedAtMs = task.startedAtMs.takeIf { it > 0 },
                 )
             }
-            return LiveRuns(AsyncTasks.live(asyncTasks), subagents, delegatedChildren.distinct())
+            // Which delegations run is the parent's word; a binding only names one. A child whose
+            // binding says it finished is done, whatever a stale running set says.
+            val byChild = HashMap<String, DelegationBinding>()
+            for (b in delegationBindings) {
+                val known = byChild[b.childConnectionId]
+                if (known == null || b.status == DelegationBinding.Status.RUNNING) byChild[b.childConnectionId] = b
+            }
+            val delegations = delegatedChildren.distinct().mapNotNull { child ->
+                val binding = byChild[child]
+                if (binding != null && binding.status != DelegationBinding.Status.RUNNING) null else DelegationRun(child, binding)
+            }
+            return LiveRuns(AsyncTasks.live(asyncTasks), subagents, delegations)
         }
     }
 }

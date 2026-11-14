@@ -5,6 +5,7 @@ import app.codeg.android.core.model.AsyncTaskRecord
 import app.codeg.android.core.model.BackgroundOutstandingTask
 import app.codeg.android.core.model.BackgroundSettledInfo
 import app.codeg.android.core.model.ContentBlock
+import app.codeg.android.core.model.DelegationBinding
 import app.codeg.android.core.model.MessageTurn
 import app.codeg.android.core.model.TurnRole
 import org.junit.Assert.assertEquals
@@ -112,8 +113,25 @@ class BackgroundWorkTest {
         assertEquals(listOf("t"), runs.tasks.map { it.taskId })
         assertEquals(listOf("call:call-1", "bg:a2"), runs.subagents.map { it.key })
         assertEquals("Docs agent", runs.subagents[1].title)
-        assertEquals(listOf("child"), runs.delegations)
+        assertEquals(listOf("child"), runs.delegations.map { it.childConnectionId })
         assertEquals(4, runs.count)
         assertFalse(runs.subagents[0].background)
+    }
+
+    private fun binding(child: String, status: DelegationBinding.Status) =
+        DelegationBinding("call-$child", child, 7, "codex", status, "Port the parser", "task-1", null)
+
+    @Test
+    fun `a delegation is named by its binding, and one its binding saw finish is gone`() {
+        val runs = LiveRuns.collect(
+            asyncTasks = emptyList(),
+            foreground = emptyList(),
+            background = emptyList(),
+            delegatedChildren = listOf("a", "b", "c"),
+            delegationBindings = listOf(binding("a", DelegationBinding.Status.RUNNING), binding("b", DelegationBinding.Status.OK)),
+        )
+        assertEquals(listOf("a", "c"), runs.delegations.map { it.childConnectionId })
+        assertEquals("codex", runs.delegations[0].binding?.agentType)
+        assertNull("no binding seen", runs.delegations[1].binding)
     }
 }

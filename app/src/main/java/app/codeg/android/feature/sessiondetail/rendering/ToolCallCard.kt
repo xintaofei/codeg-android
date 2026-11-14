@@ -83,8 +83,17 @@ fun ToolCallCard(vm: ToolCallVM, modifier: Modifier = Modifier, nested: Boolean 
         vm.state == ToolCallState.ERROR ||
         (vm.diffFiles != null && (vm.diffFiles.sumOf { f -> f.hunks.sumOf { it.rows.size } } <= 40))
     var expanded by remember(vm.id) { mutableStateOf(autoExpand) }
-    val hasBody = vm.diffFiles != null || !vm.input.isNullOrBlank() || vm.hasOutput
-    val live = liveToolStep(vm, LocalActivityLive.current)
+    val activity = LocalActivityLive.current
+    val live = liveToolStep(vm, activity)
+    // A delegated task: who took it and how it stands, ahead of the call's own fields.
+    val delegation = remember(vm, activity.delegations) {
+        if (Delegations.isDelegateCall(vm.rawName) || vm.meta?.containsKey(Delegations.META_KEY) == true) {
+            Delegations.view(vm, activity.delegations[vm.id])
+        } else {
+            null
+        }
+    }
+    val hasBody = vm.diffFiles != null || !vm.input.isNullOrBlank() || vm.hasOutput || delegation != null
     // A call waiting on the user's approval shows what it would do, as its card above the
     // composer asks about it.
     LaunchedEffect(live.awaiting) { if (live.awaiting && hasBody) expanded = true }
@@ -119,6 +128,7 @@ fun ToolCallCard(vm: ToolCallVM, modifier: Modifier = Modifier, nested: Boolean 
                 if (adds > 0) Text("+$adds", color = SuccessGreen, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 if (dels > 0) Text("−$dels", color = colors.danger, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             }
+            if (delegation != null && !live.awaiting) DelegationStatusLabel(delegation)
             if (live.showsApproval) live.approval?.let { ApprovalChip(it) }
             when {
                 live.awaiting -> Text(stringResource(R.string.activity_needs_you), color = ToolWarning, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
@@ -143,6 +153,7 @@ fun ToolCallCard(vm: ToolCallVM, modifier: Modifier = Modifier, nested: Boolean 
                 Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                delegation?.let { DelegationSummary(it) }
                 ToolBody(vm)
             }
         }
@@ -642,6 +653,9 @@ fun bucketIcon(bucket: ToolKindBucket): ImageVector = when (bucket) {
 
 /** "Read 3 files · Edited 2 files" — counts per bucket, fixed iOS order. Localized via plurals. */
 private fun groupSummary(context: Context, items: List<ToolCallVM>): String {
+    if (items.isNotEmpty() && items.all { Delegations.isStatusPoll(it.rawName) }) {
+        return context.resources.getQuantityString(R.plurals.delegation_polls, items.size, items.size)
+    }
     val counts = items.groupingBy { it.bucket }.eachCount()
     val order = listOf(
         ToolKindBucket.READ, ToolKindBucket.EDIT, ToolKindBucket.SEARCH, ToolKindBucket.EXECUTE,

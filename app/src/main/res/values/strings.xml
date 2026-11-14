@@ -749,6 +749,14 @@
     <string name="background_card_interim">Background task: interim result</string>
     <string name="background_card_finished_status">Background task finished (%1$s)</string>
     <string name="background_card_result_pending">Result not returned yet</string>
+    <string name="delegation_running">running</string>
+    <string name="delegation_done">done</string>
+    <string name="delegation_failed">failed</string>
+    <string name="delegation_open_session">Open session</string>
+    <plurals name="delegation_polls">
+        <item quantity="one">Checked on a delegation %d time</item>
+        <item quantity="other">Checked on a delegation %d times</item>
+    </plurals>
     <string name="activity_expand">Show the steps</string>
     <string name="activity_collapse">Collapse</string>
 

@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.codeg.android.R
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.AsyncTaskRecord
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -57,7 +58,12 @@ import java.time.format.FormatStyle
  * the chip outlives the turn. Tapping it lists the work, with a stop for a task that offers one.
  */
 @Composable
-fun LiveRunsBar(runs: LiveRuns, agentName: String, onStopTask: ((String, (Boolean) -> Unit) -> Unit)?) {
+fun LiveRunsBar(
+    runs: LiveRuns,
+    agentName: String,
+    onStopTask: ((String, (Boolean) -> Unit) -> Unit)?,
+    onOpenConversation: ((Int) -> Unit)? = null,
+) {
     if (runs.count == 0) return
     val colors = CodegTheme.colors
     var open by remember { mutableStateOf(false) }
@@ -80,12 +86,18 @@ fun LiveRunsBar(runs: LiveRuns, agentName: String, onStopTask: ((String, (Boolea
             Text(res.getQuantityString(R.plurals.live_runs_count, runs.count, runs.count), fontSize = 12.sp, color = colors.textSecondary)
         }
     }
-    if (open) LiveRunsSheet(runs, agentName, onStopTask, onDismiss = { open = false })
+    if (open) LiveRunsSheet(runs, agentName, onStopTask, onOpenConversation, onDismiss = { open = false })
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LiveRunsSheet(runs: LiveRuns, agentName: String, onStopTask: ((String, (Boolean) -> Unit) -> Unit)?, onDismiss: () -> Unit) {
+private fun LiveRunsSheet(
+    runs: LiveRuns,
+    agentName: String,
+    onStopTask: ((String, (Boolean) -> Unit) -> Unit)?,
+    onOpenConversation: ((Int) -> Unit)?,
+    onDismiss: () -> Unit,
+) {
     val colors = CodegTheme.colors
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = colors.bgElevated) {
@@ -116,8 +128,25 @@ private fun LiveRunsSheet(runs: LiveRuns, agentName: String, onStopTask: ((Strin
             }
             if (runs.delegations.isNotEmpty()) {
                 RunGroupTitle(stringResource(R.string.live_runs_delegations), runs.delegations.size)
-                runs.delegations.forEach {
-                    RunRow(icon = Icons.Rounded.SmartToy, name = stringResource(R.string.live_runs_delegated_fallback), meta = "")
+                runs.delegations.forEach { run ->
+                    val binding = run.binding
+                    val agent = binding?.agentType?.takeIf { it.isNotEmpty() }?.let(AgentType::fromWire)
+                    val child = binding?.childConversationId
+                    RunRow(
+                        icon = Icons.Rounded.SmartToy,
+                        name = listOfNotNull(binding?.assistantName, agent?.displayName).distinct().joinToString(" · ")
+                            .ifEmpty { stringResource(R.string.live_runs_delegated_fallback) },
+                        meta = binding?.task.orEmpty(),
+                        trailing = if (child != null && onOpenConversation != null) {
+                            {
+                                TextButton(onClick = { onDismiss(); onOpenConversation(child) }) {
+                                    Text(stringResource(R.string.delegation_open_session), fontSize = 13.sp)
+                                }
+                            }
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
         }

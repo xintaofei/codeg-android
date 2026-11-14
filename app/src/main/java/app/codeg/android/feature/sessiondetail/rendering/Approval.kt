@@ -85,6 +85,8 @@ data class ActivityLive(
      *  user rather than working. */
     val awaitingUser: Boolean = false,
     val approvals: Map<String, ToolApprovalInfo> = emptyMap(),
+    /** The connection's delegations, by the `delegate_to_agent` call that started each. */
+    val delegations: Map<String, app.codeg.android.core.model.DelegationBinding> = emptyMap(),
 )
 
 /** A tool call as the live connection sees it (web `useLiveToolStep`). */

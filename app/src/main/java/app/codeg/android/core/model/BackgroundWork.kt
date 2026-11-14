@@ -1,6 +1,10 @@
 package app.codeg.android.core.model
 
+import app.codeg.android.core.model.wire.longOrNull
+import app.codeg.android.core.model.wire.stringOrNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /** What an async task has cost so far, as the adapter last reported it (all three, or none). */
 @Serializable
@@ -84,3 +88,43 @@ data class BackgroundSettledInfo(
     val result: String? = null,
     val interim: Boolean = false,
 )
+
+/**
+ * A codeg delegation bound to the `delegate_to_agent` call that started it (web
+ * `DelegationBinding`, from `delegation_started` / `delegation_completed` and the snapshot's
+ * `active_delegations`).
+ */
+data class DelegationBinding(
+    val parentToolUseId: String,
+    val childConnectionId: String,
+    val childConversationId: Int?,
+    /** The agent the child runs — an assistant's own agent when [assistantName] is set. */
+    val agentType: String,
+    val status: Status,
+    /** The delegated task's bounded text: the card's label when the call's input never had it. */
+    val task: String?,
+    /** The broker's task id, as the running ack embeds it. */
+    val taskId: String?,
+    val assistantName: String?,
+    val durationMs: Long? = null,
+    val errorCode: String? = null,
+) {
+    enum class Status { RUNNING, OK, ERR }
+
+    companion object {
+        fun fromWire(obj: JsonObject, status: Status): DelegationBinding? {
+            val parent = obj.stringOrNull("parent_tool_use_id")?.takeIf { it.isNotEmpty() } ?: return null
+            return DelegationBinding(
+                parentToolUseId = parent,
+                childConnectionId = obj.stringOrNull("child_connection_id").orEmpty(),
+                childConversationId = (obj["child_conversation_id"] as? JsonPrimitive)?.content?.toIntOrNull(),
+                agentType = obj.stringOrNull("agent_type").orEmpty(),
+                status = status,
+                task = obj.stringOrNull("task_preview")?.trim()?.takeIf { it.isNotEmpty() },
+                taskId = obj.stringOrNull("task_id")?.takeIf { it.isNotEmpty() },
+                assistantName = obj.stringOrNull("assistant_name")?.trim()?.takeIf { it.isNotEmpty() },
+                durationMs = obj.longOrNull("duration_ms"),
+            )
+        }
+    }
+}

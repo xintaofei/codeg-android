@@ -11,7 +11,14 @@ import kotlinx.serialization.json.JsonPrimitive
  * The two kinds of call a run of which folds into one row (web `GroupKind`): reading the
  * workspace or the web, and running commands. Everything else stands as a row of its own.
  */
-enum class StepFamily { EXPLORE, COMMAND }
+enum class StepFamily {
+    EXPLORE,
+    COMMAND,
+
+    /** Checks on a delegated task (`get_delegation_status`): one row however often the agent
+     *  asked (web `delegation-status-group`). */
+    DELEGATION_POLL,
+}
 
 /** A browser drives a page, it doesn't look something up: never part of an exploration. */
 private val BROWSER_NAMES = setOf("browser", "browser_action")
@@ -23,6 +30,8 @@ private val BROWSER_NAMES = setOf("browser", "browser_action")
  * `COMMAND_KINDS`.
  */
 fun stepFamily(vm: ToolCallVM): StepFamily? {
+    // Ahead of the MCP rule: codeg's own server is how these arrive.
+    if (Delegations.isStatusPoll(vm.rawName)) return StepFamily.DELEGATION_POLL
     if (vm.isPlanMode || isMcpCall(vm)) return null
     return when (vm.bucket) {
         ToolKindBucket.READ, ToolKindBucket.SEARCH -> StepFamily.EXPLORE
