@@ -72,7 +72,7 @@ fun MoveConversationSheet(
                     color = colors.textPrimary,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 )
-                val targets = folders?.filter { it.id != conversation.folderId && !it.isChat }
+                val targets = folders?.filter { it.id != conversation.folderId && !it.isChatFolder }
                 when {
                     targets == null -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(Modifier.size(24.dp), color = colors.accent, strokeWidth = 2.dp)

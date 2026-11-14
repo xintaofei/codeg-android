@@ -54,7 +54,7 @@ object ConversationTags {
     /** The folder whose tags a conversation in [folder] is offered: its root for a regular folder
      *  (worktrees follow their repo), none for a chat folder or an unknown one. */
     fun scopeFolderId(folder: FolderDetail?): Int? {
-        if (folder == null || folder.isChat) return null
+        if (folder == null || folder.isChatFolder) return null
         return folder.parentId ?: folder.id
     }
 

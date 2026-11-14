@@ -55,12 +55,19 @@ class TagsManagerViewModel @Inject constructor(
 
     private var client: CodegClient? = null
 
+    /**
+     * Bumped by every change made here. A read started before one would hand back a list
+     * without it (or with what it removed), so a read only lands if nothing changed meanwhile.
+     */
+    private var generation = 0
+
     init {
         load()
     }
 
     fun load() {
         _ui.update { it.copy(loading = true, loadError = null) }
+        val started = generation
         viewModelScope.launch {
             try {
                 val c = client ?: repository.selectedProfile.first()?.let { repository.client(it) }
@@ -72,7 +79,11 @@ class TagsManagerViewModel @Inject constructor(
                     val folders = async { runCatching { c.listOpenFolders() }.getOrDefault(emptyList()) }
                     Triple(tags.await(), branch.await(), folders.await())
                 }
-                val roots = FolderVisibility.filterTopLevel(folders).filterNot { it.isChat }
+                val roots = FolderVisibility.filterTopLevel(folders).filterNot { it.isChatFolder }
+                if (generation != started) {
+                    _ui.update { it.copy(loading = false) }
+                    return@launch
+                }
                 _ui.update {
                     it.copy(
                         loading = false,
@@ -152,6 +163,7 @@ class TagsManagerViewModel @Inject constructor(
     ) {
         val c = client ?: return
         if (_ui.value.saving) return
+        generation += 1
         _ui.update { it.copy(saving = true, error = null) }
         viewModelScope.launch {
             try {

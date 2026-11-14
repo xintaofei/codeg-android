@@ -29,7 +29,7 @@ data class TagPickerUiState(
     /** Every tag the server has; null while loading. */
     val tags: List<ConversationTag>? = null,
     val folders: List<FolderDetail> = emptyList(),
-    /** What is on the conversation, as this client last set or read it. */
+    /** What the user wants on the conversation (shown at once; the writes follow). */
     val tagIds: Set<Int> = emptySet(),
     val creating: Boolean = false,
     val error: String? = null,
@@ -40,9 +40,10 @@ data class TagPickerUiState(
 }
 
 /**
- * Puts tags on and takes them off one conversation, and creates a tag from the search box. Each
- * toggle is sent at once as a delta and shows at once; a refusal puts it back. The list screens
- * read the outcome on their next refetch.
+ * Puts tags on and takes them off one conversation, and creates a tag from the search box. A
+ * toggle shows at once; the writes go out one at a time ([TagAssignment]), each outcome settling
+ * only what wasn't toggled again meanwhile. Everything is bound to the server and conversation
+ * it was opened on: a write in flight finishes there even if the picker has moved on.
  */
 @HiltViewModel
 class TagPickerViewModel @Inject constructor(
@@ -53,33 +54,50 @@ class TagPickerViewModel @Inject constructor(
     private val _ui = MutableStateFlow(TagPickerUiState())
     val ui: StateFlow<TagPickerUiState> = _ui.asStateFlow()
 
-    private var client: CodegClient? = null
+    /** One opening's binding: which server, which conversation, and its tag writes. */
+    private class Session(
+        val profileId: String,
+        val client: CodegClient,
+        val conversationId: Int,
+        val assignment: TagAssignment,
+    ) {
+        var writing = false
+    }
+
+    private var session: Session? = null
 
     fun open(conversation: ConversationSummary) {
-        // Reopened on the same conversation, what this picker set is fresher than a summary the
-        // caller may not have refetched yet.
-        val known = _ui.value.takeIf { it.conversation?.id == conversation.id }
+        // Shown at once from what the caller has — its folder too, which a move may have
+        // changed — and the binding settles below.
+        val known = session?.takeIf { it.conversationId == conversation.id }
         _ui.value = TagPickerUiState(
-            conversation = known?.conversation ?: conversation,
-            tagIds = known?.tagIds ?: conversation.tagIds.toSet(),
-            tags = known?.tags,
-            folders = known?.folders.orEmpty(),
+            conversation = conversation,
+            tagIds = known?.assignment?.desired ?: conversation.tagIds.toSet(),
+            tags = _ui.value.tags.takeIf { known != null },
+            folders = _ui.value.folders.takeIf { known != null }.orEmpty(),
         )
         viewModelScope.launch {
             try {
-                val c = client ?: repository.selectedProfile.first()?.let { repository.client(it) } ?: return@launch
-                client = c
+                val profile = repository.selectedProfile.first() ?: return@launch
+                val client = repository.client(profile) ?: return@launch
+                // Reopened on the same conversation of the same server: what this picker set is
+                // fresher than a summary the caller may not have refetched yet. Anything else
+                // starts over from the caller's summary.
+                val current = session?.takeIf { it.profileId == profile.id && it.conversationId == conversation.id }
+                    ?: Session(profile.id, client, conversation.id, TagAssignment(conversation.tagIds.toSet())).also { session = it }
+                if (_ui.value.conversation?.id != conversation.id) return@launch
+                _ui.update { it.copy(tagIds = current.assignment.desired) }
                 val (tags, folders) = coroutineScope {
-                    val tags = async { c.listConversationTags() }
-                    val folders = async { runCatching { c.listFolders() }.getOrDefault(emptyList()) }
+                    val tags = async { current.client.listConversationTags() }
+                    val folders = async { runCatching { current.client.listFolders() }.getOrDefault(emptyList()) }
                     tags.await() to folders.await()
                 }
-                if (_ui.value.conversation?.id != conversation.id) return@launch
+                if (session !== current) return@launch
                 _ui.update { it.copy(tags = tags, folders = folders) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _ui.update { it.copy(tags = emptyList(), error = appContext.getString(R.string.tags_load_failed) + ": " + e.displayMessage()) }
+                _ui.update { it.copy(tags = it.tags ?: emptyList(), error = appContext.getString(R.string.tags_load_failed) + ": " + e.displayMessage()) }
             }
         }
     }
@@ -88,38 +106,22 @@ class TagPickerViewModel @Inject constructor(
 
     /** Put [tag] on, or take it off. */
     fun toggle(tag: ConversationTag) {
-        val c = client ?: return
-        val conversation = _ui.value.conversation ?: return
-        val on = tag.id !in _ui.value.tagIds
-        _ui.update { it.copy(tagIds = if (on) it.tagIds + tag.id else it.tagIds - tag.id) }
-        viewModelScope.launch {
-            try {
-                val summary = c.updateConversationTags(conversation.id, add = if (on) listOf(tag.id) else emptyList(), remove = if (on) emptyList() else listOf(tag.id))
-                // What shows stays: it already has this toggle, and any sent since.
-                if (_ui.value.conversation?.id == conversation.id) _ui.update { it.copy(conversation = summary) }
-                repository.notifyConversationsChanged()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (_ui.value.conversation?.id != conversation.id) return@launch
-                _ui.update {
-                    it.copy(
-                        tagIds = if (on) it.tagIds - tag.id else it.tagIds + tag.id,
-                        error = appContext.getString(R.string.tags_assign_failed) + ": " + e.displayMessage(),
-                    )
-                }
-            }
-        }
+        val s = session ?: return
+        if (_ui.value.conversation?.id != s.conversationId) return
+        s.assignment.toggle(tag.id)
+        publish(s)
+        pump(s)
     }
 
     /**
-     * Create a tag named [name] — global, or in this conversation's folder — and put it on. It
-     * starts on the first colour its neighbours don't use yet.
+     * Create a tag named [name] — global, or in this conversation's folder — and put it on that
+     * conversation, even if the picker has moved on by the time it exists. It starts on the
+     * first colour its neighbours don't use yet.
      */
     fun create(name: String, global: Boolean) {
-        val c = client ?: return
+        val s = session ?: return
         val state = _ui.value
-        val conversation = state.conversation ?: return
+        if (state.conversation?.id != s.conversationId) return
         val trimmed = name.trim().take(ConversationTags.MAX_NAME_LENGTH)
         if (trimmed.isEmpty() || state.creating) return
         val scope = if (global) null else state.scope ?: return
@@ -127,14 +129,47 @@ class TagPickerViewModel @Inject constructor(
         _ui.update { it.copy(creating = true) }
         viewModelScope.launch {
             try {
-                val tag = c.createConversationTag(scope, trimmed, ConversationTags.nextColor(neighbours))
-                _ui.update { it.copy(tags = it.tags.orEmpty() + tag, creating = false) }
-                if (_ui.value.conversation?.id == conversation.id) toggle(tag)
+                val tag = s.client.createConversationTag(scope, trimmed, ConversationTags.nextColor(neighbours))
+                s.assignment.turnOn(tag.id)
+                if (session === s) _ui.update { it.copy(tags = it.tags.orEmpty() + tag) }
+                publish(s)
+                pump(s)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _ui.update { it.copy(creating = false, error = appContext.getString(R.string.tags_create_failed) + ": " + e.displayMessage()) }
+                if (session === s) _ui.update { it.copy(error = appContext.getString(R.string.tags_create_failed) + ": " + e.displayMessage()) }
+            } finally {
+                if (session === s) _ui.update { it.copy(creating = false) }
             }
         }
+    }
+
+    /** Send what [s] still owes the server, one write at a time. */
+    private fun pump(s: Session) {
+        if (s.writing) return
+        val write = s.assignment.nextWrite() ?: return
+        s.writing = true
+        viewModelScope.launch {
+            try {
+                val summary = s.client.updateConversationTags(s.conversationId, write.add, write.remove)
+                s.assignment.succeeded(write, summary.tagIds.toSet())
+                repository.notifyConversationsChanged()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                s.assignment.failed(write)
+                if (session === s) _ui.update { it.copy(error = appContext.getString(R.string.tags_assign_failed) + ": " + e.displayMessage()) }
+            } finally {
+                s.writing = false
+                publish(s)
+            }
+            // Toggles made while this was out go next; after a refusal only those remain.
+            pump(s)
+        }
+    }
+
+    private fun publish(s: Session) {
+        if (session !== s || _ui.value.conversation?.id != s.conversationId) return
+        _ui.update { it.copy(tagIds = s.assignment.desired) }
     }
 }

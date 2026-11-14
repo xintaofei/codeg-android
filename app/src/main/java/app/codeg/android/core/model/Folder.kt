@@ -25,4 +25,9 @@ data class FolderDetail(
     val color: String = "",
     val parentId: Int? = null,
     val isChat: Boolean = false,
-)
+    /** `regular` or `chat` — what a current server sends instead of `is_chat`. */
+    val kind: String? = null,
+) {
+    /** A chat's hidden scratch folder, by either the old flag or the current `kind`. */
+    val isChatFolder: Boolean get() = isChat || kind == "chat"
+}
