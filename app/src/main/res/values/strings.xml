@@ -863,6 +863,36 @@
     <string name="delegation_done">done</string>
     <string name="delegation_failed">failed</string>
     <string name="delegation_open_session">Open session</string>
+    <string name="delegation_status_starting">starting</string>
+    <string name="delegation_status_checked">checked</string>
+    <string name="delegation_status_waiting">awaiting approval</string>
+    <string name="delegation_resumed">Resumed</string>
+    <string name="delegation_resume_reason">Resume reason</string>
+    <string name="delegation_task_label">Task</string>
+    <string name="delegation_dir_label">Directory</string>
+    <string name="delegation_result_label">Result</string>
+    <string name="delegation_wait_result">Waiting for task %1$s result</string>
+    <string name="delegation_wait_result_no_task">Waiting for task result</string>
+    <string name="delegation_cancel_task">Canceling task %1$s</string>
+    <string name="delegation_cancel_task_no_task">Canceling task</string>
+    <string name="delegation_err_disabled">disabled</string>
+    <string name="delegation_err_depth_limit">depth limit</string>
+    <string name="delegation_err_invalid_agent_type">bad agent</string>
+    <string name="delegation_err_spawn_failed">spawn failed</string>
+    <string name="delegation_err_send_failed">send failed</string>
+    <string name="delegation_err_timeout">timeout</string>
+    <string name="delegation_err_canceled">canceled</string>
+    <string name="delegation_err_child_refusal">subagent refused</string>
+    <string name="delegation_err_child_max_tokens">subagent token limit</string>
+    <string name="delegation_err_child_max_turn_requests">subagent request limit</string>
+    <string name="delegation_err_child_empty">subagent no output</string>
+    <string name="delegation_err_child_auth_required">subagent needs sign-in</string>
+    <string name="delegation_err_child_rejected">subagent rejected</string>
+    <string name="delegation_err_child_unknown">subagent unknown error</string>
+    <string name="delegation_err_unknown_task">unknown task</string>
+    <string name="delegation_err_assistant_not_found">assistant not found</string>
+    <string name="delegation_err_assistants_unsupported">needs restart</string>
+    <string name="delegation_err_assistant_support_unknown">no answer</string>
     <string name="goal_title">Goal:</string>
     <string name="goal_objective">Objective</string>
     <string name="goal_status_label">Status</string>
@@ -880,10 +910,6 @@
     <string name="goal_status_budget_limited">budget limited</string>
     <string name="goal_status_limited">limit reached</string>
     <string name="goal_status_complete">complete</string>
-    <plurals name="delegation_polls">
-        <item quantity="one">Checked on a delegation %d time</item>
-        <item quantity="other">Checked on a delegation %d times</item>
-    </plurals>
     <string name="activity_expand">Show the steps</string>
     <string name="activity_collapse">Collapse</string>
 

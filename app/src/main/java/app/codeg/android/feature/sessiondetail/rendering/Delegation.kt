@@ -17,6 +17,8 @@ data class DelegationView(
     val childConversationId: Int?,
     val durationMs: Long?,
     val errorCode: String?,
+    /** The broker's task id, mirrored on every stamp. */
+    val taskId: String? = null,
 )
 
 object Delegations {
@@ -78,6 +80,7 @@ object Delegations {
             childConversationId = child,
             durationMs = (inner["duration_ms"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toDoubleOrNull()?.toLong(),
             errorCode = str("error_code"),
+            taskId = str("task_id"),
         )
     }
 
@@ -96,6 +99,122 @@ object Delegations {
             childConversationId = binding.childConversationId ?: stamped?.childConversationId,
             durationMs = binding.durationMs ?: stamped?.durationMs,
             errorCode = binding.errorCode ?: stamped?.errorCode,
+            taskId = binding.taskId ?: stamped?.taskId,
         )
     }
+
+    /** A cancel of a delegated task. */
+    fun isCancel(name: String): Boolean = bareName(name) == "cancel_delegation"
+
+    /** A call the delegation card draws: a delegate or resume, or one the broker stamped. */
+    fun drawsCard(vm: ToolCallVM): Boolean = isDelegateCall(vm.rawName) || vm.meta?.containsKey(META_KEY) == true
+
+    /** The task a delegate (or resume) call is about, from what the call itself carries. */
+    fun callTaskId(vm: ToolCallVM, binding: DelegationBinding?): String? {
+        val args = if (isResumeCall(vm.rawName)) DelegationParse.args(vm.input) else null
+        return args?.taskId
+            ?: DelegationParse.taskId(vm.output?.takeIf { it.isNotBlank() } ?: vm.content)
+            ?: binding?.taskId
+            ?: fromMeta(vm.meta)?.taskId
+    }
+
+    /**
+     * Everything a delegation's card and rail marker say (web `useDelegationCardModel`), in
+     * priority order: the live [binding] → the broker's stamp on [ToolCallVM.meta] → the call's
+     * own arguments and result → the newest check on its task ([later]). Null when there is
+     * nothing to draw it by, or for a resume the broker refused (that card states the reason).
+     */
+    fun model(vm: ToolCallVM, binding: DelegationBinding?, later: DelegationParse.TaskRow?): DelegationModel? {
+        val resumed = isResumeCall(vm.rawName)
+        val output = vm.output?.takeIf { it.isNotBlank() } ?: vm.content
+        if (resumed && DelegationParse.refusedResume(output)) return null
+        val args = DelegationParse.args(vm.input)
+        val stamped = fromMeta(vm.meta)
+        val result = DelegationParse.callResult(output, forceError = vm.isError)
+        val hasModel = binding != null || stamped != null ||
+            (!resumed && (args.agentType != null || args.task != null)) ||
+            result?.agentType != null || result?.childConversationId != null
+        if (!hasModel) return null
+        val report = later?.report
+        val ending = DelegationParse.ending(report)
+        val status = when {
+            binding != null -> binding.status.asModel()
+            stamped != null -> stamped.status.asModel()
+            vm.state == ToolCallState.ERROR || vm.isError -> DelegationModel.Status.ERR
+            ending != null -> if (ending.badge == DelegationParse.Badge.OK) DelegationModel.Status.OK else DelegationModel.Status.ERR
+            result?.ack == true -> DelegationModel.Status.RUNNING
+            result != null -> if (result.isError) DelegationModel.Status.ERR else DelegationModel.Status.OK
+            vm.state == ToolCallState.DONE -> DelegationModel.Status.OK
+            else -> DelegationModel.Status.STARTING
+        }.let { s ->
+            // A check that found it parked on the user: it waits, it doesn't work.
+            if (s == DelegationModel.Status.RUNNING && report?.status == DelegationParse.TaskStatus.RUNNING && report.blocked) {
+                DelegationModel.Status.WAITING
+            } else {
+                s
+            }
+        }
+        val settled = status == DelegationModel.Status.OK || status == DelegationModel.Status.ERR
+        // What it came back with: the newest check's report once the task ended, else a result
+        // the call returned itself (a fast-complete or a synchronous broker).
+        val outcome = when {
+            !settled -> null
+            ending != null -> report?.text
+            // Only a broker report: bare text is a host's rendering of the ack, not a result.
+            result != null && !result.ack && result.structured -> result.text
+            else -> null
+        }?.takeIf { it.isNotBlank() }
+        return DelegationModel(
+            status = status,
+            agentType = binding?.agentType?.takeIf { it.isNotEmpty() }
+                ?: args.agentType?.takeIf { !resumed }
+                ?: result?.agentType
+                ?: stamped?.agentType
+                ?: report?.agentType,
+            assistantName = binding?.assistantName ?: result?.assistantName ?: stamped?.assistantName,
+            task = args.task ?: binding?.task ?: stamped?.task,
+            taskId = callTaskId(vm, binding) ?: later?.taskId,
+            workingDir = args.workingDir,
+            errorCode = binding?.errorCode ?: stamped?.errorCode ?: result?.errorCode ?: ending?.errorCode,
+            childConversationId = binding?.childConversationId ?: stamped?.childConversationId
+                ?: result?.childConversationId ?: report?.childConversationId,
+            durationMs = binding?.durationMs ?: stamped?.durationMs ?: report?.durationMs?.takeIf { settled },
+            outcome = outcome,
+            progress = report?.progress,
+            resumed = resumed,
+            reason = if (resumed) args.reason else null,
+        )
+    }
+
+    private fun DelegationBinding.Status.asModel(): DelegationModel.Status = when (this) {
+        DelegationBinding.Status.RUNNING -> DelegationModel.Status.RUNNING
+        DelegationBinding.Status.OK -> DelegationModel.Status.OK
+        DelegationBinding.Status.ERR -> DelegationModel.Status.ERR
+    }
+}
+
+/** A delegation as its card and its rail marker draw it (web `DelegationCardModel`). */
+data class DelegationModel(
+    val status: Status,
+    val agentType: String?,
+    /** The assistant the task ran as, when it ran as one. */
+    val assistantName: String?,
+    val task: String?,
+    val taskId: String?,
+    val workingDir: String?,
+    val errorCode: String?,
+    val childConversationId: Int?,
+    val durationMs: Long?,
+    /** What the task came back with, once it ended. */
+    val outcome: String?,
+    val progress: DelegationParse.Progress?,
+    /** A `resume_delegation`: the sub-agent came back. */
+    val resumed: Boolean,
+    /** Why it was resumed, as the agent passed it on. */
+    val reason: String?,
+) {
+    /** [STARTING]: no word from the broker yet. [WAITING]: parked on the user's decision. */
+    enum class Status { STARTING, RUNNING, WAITING, OK, ERR }
+
+    val working: Boolean get() = status == Status.STARTING || status == Status.RUNNING
 }

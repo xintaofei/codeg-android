@@ -845,6 +845,36 @@
     <string name="delegation_done">已完成</string>
     <string name="delegation_failed">失败</string>
     <string name="delegation_open_session">打开会话</string>
+    <string name="delegation_status_starting">启动中</string>
+    <string name="delegation_status_checked">已查询</string>
+    <string name="delegation_status_waiting">待批准</string>
+    <string name="delegation_resumed">已恢复</string>
+    <string name="delegation_resume_reason">恢复原因</string>
+    <string name="delegation_task_label">任务</string>
+    <string name="delegation_dir_label">工作目录</string>
+    <string name="delegation_result_label">结果</string>
+    <string name="delegation_wait_result">等待 %1$s 任务执行结果</string>
+    <string name="delegation_wait_result_no_task">等待任务执行结果</string>
+    <string name="delegation_cancel_task">取消 %1$s 任务</string>
+    <string name="delegation_cancel_task_no_task">取消任务</string>
+    <string name="delegation_err_disabled">已禁用</string>
+    <string name="delegation_err_depth_limit">深度超限</string>
+    <string name="delegation_err_invalid_agent_type">代理类型无效</string>
+    <string name="delegation_err_spawn_failed">启动失败</string>
+    <string name="delegation_err_send_failed">发送失败</string>
+    <string name="delegation_err_timeout">超时</string>
+    <string name="delegation_err_canceled">已取消</string>
+    <string name="delegation_err_child_refusal">子代理拒绝</string>
+    <string name="delegation_err_child_max_tokens">子代理超出 token 上限</string>
+    <string name="delegation_err_child_max_turn_requests">子代理超出请求上限</string>
+    <string name="delegation_err_child_empty">子代理无响应</string>
+    <string name="delegation_err_child_auth_required">子智能体需登录</string>
+    <string name="delegation_err_child_rejected">子代理拒绝该请求</string>
+    <string name="delegation_err_child_unknown">子代理未知错误</string>
+    <string name="delegation_err_unknown_task">未知任务</string>
+    <string name="delegation_err_assistant_not_found">助手不存在</string>
+    <string name="delegation_err_assistants_unsupported">需要重启</string>
+    <string name="delegation_err_assistant_support_unknown">未响应</string>
     <string name="goal_title">目标：</string>
     <string name="goal_objective">目标</string>
     <string name="goal_status_label">状态</string>
@@ -862,9 +892,6 @@
     <string name="goal_status_budget_limited">预算受限</string>
     <string name="goal_status_limited">已达上限</string>
     <string name="goal_status_complete">已完成</string>
-    <plurals name="delegation_polls">
-        <item quantity="other">查看了 %d 次委派进度</item>
-    </plurals>
     <string name="activity_expand">展开执行过程</string>
     <string name="activity_collapse">收起</string>
 

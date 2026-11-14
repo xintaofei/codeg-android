@@ -63,6 +63,10 @@ import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
 import app.codeg.android.feature.sessiondetail.rendering.GoalControl
 import app.codeg.android.feature.sessiondetail.rendering.LocalGoalControl
 import app.codeg.android.feature.sessiondetail.rendering.LocalOpenConversation
+import app.codeg.android.feature.sessiondetail.rendering.DelegationTaskFold
+import app.codeg.android.feature.sessiondetail.rendering.LocalDelegationTasks
+import app.codeg.android.feature.sessiondetail.rendering.RenderPart
+import app.codeg.android.core.model.DelegationBinding
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
@@ -196,8 +200,17 @@ fun SessionDetailScreen(
             BackgroundOverlays.interleave(BackgroundOverlays.withoutRetold(ui.localTurns, retold), ui.backgroundTurns),
         )
     }
-    val entries = remember(persistedEntries, ui.live, ui.agent) {
-        TranscriptTimeline.dedupeCompactions(TranscriptTimeline.joinLive(persistedEntries, TranscriptTimeline.liveEntries(ui.live, ui.agent)))
+    val liveEntries = remember(ui.live, ui.agent) { TranscriptTimeline.liveEntries(ui.live, ui.agent) }
+    val entries = remember(persistedEntries, liveEntries) {
+        TranscriptTimeline.dedupeCompactions(TranscriptTimeline.joinLive(persistedEntries, liveEntries))
+    }
+    // What the checks on each delegated task said — newest last — for its card and marker. The
+    // transcript is read once; only the live reply is read again as it streams.
+    val persistedTasks = remember(persistedEntries, ui.delegations) {
+        DelegationTaskFold().also { it.addCalls(persistedEntries, ui.delegations) }
+    }
+    val delegationTasks = remember(persistedTasks, liveEntries, ui.delegations) {
+        persistedTasks.copy().also { it.addCalls(liveEntries, ui.delegations) }.index()
     }
     // Which replies show their steps (ReplyFold.kt): observed here, stored after the frame
     // that draws it, so a send and the fold it causes land together.
@@ -633,6 +646,7 @@ fun SessionDetailScreen(
                     LocalReplyFoldActions provides foldActions,
                     LocalDisclosures provides disclosures,
                     LocalActivityLive provides activityLive,
+                    LocalDelegationTasks provides delegationTasks,
                     LocalOpenConversation provides onOpenConversation,
                     LocalGoalControl provides goalControl,
                     LocalForkControl provides forkControl,
@@ -948,5 +962,13 @@ private fun AttachmentStrip(attachments: List<Attachment>, onRemove: (String) ->
                 ) { Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.common_remove), tint = colors.textPrimary, modifier = Modifier.size(12.dp)) }
             }
         }
+    }
+}
+
+/** A thread's calls, in order, into [this] fold. */
+private fun DelegationTaskFold.addCalls(entries: List<ThreadEntry>, bindings: Map<String, DelegationBinding>) {
+    for (entry in entries) {
+        val rows = (entry as? ThreadEntry.Reply)?.rows ?: continue
+        for (part in rows.calls) (part as? RenderPart.Tool)?.let { add(it.vm, bindings) }
     }
 }

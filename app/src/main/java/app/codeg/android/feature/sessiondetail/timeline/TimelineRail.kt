@@ -41,7 +41,15 @@ import app.codeg.android.core.designsystem.component.AgentAvatar
 import app.codeg.android.core.designsystem.component.SectionBadgeIcon
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.AgentType
+import app.codeg.android.feature.sessiondetail.rendering.DelegationModel
+import app.codeg.android.feature.sessiondetail.rendering.DelegationRailGlyph
 import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
+import app.codeg.android.feature.sessiondetail.rendering.ToolCallVM
+import app.codeg.android.feature.sessiondetail.rendering.checksIcon
+import app.codeg.android.feature.sessiondetail.rendering.checksStatus
+import app.codeg.android.feature.sessiondetail.rendering.delegationTint
+import app.codeg.android.feature.sessiondetail.rendering.rememberCheckRows
+import app.codeg.android.feature.sessiondetail.rendering.rememberDelegationModel
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
 import app.codeg.android.feature.sessiondetail.rendering.ToolWarning
 import app.codeg.android.feature.sessiondetail.rendering.ToolKindBucket
@@ -78,6 +86,12 @@ sealed interface MarkerKind {
     /** [callId]: so the marker can turn amber while a permission request waits on the call. */
     data class Tool(val bucket: ToolKindBucket, val state: ToolCallState, val callId: String? = null) : MarkerKind
     data class ToolGroup(val error: Boolean, val streaming: Boolean, val unsettledIds: List<String> = emptyList()) : MarkerKind
+
+    /** A delegated task: the logo of the agent that took it, ringed in how it stands. */
+    data class Delegation(val vm: ToolCallVM) : MarkerKind
+
+    /** Checks on (or a cancel of) delegated tasks: ringed in how the tasks stand. */
+    data class DelegationChecks(val items: List<ToolCallVM>) : MarkerKind
     data object Image : MarkerKind
     data object System : MarkerKind
     data object Plan : MarkerKind
@@ -171,18 +185,25 @@ fun NodeMarker(kind: MarkerKind, modifier: Modifier = Modifier) {
             is MarkerKind.User -> FilledDisc(Icons.Rounded.Person, colors.accent)
             is MarkerKind.Assistant -> AgentAvatar(kind.agent, size = size)
             is MarkerKind.Reasoning -> SectionBadgeIcon(Icons.Rounded.Psychology, colors.textTertiary, size = size)
-            is MarkerKind.Tool -> {
-                val running = kind.state == ToolCallState.RUNNING || kind.state == ToolCallState.INPUT_STREAMING
-                // Waiting on the user's approval, the call isn't at work: no ping.
-                val awaiting = running && kind.callId != null && kind.callId == LocalActivityLive.current.awaitingToolCallId
-                val tint = when {
-                    awaiting -> ToolWarning
-                    running -> colors.accent
-                    kind.state == ToolCallState.DONE -> SuccessGreen
-                    else -> colors.danger
+            is MarkerKind.Tool -> ToolMarker(kind.bucket, kind.state, kind.callId)
+            is MarkerKind.Delegation -> {
+                val vm = kind.vm
+                val model = rememberDelegationModel(vm)
+                if (model == null) {
+                    ToolMarker(vm.bucket, vm.state, vm.id)
+                } else {
+                    val settled = vm.state == ToolCallState.DONE || vm.state == ToolCallState.ERROR
+                    val awaiting = !settled && vm.id == LocalActivityLive.current.awaitingToolCallId
+                    val tint = delegationTint(model.status, awaiting)
+                    DelegationRailGlyph(model.agentType?.let(AgentType::fromWire), tint, size, model.resumed)
+                    if (model.working && !awaiting) PulseRing(tint, size)
                 }
-                SectionBadgeIcon(bucketIcon(kind.bucket), tint, size = size)
-                if (running && !awaiting) PulseRing(tint, size)
+            }
+            is MarkerKind.DelegationChecks -> {
+                val status = checksStatus(rememberCheckRows(kind.items), kind.items)
+                val tint = delegationTint(status)
+                SectionBadgeIcon(checksIcon(kind.items), tint, size = size)
+                if (status == DelegationModel.Status.RUNNING) PulseRing(tint, size)
             }
             is MarkerKind.ToolGroup -> {
                 val awaitedId = LocalActivityLive.current.awaitingToolCallId
@@ -220,6 +241,24 @@ fun NodeMarker(kind: MarkerKind, modifier: Modifier = Modifier) {
                 )
         }
     }
+}
+
+/** A tool call's marker: its kind's glyph, tinted by how it stands. */
+@Composable
+private fun ToolMarker(bucket: ToolKindBucket, state: ToolCallState, callId: String?) {
+    val colors = CodegTheme.colors
+    val size = TimelineMetrics.markerSize
+    val running = state == ToolCallState.RUNNING || state == ToolCallState.INPUT_STREAMING
+    // Waiting on the user's approval, the call isn't at work: no ping.
+    val awaiting = running && callId != null && callId == LocalActivityLive.current.awaitingToolCallId
+    val tint = when {
+        awaiting -> ToolWarning
+        running -> colors.accent
+        state == ToolCallState.DONE -> SuccessGreen
+        else -> colors.danger
+    }
+    SectionBadgeIcon(bucketIcon(bucket), tint, size = size)
+    if (running && !awaiting) PulseRing(tint, size)
 }
 
 /** A solid-tint disc with a contrast glyph — used for the user + error markers. */

@@ -18,6 +18,7 @@ import app.codeg.android.feature.sessiondetail.LiveTurnState
 import app.codeg.android.feature.sessiondetail.STEER_TURN_PREFIX
 import app.codeg.android.feature.sessiondetail.rendering.ActivitySummary
 import app.codeg.android.feature.sessiondetail.rendering.ContextCompaction
+import app.codeg.android.feature.sessiondetail.rendering.Delegations
 import app.codeg.android.feature.sessiondetail.rendering.MessageRender
 import app.codeg.android.feature.sessiondetail.rendering.ProposedPlan
 import app.codeg.android.feature.sessiondetail.rendering.RenderPart
@@ -120,12 +121,22 @@ data class TimelineNode(
             is NodeContent.ReplyHeader -> MarkerKind.Assistant(agent)
             is NodeContent.ReplyFoot -> MarkerKind.Fold
             is NodeContent.Reasoning -> MarkerKind.Reasoning
-            is NodeContent.Tool -> MarkerKind.Tool(c.vm.bucket, c.vm.state, c.vm.id)
-            is NodeContent.ToolGroup -> MarkerKind.ToolGroup(
-                c.items.any { it.state == ToolCallState.ERROR },
-                c.streaming,
-                c.items.filter { it.state == ToolCallState.RUNNING || it.state == ToolCallState.INPUT_STREAMING }.map { it.id },
-            )
+            is NodeContent.Tool -> when {
+                // A delegated task wears the logo of the agent that took it.
+                Delegations.drawsCard(c.vm) -> MarkerKind.Delegation(c.vm)
+                Delegations.isStatusPoll(c.vm.rawName) || Delegations.isCancel(c.vm.rawName) ->
+                    MarkerKind.DelegationChecks(listOf(c.vm))
+                else -> MarkerKind.Tool(c.vm.bucket, c.vm.state, c.vm.id)
+            }
+            is NodeContent.ToolGroup -> if (c.items.all { Delegations.isStatusPoll(it.rawName) }) {
+                MarkerKind.DelegationChecks(c.items)
+            } else {
+                MarkerKind.ToolGroup(
+                    c.items.any { it.state == ToolCallState.ERROR },
+                    c.streaming,
+                    c.items.filter { it.state == ToolCallState.RUNNING || it.state == ToolCallState.INPUT_STREAMING }.map { it.id },
+                )
+            }
             is NodeContent.Image -> MarkerKind.Image
             is NodeContent.Compaction -> MarkerKind.Compaction
             is NodeContent.Footer -> MarkerKind.Footer
