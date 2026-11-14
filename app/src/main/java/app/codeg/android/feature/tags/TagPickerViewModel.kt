@@ -1,6 +1,7 @@
 package app.codeg.android.feature.tags
 
 import android.content.Context
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.codeg.android.R
@@ -13,6 +14,7 @@ import app.codeg.android.core.network.displayMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +28,7 @@ import javax.inject.Inject
 /** One conversation's tags being edited (web `ConversationTagPickerPanel`). */
 data class TagPickerUiState(
     val conversation: ConversationSummary? = null,
-    /** Every tag the server has; null while loading. */
+    /** Every tag the server has; null while loading — and nothing can be toggled until then. */
     val tags: List<ConversationTag>? = null,
     val folders: List<FolderDetail> = emptyList(),
     /** What the user wants on the conversation (shown at once; the writes follow). */
@@ -39,65 +41,81 @@ data class TagPickerUiState(
     val scopeName: String? get() = scope?.let { id -> folders.firstOrNull { it.id == id }?.name }
 }
 
+/** The server calls the picker makes. */
+interface TagsApi {
+    suspend fun listTags(): List<ConversationTag>
+    suspend fun listFolders(): List<FolderDetail>
+    suspend fun createTag(folderId: Int?, name: String, color: String): ConversationTag
+    suspend fun setTags(conversationId: Int, add: List<Int>, remove: List<Int>): ConversationSummary
+}
+
 /**
  * Puts tags on and takes them off one conversation, and creates a tag from the search box. A
  * toggle shows at once; the writes go out one at a time ([TagAssignment]), each outcome settling
- * only what wasn't toggled again meanwhile. Everything is bound to the server and conversation
- * it was opened on: a write in flight finishes there even if the picker has moved on.
+ * only what wasn't toggled again meanwhile.
+ *
+ * Every write belongs to one server endpoint and one conversation, and finishes there whatever
+ * the picker shows by then. A conversation still owing writes keeps its one writer: reopening
+ * it takes that writer over rather than starting a second.
  */
-@HiltViewModel
-class TagPickerViewModel @Inject constructor(
-    private val repository: ServerRepository,
-    @ApplicationContext private val appContext: Context,
-) : ViewModel() {
-
+class TagPickerController(
+    private val scope: CoroutineScope,
+    /** The selected server: a key naming its endpoint, and its calls; null without one. */
+    private val connect: suspend () -> Pair<String, TagsApi>?,
+    private val onChanged: () -> Unit,
+    /** A failure's line: what failed ([StringRes]), then why. */
+    private val failure: (Int, Throwable) -> String,
+) {
     private val _ui = MutableStateFlow(TagPickerUiState())
     val ui: StateFlow<TagPickerUiState> = _ui.asStateFlow()
 
-    /** One opening's binding: which server, which conversation, and its tag writes. */
-    private class Session(
-        val profileId: String,
-        val client: CodegClient,
-        val conversationId: Int,
-        val assignment: TagAssignment,
-    ) {
+    /** The tag writes of one conversation on one server, and its writer. */
+    private class Session(val key: String, val api: TagsApi, val conversationId: Int, val assignment: TagAssignment) {
         var writing = false
+        val idle: Boolean get() = !writing && assignment.nextWrite() == null
     }
 
+    /** Sessions still owing the server something, by endpoint and conversation. */
+    private val sessions = HashMap<String, Session>()
+
+    /** The session the picker shows and edits; null until this opening has bound one. */
     private var session: Session? = null
 
+    /** Bumped by every open: an older one resuming late must not bind over a newer one. */
+    private var openSeq = 0
+
     fun open(conversation: ConversationSummary) {
-        // Shown at once from what the caller has — its folder too, which a move may have
-        // changed — and the binding settles below.
-        val known = session?.takeIf { it.conversationId == conversation.id }
-        _ui.value = TagPickerUiState(
-            conversation = conversation,
-            tagIds = known?.assignment?.desired ?: conversation.tagIds.toSet(),
-            tags = _ui.value.tags.takeIf { known != null },
-            folders = _ui.value.folders.takeIf { known != null }.orEmpty(),
-        )
-        viewModelScope.launch {
+        val seq = ++openSeq
+        // Nothing is actionable until this opening has bound its session and read the tags,
+        // so nothing can reach a server or conversation it isn't.
+        session = null
+        _ui.value = TagPickerUiState(conversation = conversation, tagIds = conversation.tagIds.toSet())
+        scope.launch {
             try {
-                val profile = repository.selectedProfile.first() ?: return@launch
-                val client = repository.client(profile) ?: return@launch
-                // Reopened on the same conversation of the same server: what this picker set is
-                // fresher than a summary the caller may not have refetched yet. Anything else
-                // starts over from the caller's summary.
-                val current = session?.takeIf { it.profileId == profile.id && it.conversationId == conversation.id }
-                    ?: Session(profile.id, client, conversation.id, TagAssignment(conversation.tagIds.toSet())).also { session = it }
-                if (_ui.value.conversation?.id != conversation.id) return@launch
-                _ui.update { it.copy(tagIds = current.assignment.desired) }
+                val (endpoint, api) = connect() ?: return@launch
+                if (seq != openSeq) return@launch
+                val key = "$endpoint|${conversation.id}"
+                // One still writing for this conversation holds what the user asked for since;
+                // otherwise the caller's summary is the latest word.
+                val bound = sessions[key]?.takeIf { !it.idle }
+                    ?: Session(key, api, conversation.id, TagAssignment(conversation.tagIds.toSet())).also { sessions[key] = it }
+                session = bound
+                prune()
+                _ui.update { it.copy(tagIds = bound.assignment.desired) }
                 val (tags, folders) = coroutineScope {
-                    val tags = async { current.client.listConversationTags() }
-                    val folders = async { runCatching { current.client.listFolders() }.getOrDefault(emptyList()) }
+                    val tags = async { bound.api.listTags() }
+                    val folders = async { runCatching { bound.api.listFolders() }.getOrDefault(emptyList()) }
                     tags.await() to folders.await()
                 }
-                if (session !== current) return@launch
-                _ui.update { it.copy(tags = tags, folders = folders) }
+                if (seq != openSeq || session !== bound) return@launch
+                _ui.update { it.copy(tags = tags, folders = folders, tagIds = bound.assignment.desired) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _ui.update { it.copy(tags = it.tags ?: emptyList(), error = appContext.getString(R.string.tags_load_failed) + ": " + e.displayMessage()) }
+                if (seq != openSeq) return@launch
+                // Without the tag list there is nothing to toggle: the error is all it shows.
+                session = null
+                _ui.update { it.copy(tags = emptyList(), error = failure(R.string.tags_load_failed, e)) }
             }
         }
     }
@@ -107,7 +125,7 @@ class TagPickerViewModel @Inject constructor(
     /** Put [tag] on, or take it off. */
     fun toggle(tag: ConversationTag) {
         val s = session ?: return
-        if (_ui.value.conversation?.id != s.conversationId) return
+        if (_ui.value.conversation?.id != s.conversationId || _ui.value.tags == null) return
         s.assignment.toggle(tag.id)
         publish(s)
         pump(s)
@@ -121,15 +139,15 @@ class TagPickerViewModel @Inject constructor(
     fun create(name: String, global: Boolean) {
         val s = session ?: return
         val state = _ui.value
-        if (state.conversation?.id != s.conversationId) return
+        if (state.conversation?.id != s.conversationId || state.tags == null) return
         val trimmed = name.trim().take(ConversationTags.MAX_NAME_LENGTH)
         if (trimmed.isEmpty() || state.creating) return
-        val scope = if (global) null else state.scope ?: return
-        val neighbours = state.tags.orEmpty().filter { it.folderId == null || it.folderId == scope }
+        val folderScope = if (global) null else state.scope ?: return
+        val neighbours = state.tags.filter { it.folderId == null || it.folderId == folderScope }
         _ui.update { it.copy(creating = true) }
-        viewModelScope.launch {
+        scope.launch {
             try {
-                val tag = s.client.createConversationTag(scope, trimmed, ConversationTags.nextColor(neighbours))
+                val tag = s.api.createTag(folderScope, trimmed, ConversationTags.nextColor(neighbours))
                 s.assignment.turnOn(tag.id)
                 if (session === s) _ui.update { it.copy(tags = it.tags.orEmpty() + tag) }
                 publish(s)
@@ -137,7 +155,7 @@ class TagPickerViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (session === s) _ui.update { it.copy(error = appContext.getString(R.string.tags_create_failed) + ": " + e.displayMessage()) }
+                if (session === s) _ui.update { it.copy(error = failure(R.string.tags_create_failed, e)) }
             } finally {
                 if (session === s) _ui.update { it.copy(creating = false) }
             }
@@ -149,27 +167,66 @@ class TagPickerViewModel @Inject constructor(
         if (s.writing) return
         val write = s.assignment.nextWrite() ?: return
         s.writing = true
-        viewModelScope.launch {
+        scope.launch {
             try {
-                val summary = s.client.updateConversationTags(s.conversationId, write.add, write.remove)
+                val summary = s.api.setTags(s.conversationId, write.add, write.remove)
                 s.assignment.succeeded(write, summary.tagIds.toSet())
-                repository.notifyConversationsChanged()
+                onChanged()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 s.assignment.failed(write)
-                if (session === s) _ui.update { it.copy(error = appContext.getString(R.string.tags_assign_failed) + ": " + e.displayMessage()) }
+                if (session === s) _ui.update { it.copy(error = failure(R.string.tags_assign_failed, e)) }
             } finally {
                 s.writing = false
                 publish(s)
             }
             // Toggles made while this was out go next; after a refusal only those remain.
             pump(s)
+            prune()
         }
+    }
+
+    /** Forget the sessions with nothing left to send, but the one on screen. */
+    private fun prune() {
+        sessions.values.removeAll { it !== session && it.idle }
     }
 
     private fun publish(s: Session) {
         if (session !== s || _ui.value.conversation?.id != s.conversationId) return
         _ui.update { it.copy(tagIds = s.assignment.desired) }
     }
+}
+
+/** The tag picker sheet's [TagPickerController], on the selected server. */
+@HiltViewModel
+class TagPickerViewModel @Inject constructor(
+    private val repository: ServerRepository,
+    @ApplicationContext private val appContext: Context,
+) : ViewModel() {
+
+    private val controller = TagPickerController(
+        scope = viewModelScope,
+        connect = {
+            repository.selectedProfile.first()?.let { profile ->
+                repository.client(profile)?.let { "${profile.id}|${profile.baseUrl}" to ClientTagsApi(it) }
+            }
+        },
+        onChanged = repository::notifyConversationsChanged,
+        failure = { res, e -> appContext.getString(res) + ": " + e.displayMessage() },
+    )
+
+    val ui: StateFlow<TagPickerUiState> = controller.ui
+
+    fun open(conversation: ConversationSummary) = controller.open(conversation)
+    fun dismissError() = controller.dismissError()
+    fun toggle(tag: ConversationTag) = controller.toggle(tag)
+    fun create(name: String, global: Boolean) = controller.create(name, global)
+}
+
+private class ClientTagsApi(private val client: CodegClient) : TagsApi {
+    override suspend fun listTags() = client.listConversationTags()
+    override suspend fun listFolders() = client.listFolders()
+    override suspend fun createTag(folderId: Int?, name: String, color: String) = client.createConversationTag(folderId, name, color)
+    override suspend fun setTags(conversationId: Int, add: List<Int>, remove: List<Int>) = client.updateConversationTags(conversationId, add, remove)
 }

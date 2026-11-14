@@ -34,7 +34,7 @@ enum class TagChipSize(val textSp: Int, val maxWidth: Dp, val hPad: Dp, val vPad
 
 /** One tag as a chip, in its colour, readable in either theme ([TagSwatch]). */
 @Composable
-fun TagChip(name: String, color: String, size: TagChipSize = TagChipSize.REGULAR, modifier: Modifier = Modifier, branch: Boolean = false) {
+fun TagChip(name: String, color: String, modifier: Modifier = Modifier, size: TagChipSize = TagChipSize.REGULAR, branch: Boolean = false) {
     val colors = CodegTheme.colors
     val swatch = remember(color, colors.isDark) { TagSwatch.of(color, colors.isDark) }
     val bg = swatch?.let { Color(it.background) } ?: colors.surfaceStroke
@@ -90,8 +90,8 @@ fun RowTagChips(tags: List<ConversationTag>, branch: String?, branchColor: Strin
     val shown = tags.take(room)
     val hidden = tags.size - shown.size
     Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (branch != null) TagChip(branch, branchColor, TagChipSize.ROW, branch = true)
-        shown.forEach { TagChip(it.name, it.color, TagChipSize.ROW) }
+        if (branch != null) TagChip(branch, branchColor, size = TagChipSize.ROW, branch = true)
+        shown.forEach { TagChip(it.name, it.color, size = TagChipSize.ROW) }
         if (hidden > 0) MoreTagsChip(hidden)
     }
 }
