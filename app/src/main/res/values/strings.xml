@@ -729,6 +729,31 @@
     <string name="remote_control_no_url">Claude Code returned no link for this session</string>
     <string name="remote_control_turn_off">Turn off</string>
     <string name="remote_control_turn_off_busy">Turn off once Claude has finished</string>
+    <string name="move_conversation_menu">Move to…</string>
+    <string name="move_conversation_title">Move conversation</string>
+    <string name="move_conversation_intro">“%1$s” will be moved to this folder:</string>
+    <string name="move_conversation_untitled">Untitled conversation</string>
+    <string name="move_conversation_explain">From the next message on, the agent works in this folder; the history stays as it is. If the agent can\'t resume the session here, you\'ll be offered to reload it or start a new session.</string>
+    <string name="move_conversation_chat_files">Files created during the chat stay in its scratch directory %1$s; they are not moved into the folder.</string>
+    <string name="move_conversation_no_targets">No other open folder</string>
+    <string name="move_conversation_move">Move</string>
+    <string name="move_conversation_failed">Couldn\'t move: %1$s</string>
+    <plurals name="move_conversation_moved">
+        <item quantity="one">Moved %1$d conversation to %2$s</item>
+        <item quantity="other">Moved %1$d conversations to %2$s</item>
+    </plurals>
+    <plurals name="move_conversation_skipped">
+        <item quantity="one">%d conversation was not moved</item>
+        <item quantity="other">%d conversations were not moved</item>
+    </plurals>
+    <string name="move_skip_not_found">It no longer exists</string>
+    <string name="move_skip_not_movable">Sub-conversations move with their parent</string>
+    <string name="move_skip_already_there">It is already in this folder</string>
+    <string name="move_skip_task_owned">It belongs to a to-do task</string>
+    <string name="move_skip_busy">An agent is working on it — try again when it\'s done</string>
+    <string name="move_skip_conflict">It changed while being moved — try again</string>
+    <string name="move_skip_target_unavailable">The folder was closed or removed</string>
+    <string name="move_skip_unknown">For a reason this app doesn\'t know</string>
     <string name="config_stale_reconnect">Reconnect to apply</string>
     <string name="config_stale_applies_next">The new configuration applies from your next message.</string>
     <plurals name="live_runs_count">

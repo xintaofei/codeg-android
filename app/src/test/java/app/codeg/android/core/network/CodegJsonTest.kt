@@ -132,4 +132,37 @@ class CodegJsonTest {
     fun `bare JSON integer decodes (create_conversation)`() {
         assertEquals(42, CodegJson.response.decodeFromString(Int.serializer(), "42"))
     }
+
+    @Test
+    fun `a summary carries its kind, parent and tags, and says whether it may move`() {
+        val root = CodegJson.response.decodeFromString<ConversationSummary>(
+            """{"id":1,"folder_id":1,"agent_type":"codex","status":"completed","kind":"chat","tag_ids":[2,5],
+               "message_count":0,"created_at":"2024-01-02T03:04:05Z","updated_at":"2024-01-02T03:04:05Z"}""",
+        )
+        assertEquals(listOf(2, 5), root.tagIds)
+        assertTrue(root.isMovable)
+        val child = CodegJson.response.decodeFromString<ConversationSummary>(
+            """{"id":2,"folder_id":1,"agent_type":"codex","status":"completed","kind":"delegate","parent_id":1,
+               "message_count":0,"created_at":"2024-01-02T03:04:05Z","updated_at":"2024-01-02T03:04:05Z"}""",
+        )
+        assertFalse(child.isMovable)
+        assertEquals(emptyList<Int>(), child.tagIds)
+        val loop = root.copy(kind = "loop")
+        assertFalse(loop.isMovable)
+        // An older server says nothing about kind: a root row moves.
+        assertTrue(root.copy(kind = null).isMovable)
+    }
+
+    @Test
+    fun `a move answers in camelCase`() {
+        val camel = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val result = camel.decodeFromString<app.codeg.android.core.model.MoveConversationsResult>(
+            """{"moved":[1],"skipped":[{"conversationId":2,"reason":"busy"}]}""",
+        )
+        assertEquals(listOf(1), result.moved)
+        assertEquals(2, result.skipped.single().conversationId)
+        assertEquals("busy", result.skipped.single().reason)
+        assertTrue(CodegJson.request.encodeToString(app.codeg.android.core.model.MoveConversationsBody(listOf(3), 7))
+            .let { it.contains("\"conversationIds\":[3]") && it.contains("\"targetFolderId\":7") })
+    }
 }

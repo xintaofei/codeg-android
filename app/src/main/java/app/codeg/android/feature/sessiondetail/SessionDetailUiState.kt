@@ -95,6 +95,8 @@ data class SessionDetailUiState(
     val remoteControl: app.codeg.android.core.model.RemoteControlInfo? = null,
     /** Whether this connection's agent can fork its session (`fork_supported`). */
     val forkSupported: Boolean = false,
+    /** The open folders this conversation may move to; null while they load. */
+    val moveTargets: List<FolderDetail>? = null,
     /** This connection's delegations by the call that started each, finished ones kept. */
     val delegations: Map<String, app.codeg.android.core.model.DelegationBinding> = emptyMap(),
     /** Out-of-turn turns read off the agent's transcript, shown until a detail load has them. */

@@ -5,6 +5,8 @@ import app.codeg.android.core.model.ConversationConnectionInfo
 import app.codeg.android.core.model.ConversationDetail
 import app.codeg.android.core.model.ConversationDetailBody
 import app.codeg.android.core.model.ConversationIdBody
+import app.codeg.android.core.model.MoveConversationsBody
+import app.codeg.android.core.model.MoveConversationsResult
 import app.codeg.android.core.model.ConversationTurnsBody
 import app.codeg.android.core.model.ConversationTurnsPage
 import app.codeg.android.core.model.TurnWindow
@@ -355,6 +357,17 @@ class CodegClient(
     suspend fun setStatus(conversationId: Int, status: String) {
         send("update_conversation_status", encode(UpdateConversationStatusBody(conversationId, status)))
     }
+
+    /**
+     * Move root conversations (their delegation children with them) to another open folder.
+     * The agent works there from the next message on; an idle connection is torn down, and a
+     * busy one skips its conversation. Only an unusable target fails the whole call.
+     */
+    suspend fun moveConversations(conversationIds: List<Int>, targetFolderId: Int): MoveConversationsResult =
+        decodeCamel(
+            send("move_conversations", encode(MoveConversationsBody(conversationIds, targetFolderId))),
+            MoveConversationsResult.serializer(),
+        )
 
     /** Permanently delete a conversation (server `delete_conversation`). */
     suspend fun deleteConversation(conversationId: Int) {

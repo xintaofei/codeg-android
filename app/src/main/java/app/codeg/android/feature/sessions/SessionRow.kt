@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.DriveFileMove
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.DropdownMenu
@@ -59,7 +60,9 @@ fun SessionRow(
     folderName: String? = null,
     selected: Boolean = false,
     onTogglePin: (() -> Unit)? = null,
+    onMove: (() -> Unit)? = null,
 ) {
+    val hasMenu = onTogglePin != null || onMove != null
     val colors = CodegTheme.colors
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -73,7 +76,7 @@ fun SessionRow(
                 )
                 .combinedClickable(
                     onClick = onClick,
-                    onLongClick = if (onTogglePin != null) {
+                    onLongClick = if (hasMenu) {
                         { menuOpen = true }
                     } else {
                         null
@@ -138,9 +141,9 @@ fun SessionRow(
             }
         }
 
-        if (onTogglePin != null) {
+        if (hasMenu) {
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(
+                if (onTogglePin != null) DropdownMenuItem(
                     text = {
                         Text(
                             if (conversation.isPinned) {
@@ -154,6 +157,14 @@ fun SessionRow(
                     onClick = {
                         menuOpen = false
                         onTogglePin()
+                    },
+                )
+                if (onMove != null) DropdownMenuItem(
+                    text = { Text(stringResource(R.string.move_conversation_menu)) },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Rounded.DriveFileMove, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onMove()
                     },
                 )
             }

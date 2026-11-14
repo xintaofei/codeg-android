@@ -28,6 +28,13 @@ data class ConversationSummary(
      * `updated_at` — the "Pinned" group sorts by this instead. */
     @Serializable(with = InstantSerializer::class)
     val pinnedAt: Instant? = null,
+    /** `regular`, `chat`, `loop` or `delegate`; absent on an older server. */
+    val kind: String? = null,
+    /** The delegating conversation, on a delegation child (a sub-session). */
+    val parentId: Int? = null,
+    /** The tags on this conversation, ascending; absent on the wire when none. May name a tag
+     *  since deleted — an id no tag list has is skipped. */
+    val tagIds: List<Int> = emptyList(),
 ) {
     /** Non-empty, trimmed user title, or null for an unnamed session. Render
      * verbatim (user data); fall back to a localized "Untitled session" only
@@ -36,7 +43,27 @@ data class ConversationSummary(
         get() = title?.takeIf { it.isNotBlank() }
 
     val isPinned: Boolean get() = pinnedAt != null
+
+    /** Whether it may move to another folder (`move_conversations`): a root conversation, regular
+     *  or chat. A sub-session moves with its parent. */
+    val isMovable: Boolean get() = parentId == null && (kind == null || kind == "regular" || kind == "chat")
 }
+
+/** What `move_conversations` did (camelCase on the wire). */
+@Serializable
+data class MoveConversationsResult(
+    /** Root conversations moved; their delegation children went with them. */
+    val moved: List<Int> = emptyList(),
+    val skipped: List<MoveConversationSkip> = emptyList(),
+)
+
+@Serializable
+data class MoveConversationSkip(
+    val conversationId: Int,
+    /** `not_found`, `not_movable`, `already_there`, `task_owned`, `busy`, `conflict`,
+     *  `target_unavailable`. */
+    val reason: String,
+)
 
 /** Aggregate token/timing stats for a session (Rust `SessionStats`). */
 @Serializable

@@ -45,6 +45,7 @@ import app.codeg.android.core.designsystem.component.statusColor
 import app.codeg.android.core.designsystem.component.statusLabel
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.ConversationStatus
+import app.codeg.android.feature.sessions.MoveConversationSheet
 
 /**
  * The session detail toolbar's overflow menu: Rename / Pin / Session Details /
@@ -65,6 +66,7 @@ fun SessionActionsMenu(
     var showStatus by remember { mutableStateOf(false) }
     var showDetails by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
+    var showMove by remember { mutableStateOf(false) }
 
     Box {
         IconButton(onClick = { menu = true }) {
@@ -75,6 +77,14 @@ fun SessionActionsMenu(
             DropdownMenuItem(text = { Text(if (summary.isPinned) stringResource(R.string.sessionactions_unpin) else stringResource(R.string.sessionactions_pin)) }, onClick = { menu = false; viewModel.togglePin() })
             DropdownMenuItem(text = { Text(stringResource(R.string.sessionactions_session_details)) }, onClick = { menu = false; showDetails = true })
             DropdownMenuItem(text = { Text(stringResource(R.string.sessionactions_change_status)) }, onClick = { menu = false; showStatus = true })
+            // A sub-session moves with its parent; a running turn would only be skipped as busy.
+            if (summary.isMovable) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.move_conversation_menu)) },
+                    enabled = !ui.isInFlight,
+                    onClick = { menu = false; viewModel.loadMoveTargets(); showMove = true },
+                )
+            }
             DropdownMenuItem(text = { Text(stringResource(R.string.common_delete), color = colors.danger) }, onClick = { menu = false; showDelete = true })
         }
     }
@@ -124,6 +134,17 @@ fun SessionActionsMenu(
             },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { showStatus = false }) { Text(stringResource(R.string.common_cancel), color = colors.textSecondary) } },
+        )
+    }
+
+    if (showMove) {
+        MoveConversationSheet(
+            conversation = summary,
+            folders = ui.moveTargets,
+            allFolders = ui.moveTargets.orEmpty(),
+            currentFolderPath = ui.folderPath,
+            onMove = viewModel::move,
+            onDismiss = { showMove = false },
         )
     }
 

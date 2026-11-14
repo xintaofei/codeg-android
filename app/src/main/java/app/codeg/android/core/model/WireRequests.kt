@@ -561,3 +561,6 @@ data class CursorStructuredConfig(
     val permissionsAllow: List<String>? = null,
     val permissionsDeny: List<String>? = null,
 )
+
+@Serializable
+data class MoveConversationsBody(val conversationIds: List<Int>, val targetFolderId: Int)

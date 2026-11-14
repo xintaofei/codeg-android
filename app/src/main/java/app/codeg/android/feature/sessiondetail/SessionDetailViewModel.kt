@@ -24,6 +24,7 @@ import app.codeg.android.core.model.ConversationStatus
 import app.codeg.android.core.model.ExpertListItem
 import app.codeg.android.core.model.FolderDetail
 import app.codeg.android.core.model.FolderVisibility
+import app.codeg.android.feature.sessions.moveOutcomeText
 import app.codeg.android.core.model.GitBranchList
 import app.codeg.android.core.model.LiveSessionSnapshot
 import app.codeg.android.core.model.MessageTurn
@@ -2409,6 +2410,52 @@ class SessionDetailViewModel @Inject constructor(
             runCatching { c.setStatus(id, status.wire) }
                 .onSuccess { repository.notifyConversationsChanged() }
                 .onFailure { e -> _ui.update { it.copy(summary = previous, notice = e.displayMessage()) } }
+        }
+    }
+
+    /** Read the open folders afresh for a move: one closed since the screen loaded is no target. */
+    fun loadMoveTargets() {
+        val c = client ?: return
+        _ui.update { it.copy(moveTargets = null) }
+        viewModelScope.launch {
+            try {
+                val folders = c.listOpenFolders()
+                _ui.update { it.copy(moveTargets = folders) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.update { it.copy(moveTargets = emptyList(), notice = appContext.getString(R.string.move_conversation_failed, e.displayMessage())) }
+            }
+        }
+    }
+
+    /**
+     * Move this conversation to [target]. The server tears down the idle connection, so the next
+     * send connects afresh, in the new folder, and resumes the session there; a busy one is
+     * skipped instead (the outcome says why). Nothing optimistic: the server decides.
+     */
+    fun move(target: FolderDetail) {
+        val c = client ?: return
+        val id = conversationId ?: return
+        if (_ui.value.isInFlight) return
+        val label = FolderVisibility.displayName(target, allFolders.ifEmpty { _ui.value.moveTargets.orEmpty() })
+        viewModelScope.launch {
+            val result = try {
+                c.moveConversations(listOf(id), target.id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.update { it.copy(notice = appContext.getString(R.string.move_conversation_failed, e.displayMessage())) }
+                return@launch
+            }
+            if (id in result.moved) {
+                // Off the stream first, so the connection's teardown doesn't read as a failure.
+                forgetConnection()
+                repointFolder(c, target.id)
+                _ui.update { it.copy(summary = it.summary?.copy(folderId = target.id)) }
+                repository.notifyConversationsChanged()
+            }
+            _ui.update { it.copy(notice = moveOutcomeText(appContext, result, label)) }
         }
     }
 

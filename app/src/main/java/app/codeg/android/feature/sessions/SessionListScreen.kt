@@ -36,12 +36,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -94,6 +97,14 @@ fun SessionListScreen(
     // re-runs the grouping flow; rememberSaveable keeps the fold state across
     // rotation / process death.
     var collapsed by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    // The conversation whose "Move to" is open.
+    var moving by remember { mutableStateOf<ConversationSummary?>(null) }
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(ui.notice) {
+        val notice = ui.notice ?: return@LaunchedEffect
+        snackbar.showSnackbar(notice)
+        viewModel.dismissNotice()
+    }
     val colors = CodegTheme.colors
     val selectedName = servers.firstOrNull { it.id == selectedId }?.name
         ?: stringResource(R.string.app_name)
@@ -186,6 +197,10 @@ fun SessionListScreen(
                             },
                             onOpenConversation = onOpenConversation,
                             onTogglePin = { conv -> viewModel.setPinned(conv, !conv.isPinned) },
+                            onMove = { conv ->
+                                viewModel.loadMoveTargets()
+                                moving = conv
+                            },
                             // A refresh that failed over a still-populated list: surface
                             // it inline above the rows rather than swallowing it.
                             refreshError = ui.error,
@@ -195,7 +210,19 @@ fun SessionListScreen(
                     }
                 }
             }
+            SnackbarHost(snackbar, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
         }
+    }
+
+    moving?.let { conv ->
+        MoveConversationSheet(
+            conversation = conv,
+            folders = ui.moveTargets,
+            allFolders = ui.folders,
+            currentFolderPath = ui.folders.firstOrNull { it.id == conv.folderId }?.path,
+            onMove = { folder -> viewModel.move(conv, folder) },
+            onDismiss = { moving = null },
+        )
     }
 }
 
@@ -206,6 +233,7 @@ private fun SessionList(
     onToggleSection: (String) -> Unit,
     onOpenConversation: (Int) -> Unit,
     onTogglePin: (ConversationSummary) -> Unit,
+    onMove: (ConversationSummary) -> Unit,
     refreshError: String?,
     onRetry: () -> Unit,
     onDismissError: () -> Unit,
@@ -257,6 +285,7 @@ private fun SessionList(
                         modifier = Modifier.animateItem(),
                         folderName = row.folderName,
                         onTogglePin = { onTogglePin(row.conversation) },
+                        onMove = if (row.conversation.isMovable) ({ onMove(row.conversation) }) else null,
                     )
                 }
             }

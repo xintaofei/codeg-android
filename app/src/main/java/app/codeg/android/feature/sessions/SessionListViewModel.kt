@@ -8,6 +8,7 @@ import app.codeg.android.core.data.ServerRepository
 import app.codeg.android.core.datastore.ServerProfile
 import app.codeg.android.core.model.ConversationSummary
 import app.codeg.android.core.model.FolderDetail
+import app.codeg.android.core.model.FolderVisibility
 import app.codeg.android.core.network.CodegClient
 import app.codeg.android.core.network.displayMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -170,6 +171,44 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun dismissError() = _ui.update { it.copy(error = null) }
+
+    fun dismissNotice() = _ui.update { it.copy(notice = null) }
+
+    /** Read the open folders afresh for a move: one closed since the list loaded is no target. */
+    fun loadMoveTargets() {
+        val active = client ?: return
+        _ui.update { it.copy(moveTargets = null) }
+        viewModelScope.launch {
+            try {
+                val folders = active.listOpenFolders()
+                _ui.update { it.copy(moveTargets = folders) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.update { it.copy(moveTargets = emptyList(), notice = appContext.getString(R.string.move_conversation_failed, e.displayMessage())) }
+            }
+        }
+    }
+
+    /**
+     * Move [conversation] to [folder]. Nothing optimistic: the server decides (a busy session is
+     * skipped), and the refetch after it shows where everything landed.
+     */
+    fun move(conversation: ConversationSummary, folder: FolderDetail) {
+        val active = client ?: return
+        val label = FolderVisibility.displayName(folder, _ui.value.folders)
+        viewModelScope.launch {
+            try {
+                val result = active.moveConversations(listOf(conversation.id), folder.id)
+                _ui.update { it.copy(notice = moveOutcomeText(appContext, result, label)) }
+                if (result.moved.isNotEmpty()) repository.notifyConversationsChanged()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.update { it.copy(notice = appContext.getString(R.string.move_conversation_failed, e.displayMessage())) }
+            }
+        }
+    }
 }
 
 /** Raw list state; the grouped display is derived by [SessionGrouping]. */
@@ -180,6 +219,10 @@ data class SessionListUiState(
     val isRefreshing: Boolean = false,
     val hasLoaded: Boolean = false,
     val error: String? = null,
+    /** A one-shot message (a move's outcome), shown as a snackbar. */
+    val notice: String? = null,
+    /** The open folders a conversation may move to; null while they load. */
+    val moveTargets: List<FolderDetail>? = null,
 ) {
     val isBusy: Boolean get() = isLoading || isRefreshing
 
