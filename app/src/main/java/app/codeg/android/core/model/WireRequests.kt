@@ -564,3 +564,13 @@ data class CursorStructuredConfig(
 
 @Serializable
 data class MoveConversationsBody(val conversationIds: List<Int>, val targetFolderId: Int)
+
+@Serializable
+data class ForkBody(
+    val connectionId: String,
+    /** With [folderId], links a connection not yet bound to its row (a fork needs one). */
+    val conversationId: Int?,
+    val folderId: Int?,
+    /** The transcript turn to fork at, "up to and including this reply"; absent = the tail. */
+    val forkFromTurnId: String?,
+)

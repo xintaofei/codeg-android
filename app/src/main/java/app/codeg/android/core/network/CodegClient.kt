@@ -5,6 +5,8 @@ import app.codeg.android.core.model.ConversationConnectionInfo
 import app.codeg.android.core.model.ConversationDetail
 import app.codeg.android.core.model.ConversationDetailBody
 import app.codeg.android.core.model.ConversationIdBody
+import app.codeg.android.core.model.ForkBody
+import app.codeg.android.core.model.ForkResult
 import app.codeg.android.core.model.MoveConversationsBody
 import app.codeg.android.core.model.MoveConversationsResult
 import app.codeg.android.core.model.ConversationTurnsBody
@@ -309,6 +311,17 @@ class CodegClient(
     suspend fun goalControl(connectionId: String, action: String) {
         send("acp_goal_control", encode(GoalControlBody(connectionId, action)))
     }
+
+    /**
+     * Fork the session at [forkFromTurnId] (a transcript turn id; null = the tail). The same
+     * connection goes on in the fork, and this conversation with it; a sibling row keeps the
+     * history as it was. Refused with [ApiError.TurnInProgress] while a turn runs.
+     */
+    suspend fun fork(connectionId: String, conversationId: Int?, folderId: Int?, forkFromTurnId: String?): ForkResult =
+        decodeCamel(
+            send("acp_fork", encode(ForkBody(connectionId, conversationId, folderId, forkFromTurnId))),
+            ForkResult.serializer(),
+        )
 
     /** End a connection and its agent process. The conversation stays; the next prompt
      *  connects afresh and resumes it (how a settings change made after spawn applies). */

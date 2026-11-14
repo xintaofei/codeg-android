@@ -47,7 +47,24 @@ sealed interface NodeContent {
     data class Image(val image: ImageData, val caption: String?) : NodeContent
     /** A context-compaction boundary — rendered as a chrome-less divider, not a card. */
     data class Compaction(val part: RenderPart.Compaction) : NodeContent
-    data class Footer(val turn: MessageTurn, val questionId: String?) : NodeContent
+    data class Footer(
+        val turn: MessageTurn,
+        val questionId: String?,
+        /** Where "Fork from here" forks: the reply's last turn — "up to and including this
+         *  reply". Null for a reply still being written. */
+        val forkTurnId: String? = null,
+        /** Nothing follows this reply, so a fork at the tail forks from it too. */
+        val forkAtTail: Boolean = false,
+    ) : NodeContent {
+        /**
+         * Whether the server can find the fork point: a reply this client folded in itself
+         * (`live-…`) or read off the agent's transcript out of turn (`bg-…`) has no transcript
+         * id yet, and the server would fork at the tail instead — right only for the last reply
+         * (web `isForkPointUnnamed`).
+         */
+        val forkPointNamed: Boolean
+            get() = forkTurnId != null && (forkAtTail || !(forkTurnId.startsWith("live-") || forkTurnId.startsWith("bg-")))
+    }
     data class Plan(val entries: List<PlanEntry>) : NodeContent
 
     /** codex's Plan-mode plan document: part of the reply's answer. */
@@ -356,9 +373,13 @@ object TranscriptTimeline {
                             break
                         }
                     }
-                    val merged = merge(source.subList(i, end).filter { it.role == TurnRole.ASSISTANT })
+                    val group = source.subList(i, end).filter { it.role == TurnRole.ASSISTANT }
+                    val merged = merge(group)
                     val completed = !(inFlightStart >= 0 && i > inFlightStart && i < server.size)
-                    entries.add(ThreadEntry.Reply(persistedReply(merged, lastUserId, agent, runningToolIds, completed)))
+                    // A round's closing records and empty placeholders don't make it not last.
+                    val atTail = pending.isEmpty() && source.subList(end, source.size).none { it.role == TurnRole.USER || it.role == TurnRole.ASSISTANT }
+                    val fork = group.last().id.takeIf { completed }
+                    entries.add(ThreadEntry.Reply(persistedReply(merged, lastUserId, agent, runningToolIds, completed, fork, atTail)))
                     i = end
                 }
             }
@@ -453,9 +474,11 @@ object TranscriptTimeline {
         agent: AgentType,
         runningToolIds: Set<String>,
         completed: Boolean,
+        forkTurnId: String?,
+        forkAtTail: Boolean,
     ): ReplyRows {
         val calls = MessageRender.adaptParts(merged, runningToolIds)
-        val footer = TimelineNode("${merged.id}#footer", NodeContent.Footer(merged, questionId), agent)
+        val footer = TimelineNode("${merged.id}#footer", NodeContent.Footer(merged, questionId, forkTurnId, forkAtTail), agent)
         return replyRows(merged.id, agent, calls, cached = true, completed, merged.durationMs, trailer = listOf(footer))
     }
 

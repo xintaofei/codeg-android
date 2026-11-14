@@ -190,3 +190,14 @@ data class HealthResponse(
     val status: String,
     val version: String,
 )
+
+/**
+ * What `acp_fork` did (camelCase on the wire). This conversation and its connection went on
+ * to [forkedSessionId]; a new row, [siblingConversationId], keeps the history as it was.
+ */
+@Serializable
+data class ForkResult(
+    val forkedSessionId: String = "",
+    val originalSessionId: String = "",
+    val siblingConversationId: Int? = null,
+)

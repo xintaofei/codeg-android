@@ -54,6 +54,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import app.codeg.android.feature.sessiondetail.timeline.ForkControl
+import app.codeg.android.feature.sessiondetail.timeline.LocalForkControl
 import app.codeg.android.feature.sessiondetail.rendering.ActivityLive
 import app.codeg.android.feature.sessiondetail.timeline.launchCardTitle
 import app.codeg.android.feature.sessiondetail.timeline.runningSubAgents
@@ -225,6 +227,11 @@ fun SessionDetailScreen(
     val currentGoal = remember(entries) { TranscriptTimeline.latestGoalCallId(entries) }
     val goalControl = remember(ui.goalActions, currentGoal) {
         GoalControl(onControl = viewModel::goalControl, actions = ui.goalActions, currentCallId = currentGoal)
+    }
+    // A fork goes out on the live connection, for an agent that can fork, on a saved conversation.
+    val canFork = ui.forkSupported && ui.summary != null
+    val forkControl = remember(canFork, ui.isInFlight) {
+        ForkControl(onFork = if (canFork) viewModel::forkFrom else null, busy = ui.isInFlight, onBlocked = viewModel::showNotice)
     }
     // The "load older" row sits at the head of the list, so every list index the
     // screen computes from a NODE index has to step over it.
@@ -602,6 +609,7 @@ fun SessionDetailScreen(
                     LocalActivityLive provides activityLive,
                     LocalOpenConversation provides onOpenConversation,
                     LocalGoalControl provides goalControl,
+                    LocalForkControl provides forkControl,
                 ) {
                     LazyColumn(
                         state = listState,

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Check
@@ -30,9 +31,11 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -85,6 +88,15 @@ private val SuccessGreen = Color(0xFF85D18F)
 val LocalTimelineScroll = staticCompositionLocalOf<(String) -> Unit> { {} }
 
 /**
+ * "Fork from here", as the session screen offers it: [onFork] is null where no fork can go out
+ * (no live connection, an agent that can't fork, a conversation not saved yet); [busy] while a
+ * turn runs, which the server would refuse.
+ */
+data class ForkControl(val onFork: ((String) -> Unit)?, val busy: Boolean, val onBlocked: (Int) -> Unit = {})
+
+val LocalForkControl = staticCompositionLocalOf { ForkControl(onFork = null, busy = false) }
+
+/**
  * Renders a node's content to the right of the rail. A pure dispatcher that reuses
  * the existing render leaves verbatim — the timeline is only a new shell. Port of
  * the iOS `NodeBody`.
@@ -108,7 +120,7 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
         is NodeContent.ToolGroup -> ToolGroupCard(c.items, modifier, streaming = c.streaming, disclosureKey = node.id)
         is NodeContent.Image -> InlineImage(c.image, c.caption, modifier)
         is NodeContent.Compaction -> ContextCompactionDivider(c.part, modifier)
-        is NodeContent.Footer -> TurnFooter(c.turn, c.questionId, modifier)
+        is NodeContent.Footer -> TurnFooter(c, modifier)
         is NodeContent.Plan -> LivePlanView(c.entries, modifier)
         is NodeContent.ProposedPlan -> ProposedPlanCard(c.markdown, c.streaming, modifier)
         // Blocked on a card above the composer, the agent isn't thinking: say who it waits on.
@@ -174,7 +186,9 @@ private fun SystemNodeBody(turn: MessageTurn, modifier: Modifier) {
 
 /** Per-reply action + metadata row: Copy · jump-to-question · model · time/tokens. */
 @Composable
-private fun TurnFooter(turn: MessageTurn, questionId: String?, modifier: Modifier) {
+private fun TurnFooter(footer: NodeContent.Footer, modifier: Modifier) {
+    val turn = footer.turn
+    val questionId = footer.questionId
     val colors = CodegTheme.colors
     // Copy text joins every block → memoize it. Meta stays live so the relative time
     // ("47m") keeps ticking rather than freezing at whatever it was when first composed.
@@ -197,6 +211,7 @@ private fun TurnFooter(turn: MessageTurn, questionId: String?, modifier: Modifie
     ) {
         if (copyText.isNotEmpty()) CopyButton(copyText)
         if (questionId != null) JumpToQuestionButton(questionId)
+        footer.forkTurnId?.let { ForkButton(it, footer.forkPointNamed) }
         Spacer(Modifier.weight(1f))
         turn.model?.takeIf { it.isNotBlank() }?.let {
             Text(it, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -230,6 +245,50 @@ private fun CopyButton(text: String, modifier: Modifier = Modifier) {
             )
         }
         Text(if (copied) stringResource(R.string.timeline_copied) else stringResource(R.string.timeline_copy), fontSize = 11.sp, color = colors.textTertiary)
+    }
+}
+
+/**
+ * Fork the session at this reply (web `TurnStats`' fork action). Confirmed first: on a phone the
+ * footer is easy to brush, and a fork renames this conversation and moves it onto a new session.
+ * Dimmed while it can't go out, and a tap then says why.
+ */
+@Composable
+private fun ForkButton(turnId: String, named: Boolean) {
+    val control = LocalForkControl.current
+    val onFork = control.onFork ?: return
+    val colors = CodegTheme.colors
+    var confirm by remember { mutableStateOf(false) }
+    val blocked = when {
+        control.busy -> R.string.fork_busy
+        !named -> R.string.fork_not_ready
+        else -> null
+    }
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(role = Role.Button) { if (blocked != null) control.onBlocked(blocked) else confirm = true }
+            .alpha(if (blocked != null) 0.45f else 1f)
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.size(13.dp))
+        Text(stringResource(R.string.fork_from_here), fontSize = 11.sp, color = colors.textTertiary)
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            containerColor = colors.bgElevated,
+            title = { Text(stringResource(R.string.fork_confirm_title), color = colors.textPrimary) },
+            text = { Text(stringResource(R.string.fork_confirm_message), color = colors.textSecondary) },
+            confirmButton = {
+                TextButton(onClick = { confirm = false; onFork(turnId) }) { Text(stringResource(R.string.fork_confirm), color = colors.accent) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirm = false }) { Text(stringResource(R.string.common_cancel), color = colors.textSecondary) }
+            },
+        )
     }
 }
 

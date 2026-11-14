@@ -78,6 +78,9 @@ import kotlinx.coroutines.launch
 /** Stop reason recorded for a turn whose `turn_complete` was lost in a reconnect gap. */
 private const val STOP_REASON_UNSEEN = "end_turn"
 
+/** What the server puts before a fork's title (`persist_fork_outcome`). */
+private const val FORK_TITLE_PREFIX = "[Fork] "
+
 /** Claude Code's own command that turns Remote Control off (`remote_control_command`). */
 private const val REMOTE_CONTROL_OFF = "/remote-control off"
 
@@ -2458,6 +2461,57 @@ class SessionDetailViewModel @Inject constructor(
             _ui.update { it.copy(notice = moveOutcomeText(appContext, result, label)) }
         }
     }
+
+    /** A fork in flight: one at a time, since each re-points this conversation. */
+    private var forking = false
+
+    /**
+     * Fork the session at [turnId], a reply's last transcript turn. This conversation goes on
+     * in the fork — on the same connection, retitled `[Fork] …`, its transcript cut back to that
+     * reply — and a new row keeps the whole history (web `handleForkFromTurn`). What this screen
+     * holds of the old session goes, and the transcript is read anew.
+     */
+    fun forkFrom(turnId: String) {
+        val c = client ?: return
+        val conn = connectionId ?: return
+        val id = conversationId ?: return
+        if (_ui.value.isInFlight) {
+            _ui.update { it.copy(notice = appContext.getString(R.string.fork_busy)) }
+            return
+        }
+        if (forking) return
+        forking = true
+        val title = _ui.value.summary?.trimmedTitle?.removePrefix(FORK_TITLE_PREFIX)?.takeIf { it.isNotBlank() }
+        viewModelScope.launch {
+            try {
+                val result = c.fork(conn, id, folder?.id, turnId)
+                // Its `session_started` says so too; this is in case it lands after the reload.
+                result.forkedSessionId.takeIf { it.isNotEmpty() }?.let { externalId = it }
+                // Finished work of the old session: none of it is this one's any more.
+                if (liveBuilder?.isStreaming != true) liveBuilder = null
+                _ui.update {
+                    it.copy(
+                        live = if (liveBuilder == null) null else it.live,
+                        backgroundTurns = emptyList(),
+                        notice = if (title != null) appContext.getString(R.string.fork_done, title) else appContext.getString(R.string.fork_done_untitled),
+                    )
+                }
+                repository.notifyConversationsChanged()
+                load()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ApiError.TurnInProgress) {
+                _ui.update { it.copy(notice = appContext.getString(R.string.fork_session_busy)) }
+            } catch (e: Exception) {
+                _ui.update { it.copy(notice = appContext.getString(R.string.fork_failed, e.displayMessage())) }
+            } finally {
+                forking = false
+            }
+        }
+    }
+
+    /** A one-line notice from a string resource (a fork the footer can't send yet says why). */
+    fun showNotice(@androidx.annotation.StringRes message: Int) = _ui.update { it.copy(notice = appContext.getString(message)) }
 
     /** Delete the conversation; [onDeleted] runs (on the main thread) only after the server confirms. */
     fun deleteConversation(onDeleted: () -> Unit) {

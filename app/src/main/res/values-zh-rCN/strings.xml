@@ -739,6 +739,16 @@
     <string name="move_skip_conflict">移动过程中会话发生了变化，请重试</string>
     <string name="move_skip_target_unavailable">目标文件夹已关闭或移除</string>
     <string name="move_skip_unknown">原因未知</string>
+    <string name="fork_from_here">从此处分叉</string>
+    <string name="fork_busy">当前有回合正在进行，暂不可分叉</string>
+    <string name="fork_not_ready">这条回复暂时还不能作为分叉点，请稍后再试</string>
+    <string name="fork_confirm_title">从这条回复分叉？</string>
+    <string name="fork_confirm_message">本会话将从这条回复起作为分叉继续，并改名为「[Fork] …」。完整历史会保留在列表里的一个新会话中。</string>
+    <string name="fork_confirm">分叉</string>
+    <string name="fork_done">已分叉。完整历史保留在「%1$s」中。</string>
+    <string name="fork_done_untitled">已分叉。完整历史保留在列表里的一个新会话中。</string>
+    <string name="fork_session_busy">分叉失败：当前有回合正在进行</string>
+    <string name="fork_failed">会话分叉失败：%1$s</string>
     <string name="config_stale_reconnect">重连以应用</string>
     <string name="config_stale_applies_next">新配置将从你的下一条消息开始生效。</string>
     <plurals name="live_runs_count">

@@ -754,6 +754,16 @@
     <string name="move_skip_conflict">It changed while being moved — try again</string>
     <string name="move_skip_target_unavailable">The folder was closed or removed</string>
     <string name="move_skip_unknown">For a reason this app doesn\'t know</string>
+    <string name="fork_from_here">Fork from here</string>
+    <string name="fork_busy">Can\'t fork while a turn is running</string>
+    <string name="fork_not_ready">Can\'t fork from this reply just yet — try again in a moment</string>
+    <string name="fork_confirm_title">Fork from this reply?</string>
+    <string name="fork_confirm_message">This conversation goes on from this reply as a fork, renamed “[Fork] …”. Its full history stays in a new conversation in the list.</string>
+    <string name="fork_confirm">Fork</string>
+    <string name="fork_done">Forked. The full history stays in “%1$s”.</string>
+    <string name="fork_done_untitled">Forked. The full history stays in a new conversation in the list.</string>
+    <string name="fork_session_busy">Failed to fork session: a turn is running</string>
+    <string name="fork_failed">Failed to fork session: %1$s</string>
     <string name="config_stale_reconnect">Reconnect to apply</string>
     <string name="config_stale_applies_next">The new configuration applies from your next message.</string>
     <plurals name="live_runs_count">

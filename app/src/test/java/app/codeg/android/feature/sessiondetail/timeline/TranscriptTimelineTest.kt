@@ -592,4 +592,34 @@ class TranscriptTimelineTest {
         assertEquals("g3", TranscriptTimeline.latestGoalCallId(entries))
         assertNull(TranscriptTimeline.latestGoalCallId(TranscriptTimeline.persistedEntries(listOf(user("u1", "q")), emptyList(), agent)))
     }
+
+    private fun footers(entries: List<ThreadEntry>) =
+        entries.mapNotNull { e -> (e as? ThreadEntry.Reply)?.rows?.trailer?.firstNotNullOfOrNull { it.content as? NodeContent.Footer } }
+
+    @Test
+    fun `a reply forks at its last turn, and only the last reply may fork from a turn not yet in the transcript`() {
+        val turns = listOf(
+            user("u1", "q"),
+            assistant("turn-1", listOf(ContentBlock.Text("a"))),
+            assistant("turn-2", listOf(ContentBlock.Text("b"))),
+            user("u2", "q2"),
+        )
+        val local = listOf(assistant("live-x", listOf(ContentBlock.Text("c"))))
+        val f = footers(TranscriptTimeline.persistedEntries(turns, emptyList(), agent, localTurns = local))
+        assertEquals(listOf("turn-2", "live-x"), f.map { it.forkTurnId })
+        assertEquals(listOf(false, true), f.map { it.forkAtTail })
+        // A transcript turn forks from anywhere; a local one only as the tail.
+        assertTrue(f.all { it.forkPointNamed })
+        val queued = footers(TranscriptTimeline.persistedEntries(turns, listOf(user("p1", "next")), agent, localTurns = local))
+        assertFalse(queued.last().forkPointNamed)
+        val overlay = footers(TranscriptTimeline.persistedEntries(listOf(user("u1", "q"), assistant("bg-1-0", listOf(ContentBlock.Text("x"))), user("u2", "q2"), assistant("turn-3", listOf(ContentBlock.Text("y")))), emptyList(), agent))
+        assertEquals(listOf(false, true), overlay.map { it.forkPointNamed })
+    }
+
+    @Test
+    fun `a reply still being written offers no fork`() {
+        val turns = listOf(user("u1", "q"), assistant("turn-1", listOf(ContentBlock.Text("a"))), user("u2", "q2"), assistant("turn-3", listOf(ContentBlock.Text("b"))))
+        val f = footers(TranscriptTimeline.persistedEntries(turns, emptyList(), agent, inFlightUserTurnId = "u2"))
+        assertEquals(listOf("turn-1", null), f.map { it.forkTurnId })
+    }
 }
