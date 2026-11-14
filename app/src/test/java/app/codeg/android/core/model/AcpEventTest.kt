@@ -172,6 +172,22 @@ class AcpEventTest {
     }
 
     @Test
+    fun `a question restricted to its options and a secret one decode their flags`() {
+        val e = event(
+            """{"type":"question_request","question_id":"q1",
+               "questions":[
+                 {"id":"a","question":"Pick","options":[{"label":"X"},{"label":"Y"}],"allow_other":false},
+                 {"id":"b","question":"API key?","options":[],"is_secret":true}]}""",
+        ) as AcpEvent.QuestionRequest
+        assertFalse(e.questions[0].allowOther)
+        assertFalse(e.questions[0].acceptsFreeText)
+        // Absent means allowed, as on the server (`default_true`).
+        assertTrue(e.questions[1].allowOther)
+        assertTrue(e.questions[1].isSecret)
+        assertTrue(e.questions[1].freeTextOnly)
+    }
+
+    @Test
     fun `turn complete defaults stop reason`() {
         assertEquals(AcpEvent.TurnComplete("end_turn"), event("""{"type":"turn_complete"}"""))
     }

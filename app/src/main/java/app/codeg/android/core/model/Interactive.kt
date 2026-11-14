@@ -56,7 +56,24 @@ data class QuestionSpec(
     val header: String = "",
     val multiSelect: Boolean = false,
     val options: List<QuestionOption> = emptyList(),
-)
+    /** The answer is a secret (codex marks API keys etc. with `_meta.codex.isSecret`): the
+     *  free-text input is masked. */
+    val isSecret: Boolean = false,
+    /**
+     * Whether a free-text answer is accepted alongside [options]. False for native
+     * permission bridges (Pi select, Antigravity) that can only take one of the listed
+     * option ids: the server CANCELS the question on any other answer. Defaults to true,
+     * matching the server's `default_true`.
+     */
+    val allowOther: Boolean = true,
+) {
+    /** No options to pick from: the answer can only be typed, so the input always shows
+     *  (the server renders it regardless of [allowOther]). */
+    val freeTextOnly: Boolean get() = options.isEmpty()
+
+    /** Whether the card offers a free-text answer at all. */
+    val acceptsFreeText: Boolean get() = allowOther || freeTextOnly
+}
 
 /**
  * One question's answer: the per-question id plus the chosen option labels (a

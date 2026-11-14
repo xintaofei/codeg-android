@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Forum
@@ -40,6 +41,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,13 +68,8 @@ fun AskQuestionCard(
     val otherText = remember(questions) { mutableStateMapOf<String, String>() }
     var submitting by remember(questions) { mutableStateOf(false) }
 
-    fun answered(q: QuestionSpec): Boolean {
-        val sel = selections[q.id].orEmpty()
-        val hasReal = sel.any { it != OTHER_KEY }
-        val hasOther = sel.contains(OTHER_KEY) && otherText[q.id]?.isNotBlank() == true
-        return hasReal || hasOther
-    }
-    val canSubmit = questions.all { answered(it) } && !submitting
+    val canSubmit = questions.all { isAnswered(it, selections[it.id].orEmpty(), otherText[it.id].orEmpty()) } &&
+        !submitting
 
     Column(
         modifier
@@ -177,15 +176,19 @@ private fun QuestionBlock(
                 onClick = { onToggle(option.label) },
             )
         }
-        // "Other" free-text row.
-        OptionRow(
-            label = stringResource(R.string.ask_other),
-            description = "",
-            checked = OTHER_KEY in selected,
-            multi = question.multiSelect,
-            onClick = { onToggle(OTHER_KEY) },
-        )
-        if (OTHER_KEY in selected) {
+        // "Other" free-text row — only where a typed answer is accepted. A question with no
+        // options shows its input directly; one restricted to its options
+        // (`allowOther == false`) shows none, since anything else cancels it server-side.
+        if (question.acceptsFreeText && !question.freeTextOnly) {
+            OptionRow(
+                label = stringResource(R.string.ask_other),
+                description = "",
+                checked = OTHER_KEY in selected,
+                multi = question.multiSelect,
+                onClick = { onToggle(OTHER_KEY) },
+            )
+        }
+        if (question.freeTextOnly || (question.acceptsFreeText && OTHER_KEY in selected)) {
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -200,6 +203,16 @@ private fun QuestionBlock(
                     onValueChange = onOtherText,
                     textStyle = TextStyle(color = colors.textPrimary, fontSize = 13.sp),
                     cursorBrush = SolidColor(colors.accent),
+                    visualTransformation = if (question.isSecret) {
+                        PasswordVisualTransformation()
+                    } else {
+                        VisualTransformation.None
+                    },
+                    keyboardOptions = if (question.isSecret) {
+                        KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false)
+                    } else {
+                        KeyboardOptions.Default
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -242,7 +255,15 @@ private fun OptionRow(label: String, description: String, checked: Boolean, mult
     }
 }
 
-private fun buildAnswer(
+/** Whether the typed answer counts for [q]: it must be accepted, and either the question is
+ *  free-text only or the user picked "Other". */
+private fun typedAnswerCounts(q: QuestionSpec, selected: Set<String>): Boolean =
+    q.acceptsFreeText && (q.freeTextOnly || OTHER_KEY in selected)
+
+internal fun isAnswered(q: QuestionSpec, selected: Set<String>, otherText: String): Boolean =
+    selected.any { it != OTHER_KEY } || (typedAnswerCounts(q, selected) && otherText.isNotBlank())
+
+internal fun buildAnswer(
     questions: List<QuestionSpec>,
     selections: Map<String, Set<String>>,
     otherText: Map<String, String>,
@@ -250,8 +271,11 @@ private fun buildAnswer(
     val items = questions.map { q ->
         val sel = selections[q.id].orEmpty()
         val labels = sel.filter { it != OTHER_KEY }.toMutableList()
-        if (OTHER_KEY in sel) otherText[q.id]?.takeIf { it.isNotBlank() }?.let { labels.add(it.trim()) }
+        if (typedAnswerCounts(q, sel)) otherText[q.id]?.takeIf { it.isNotBlank() }?.let { labels.add(it.trim()) }
         QuestionAnswerItem(questionId = q.id, labels = labels)
     }
     return QuestionAnswer(answers = items, declined = false)
 }
+
+/** The "Other" selection key, for tests. */
+internal const val OTHER_SELECTION_KEY = OTHER_KEY
