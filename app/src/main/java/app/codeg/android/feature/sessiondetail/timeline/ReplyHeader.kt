@@ -98,7 +98,7 @@ fun ReplyHeaderBody(header: NodeContent.ReplyHeader, modifier: Modifier = Modifi
         else -> res.getQuantityString(R.plurals.activity_failed_recovered, summary.failed, summary.failed)
     }
     val danger = summary.unrecovered > 0
-    val interrupted = if (summary.interrupted > 0) stringResource(R.string.activity_interrupted, summary.interrupted) else null
+    val interrupted = if (summary.interrupted > 0) res.getQuantityString(R.plurals.activity_interrupted, summary.interrupted, summary.interrupted) else null
     val elapsed = header.durationMs?.takeIf { header.completed && it > 0 }?.let(::formatElapsed)
     val toggleLabel = stringResource(if (header.open) R.string.activity_collapse else R.string.activity_expand)
 

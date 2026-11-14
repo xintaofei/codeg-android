@@ -673,7 +673,6 @@
     <string name="activity_working">Working</string>
     <string name="activity_reply">Reply</string>
     <string name="activity_separator">" · "</string>
-    <string name="activity_interrupted">%1$d interrupted</string>
     <string name="activity_show_failure">Show the failure</string>
     <string name="activity_expand">Show the steps</string>
     <string name="activity_collapse">Collapse</string>
@@ -767,6 +766,10 @@
     <plurals name="queue_images">
         <item quantity="one">%d image</item>
         <item quantity="other">%d images</item>
+    </plurals>
+    <plurals name="activity_interrupted">
+        <item quantity="one">%d interrupted</item>
+        <item quantity="other">%d interrupted</item>
     </plurals>
     <plurals name="activity_steps">
         <item quantity="one">%d step</item>
