@@ -72,7 +72,9 @@ class TagPickerController(
     /** The tag writes of one conversation on one server, and its writer. */
     private class Session(val key: String, val api: TagsApi, val conversationId: Int, val assignment: TagAssignment) {
         var writing = false
-        val idle: Boolean get() = !writing && assignment.nextWrite() == null
+        /** Tags being created for this conversation: each becomes a write when it exists. */
+        var creating = 0
+        val idle: Boolean get() = !writing && creating == 0 && assignment.nextWrite() == null
     }
 
     /** Sessions still owing the server something, by endpoint and conversation. */
@@ -145,6 +147,7 @@ class TagPickerController(
         val folderScope = if (global) null else state.scope ?: return
         val neighbours = state.tags.filter { it.folderId == null || it.folderId == folderScope }
         _ui.update { it.copy(creating = true) }
+        s.creating += 1
         scope.launch {
             try {
                 val tag = s.api.createTag(folderScope, trimmed, ConversationTags.nextColor(neighbours))
@@ -157,7 +160,9 @@ class TagPickerController(
             } catch (e: Exception) {
                 if (session === s) _ui.update { it.copy(error = failure(R.string.tags_create_failed, e)) }
             } finally {
+                s.creating -= 1
                 if (session === s) _ui.update { it.copy(creating = false) }
+                prune()
             }
         }
     }

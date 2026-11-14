@@ -32,7 +32,11 @@ class TagPickerControllerTest {
         val held = mutableMapOf<Int, MutableSet<Int>>()
         override suspend fun listTags() = listOf(tag1)
         override suspend fun listFolders() = listOf(FolderDetail(id = 1, name = "f", path = "/f"))
-        override suspend fun createTag(folderId: Int?, name: String, color: String) = ConversationTag(9, folderId, name, color)
+        var createGate: CompletableDeferred<Unit>? = null
+        override suspend fun createTag(folderId: Int?, name: String, color: String): ConversationTag {
+            createGate?.await()
+            return ConversationTag(9, folderId, name, color)
+        }
         override suspend fun setTags(conversationId: Int, add: List<Int>, remove: List<Int>): ConversationSummary {
             writes += Triple(conversationId, add, remove)
             val answer = CompletableDeferred<ConversationSummary>()
@@ -144,5 +148,33 @@ class TagPickerControllerTest {
         c.open(conv(6)) // before the create lands
         runCurrent()
         assertEquals(Triple(5, listOf(9), emptyList<Int>()), server.writes.single())
+    }
+
+    @Test
+    fun `a reopen while a tag is being created keeps the one writer`() = runTest {
+        val server = FakeServer("s")
+        val gate = CompletableDeferred<Unit>()
+        server.createGate = gate
+        val c = controller { "s" to server }
+        c.open(conv(8))
+        runCurrent()
+        c.create("new", global = true)
+        runCurrent()
+        c.open(conv(9))
+        runCurrent()
+        c.open(conv(8)) // the create is still out
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        c.toggle(tag1)
+        runCurrent()
+        // The created tag's write first; the toggle waits for it instead of racing it.
+        assertEquals(listOf(Triple(8, listOf(9), emptyList<Int>())), server.writes)
+        server.answer()
+        runCurrent()
+        assertEquals(Triple(8, listOf(1), emptyList<Int>()), server.writes.last())
+        server.answer()
+        runCurrent()
+        assertEquals(setOf(1, 9), c.ui.value.tagIds)
     }
 }
