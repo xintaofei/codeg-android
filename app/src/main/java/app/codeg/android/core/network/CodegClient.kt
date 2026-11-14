@@ -5,6 +5,8 @@ import app.codeg.android.core.model.ConversationConnectionInfo
 import app.codeg.android.core.model.ConversationDetail
 import app.codeg.android.core.model.ConversationDetailBody
 import app.codeg.android.core.model.ConversationIdBody
+import app.codeg.android.core.model.ConversationOutline
+import app.codeg.android.core.model.ConversationOutlineBody
 import app.codeg.android.core.model.BranchTagSetting
 import app.codeg.android.core.model.ConversationTag
 import app.codeg.android.core.model.ConversationTagIdBody
@@ -251,6 +253,17 @@ class CodegClient(
         decode(
             send("get_folder_conversation_turns", encode(ConversationTurnsBody(id, beforeIndex, limit))),
             ConversationTurnsPage.serializer(),
+        )
+
+    /**
+     * The turns above [beforeIndex] (the window's offset), cut down for the message navigator.
+     * One response, no paging. Only on a server whose windowed detail carries
+     * `user_turns_before_offset`.
+     */
+    suspend fun conversationOutline(id: Int, beforeIndex: Int): ConversationOutline =
+        decode(
+            send("get_folder_conversation_outline", encode(ConversationOutlineBody(id, beforeIndex))),
+            ConversationOutline.serializer(),
         )
 
     /** Create a conversation row up front and return its id (a bare JSON int). */

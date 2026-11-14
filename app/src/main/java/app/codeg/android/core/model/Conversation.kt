@@ -99,6 +99,9 @@ data class ConversationDetail(
     /** Assistant turns in `full[0..turnsOffset)` — converts a history baseline
      * between global and window coordinates. */
     val assistantTurnsBeforeOffset: Int? = null,
+    /** User turns in `full[0..turnsOffset)`. Absent from a server without the outline
+     * route — which is how a client tells it isn't there. */
+    val userTurnsBeforeOffset: Int? = null,
     /** Structural fingerprint of `full[0..turnsOffset)` as fixed-width 16-hex. */
     val prefixHash: String? = null,
     /** Max timestamp across `full[0..turnsOffset)`; absent when the window covers
@@ -200,4 +203,17 @@ data class ForkResult(
     val forkedSessionId: String = "",
     val originalSessionId: String = "",
     val siblingConversationId: Int? = null,
+)
+
+/**
+ * Every turn above the loaded window, cut down to what the message navigator needs (Rust
+ * `ConversationOutline`): `turns[i]` is global turn `i`; a user turn keeps its first text, an
+ * assistant turn only its tool calls. [prefixHash] fingerprints all of [turns], to prove they are
+ * the window's prefix.
+ */
+@Serializable
+data class ConversationOutline(
+    val turns: List<MessageTurn> = emptyList(),
+    val turnsTotal: Int = 0,
+    val prefixHash: String = "",
 )

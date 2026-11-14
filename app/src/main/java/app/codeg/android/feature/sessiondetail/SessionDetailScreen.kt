@@ -105,6 +105,8 @@ import app.codeg.android.feature.sessiondetail.timeline.LocalReplyFoldActions
 import app.codeg.android.feature.sessiondetail.timeline.LocalTimelineScroll
 import app.codeg.android.feature.sessiondetail.timeline.NodeBody
 import app.codeg.android.feature.sessiondetail.timeline.NodeContent
+import app.codeg.android.core.model.TurnRole
+import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
 import app.codeg.android.feature.sessiondetail.timeline.ReplyFoldActions
 import app.codeg.android.feature.sessiondetail.timeline.ReplyFoldInput
 import app.codeg.android.feature.sessiondetail.timeline.ReplyFolds
@@ -276,6 +278,19 @@ fun SessionDetailScreen(
             }
         }
     }
+    // The navigator's jump: once the target row is drawn (after paging, if it had to).
+    LaunchedEffect(ui.scrollToTurn, nodes) {
+        val target = ui.scrollToTurn ?: return@LaunchedEffect
+        val idx = nodes.indexOfFirst { it.id == target.turnId }
+        if (idx >= 0) {
+            stick = false
+            jumped = true
+            // In the screen's scope: consuming the request restarts this effect.
+            scope.launch { listState.scrollToItem(idx + headerCount) }
+        }
+        viewModel.consumeScrollToTurn()
+    }
+    var showNav by remember { mutableStateOf(false) }
     // A row a fold action wants in view, scrolled to once the fold has drawn it.
     var pendingScroll by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(nodes, pendingScroll) {
@@ -393,6 +408,16 @@ fun SessionDetailScreen(
                         }
                     },
                     actions = {
+                        // Message navigation: once there is a message to go to.
+                        if (!ui.isNew && (ui.window?.hasOlder == true || ui.turns.any { it.role == TurnRole.USER })) {
+                            IconButton(onClick = { viewModel.loadOutline(); showNav = true }) {
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.FormatListBulleted,
+                                    contentDescription = stringResource(R.string.message_nav_title),
+                                    tint = colors.textPrimary,
+                                )
+                            }
+                        }
                         // The agent avatar is the options button (mode / config / folder / branch).
                         Box(
                             Modifier
@@ -657,6 +682,36 @@ fun SessionDetailScreen(
                 }
             }
         }
+    }
+    if (showNav) {
+        val window = ui.window
+        val above = remember(ui.outline, window) {
+            val ready = ui.outline as? OutlineState.Ready
+            if (ready != null && window != null) MessageNav.outlinePrefix(ready.outline, window) else null
+        }
+        val entries = remember(above, ui.turns, ui.localTurns, ui.pendingUserTurns) {
+            MessageNav.entries(above.orEmpty(), ui.turns + ui.localTurns + ui.pendingUserTurns)
+        }
+        // The message being read: the one at or above the top of the viewport.
+        val current = remember(nodes, headerCount) {
+            val top = (listState.firstVisibleItemIndex - headerCount).coerceIn(0, (nodes.size - 1).coerceAtLeast(0))
+            (top downTo 0).firstNotNullOfOrNull { i -> nodes.getOrNull(i)?.takeIf { it.content is NodeContent.User }?.id }
+        }
+        val hasEarlier = window?.hasOlder == true && ui.outlineSupported
+        MessageNavSheet(
+            entries = entries,
+            numbered = window?.hasOlder != true || above != null,
+            outline = ui.outline,
+            hasEarlier = hasEarlier,
+            currentTurnId = current,
+            running = ui.isInFlight,
+            onRetryEarlier = viewModel::loadOutline,
+            onPick = { entry ->
+                showNav = false
+                viewModel.revealTurn(entry.turnId, entry.turnIndex)
+            },
+            onDismiss = { showNav = false },
+        )
     }
 }
 

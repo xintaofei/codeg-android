@@ -97,6 +97,15 @@ data class SessionDetailUiState(
     val forkSupported: Boolean = false,
     /** The open folders this conversation may move to; null while they load. */
     val moveTargets: List<FolderDetail>? = null,
+    /** Whether the server has the outline route (its windowed detail says how many user turns
+     *  precede the window). */
+    val outlineSupported: Boolean = false,
+    /** The history above the window, for the message navigator. */
+    val outline: OutlineState = OutlineState.Idle,
+    /** A one-shot: scroll the transcript to this user turn (the navigator's jump). */
+    val scrollToTurn: TurnScroll? = null,
+    /** The navigator's jump paging history in to reach this turn. */
+    val revealingTurnId: String? = null,
     /** This connection's delegations by the call that started each, finished ones kept. */
     val delegations: Map<String, app.codeg.android.core.model.DelegationBinding> = emptyMap(),
     /** Out-of-turn turns read off the agent's transcript, shown until a detail load has them. */
@@ -234,3 +243,14 @@ data class ConfigStaleUi(val kind: String?, val dismissed: Boolean = false)
  * opens instead.
  */
 data class SessionLoadErrorUi(val message: String, val command: String?, val folderId: Int?)
+
+/** The message navigator's read of the history above the window. */
+sealed interface OutlineState {
+    data object Idle : OutlineState
+    data object Loading : OutlineState
+    data class Ready(val outline: app.codeg.android.core.model.ConversationOutline) : OutlineState
+    data object Failed : OutlineState
+}
+
+/** Scroll to [turnId]; [epoch] tells a repeat apart. */
+data class TurnScroll(val turnId: String, val epoch: Int)

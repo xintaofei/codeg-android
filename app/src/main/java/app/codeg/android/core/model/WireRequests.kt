@@ -607,3 +607,6 @@ data class UpdateConversationTagsBody(
 
 @Serializable
 data class UpdateBranchTagBody(val enabled: Boolean, val color: String)
+
+@Serializable
+data class ConversationOutlineBody(val conversationId: Int, val beforeIndex: Int)

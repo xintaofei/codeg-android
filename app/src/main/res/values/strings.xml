@@ -819,6 +819,15 @@
     <string name="tags_filter_no_tags">No tags yet. Add one from a conversation\'s menu.</string>
     <string name="tags_filter_no_matches">No conversations with these tags</string>
     <string name="tags_filter_remove">Remove “%1$s” from the filter</string>
+    <string name="message_nav_title">Message navigation</string>
+    <string name="message_nav_loading_earlier">Loading earlier messages…</string>
+    <string name="message_nav_load_earlier">Load earlier messages</string>
+    <string name="message_nav_untitled">User message</string>
+    <string name="message_nav_running">Running</string>
+    <plurals name="message_nav_total">
+        <item quantity="one">%d message</item>
+        <item quantity="other">%d messages</item>
+    </plurals>
     <string name="config_stale_reconnect">Reconnect to apply</string>
     <string name="config_stale_applies_next">The new configuration applies from your next message.</string>
     <plurals name="live_runs_count">

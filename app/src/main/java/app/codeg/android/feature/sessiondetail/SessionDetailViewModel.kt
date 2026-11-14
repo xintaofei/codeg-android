@@ -360,6 +360,7 @@ class SessionDetailViewModel @Inject constructor(
                     _ui.update {
                         it.copy(
                             loading = false,
+                            outlineSupported = detail.userTurnsBeforeOffset != null,
                             backgroundTurns = BackgroundOverlays.retire(it.backgroundTurns, detail.transcriptWatermark, detail.uncoveredPrefixMaxTs),
                             summary = detail.summary,
                             turns = detail.turns,
@@ -1741,7 +1742,8 @@ class SessionDetailViewModel @Inject constructor(
         val c = client ?: return
         val id = conversationId ?: return
         val loaded = _ui.value.window ?: return
-        if (!loaded.hasOlder || pagingJob?.isActive == true) return
+        // The navigator paging toward a message owns the seam meanwhile.
+        if (!loaded.hasOlder || pagingJob?.isActive == true || revealJob?.isActive == true) return
         // A list too short to scroll cannot produce another trigger on its own, so a
         // page that never adds anything would retry forever. Give up after a few and
         // leave the row idle; reopening the session starts over.
@@ -1786,6 +1788,86 @@ class SessionDetailViewModel @Inject constructor(
             }
         }
     }
+
+    private var outlineJob: Job? = null
+    private var revealJob: Job? = null
+
+    /**
+     * Read the history above the window for the message navigator — once, and again only when
+     * what was read no longer proves to be the window's prefix (the history was rewritten).
+     * Pages prepended since only shrink what it has to cover, so it stays good.
+     */
+    fun loadOutline() {
+        val c = client ?: return
+        val id = conversationId ?: return
+        val state = _ui.value
+        val window = state.window ?: return
+        if (!window.hasOlder || !state.outlineSupported || outlineJob?.isActive == true) return
+        (state.outline as? OutlineState.Ready)?.let { if (MessageNav.outlinePrefix(it.outline, window) != null) return }
+        _ui.update { it.copy(outline = OutlineState.Loading) }
+        outlineJob = viewModelScope.launch {
+            val outline = orNull { c.conversationOutline(id, window.offset) }
+            _ui.update {
+                val now = it.window
+                it.copy(
+                    outline = when {
+                        outline == null -> OutlineState.Failed
+                        // A read that doesn't join the window it was asked for is no use.
+                        now != null && MessageNav.outlinePrefix(outline, now) == null -> OutlineState.Failed
+                        else -> OutlineState.Ready(outline)
+                    },
+                )
+            }
+        }
+    }
+
+    /**
+     * Take the transcript to [turnId] (the navigator's jump): page the history in through
+     * [turnIndex] first when it sits above the window, then scroll there. The latest jump
+     * wins — an earlier one still paging is dropped.
+     */
+    fun revealTurn(turnId: String, turnIndex: Int?) {
+        revealJob?.cancel()
+        if (turnIndex == null || _ui.value.turns.any { it.id == turnId } || _ui.value.localTurns.any { it.id == turnId }) {
+            _ui.update { it.copy(scrollToTurn = TurnScroll(turnId, (it.scrollToTurn?.epoch ?: 0) + 1), revealingTurnId = null) }
+            return
+        }
+        val c = client ?: return
+        val id = conversationId ?: return
+        _ui.update { it.copy(revealingTurnId = turnId) }
+        revealJob = viewModelScope.launch {
+            try {
+                // An ordinary page in flight would race this one for the same seam.
+                pagingJob?.join()
+                while (true) {
+                    val loaded = _ui.value.window ?: break
+                    if (loaded.offset <= turnIndex) break
+                    val generation = bumpFetchGeneration()
+                    _ui.update { it.copy(loadingOlder = true) }
+                    val page = orNull { c.conversationTurnsPage(id, loaded.offset, maxOf(loaded.offset - turnIndex, OLDER_TURNS_PAGE_SIZE)) }
+                    _ui.update { it.copy(loadingOlder = false) }
+                    if (page == null) break
+                    if (!isLatestFetch(generation)) break
+                    when (val merge = mergeOlderTurns(page, loaded, _ui.value.window, _ui.value.turns)) {
+                        is PageMerge.Prepend -> _ui.update { it.copy(turns = merge.turns + it.turns, window = merge.window) }
+                        is PageMerge.Resync -> {
+                            reconcileAfterMissedLive()
+                            break
+                        }
+                        is PageMerge.Drop -> break
+                    }
+                }
+                if (_ui.value.turns.any { it.id == turnId }) {
+                    _ui.update { it.copy(scrollToTurn = TurnScroll(turnId, (it.scrollToTurn?.epoch ?: 0) + 1)) }
+                }
+            } finally {
+                _ui.update { st -> (if (st.revealingTurnId == turnId) st.copy(revealingTurnId = null) else st).copy(loadingOlder = false) }
+            }
+        }
+    }
+
+    /** The screen has scrolled to the navigator's target. */
+    fun consumeScrollToTurn() = _ui.update { if (it.scrollToTurn == null) it else it.copy(scrollToTurn = null) }
 
     /**
      * Clear the pending scroll restore once the transcript has acted on it. A

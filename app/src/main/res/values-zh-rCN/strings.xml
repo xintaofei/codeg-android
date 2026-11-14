@@ -804,6 +804,14 @@
     <string name="tags_filter_no_tags">还没有标签。可以在会话的菜单中添加。</string>
     <string name="tags_filter_no_matches">没有带这些标签的会话</string>
     <string name="tags_filter_remove">从筛选中移除“%1$s”</string>
+    <string name="message_nav_title">消息导航</string>
+    <string name="message_nav_loading_earlier">正在加载更早的消息…</string>
+    <string name="message_nav_load_earlier">加载更早的消息</string>
+    <string name="message_nav_untitled">用户消息</string>
+    <string name="message_nav_running">进行中</string>
+    <plurals name="message_nav_total">
+        <item quantity="other">共 %d 条</item>
+    </plurals>
     <string name="config_stale_reconnect">重连以应用</string>
     <string name="config_stale_applies_next">新配置将从你的下一条消息开始生效。</string>
     <plurals name="live_runs_count">
