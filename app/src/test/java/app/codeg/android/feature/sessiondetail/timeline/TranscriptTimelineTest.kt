@@ -7,6 +7,7 @@ import app.codeg.android.core.model.TurnRole
 import app.codeg.android.core.model.TurnUsage
 import app.codeg.android.feature.sessiondetail.LiveSegment
 import app.codeg.android.feature.sessiondetail.LiveTurnError
+import app.codeg.android.feature.sessiondetail.LiveTurnBuilder
 import app.codeg.android.feature.sessiondetail.LiveTurnState
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
 import org.junit.Assert.assertEquals
@@ -315,5 +316,28 @@ class TranscriptTimelineTest {
         )
         assertTrue(nodes.none { it.id.startsWith("a1") })
         assertTrue(nodes.any { it.id.startsWith("live-1") })
+    }
+
+    @Test
+    fun `a note steered into the live reply splits it around the user's message`() {
+        val b = LiveTurnBuilder("live-1")
+        b.appendText("before")
+        b.appendSteer("n1", "also do this")
+        b.appendText("after")
+        val nodes = TranscriptTimeline.withLive(emptyList(), b.snapshot(), agent)
+        val steerAt = nodes.indexOfFirst { it.id == "steer-n1" }
+        assertTrue(nodes[steerAt].content is NodeContent.User)
+        assertTrue(nodes.take(steerAt).all { it.id.startsWith("live-1#") })
+        // The part after takes the id its settled turn will have.
+        assertTrue(nodes.drop(steerAt + 1).all { it.id.startsWith("live-1-1#") })
+    }
+
+    @Test
+    fun `a note steered in with nothing after it yet shows the agent working`() {
+        val b = LiveTurnBuilder("live-1")
+        b.appendText("before")
+        b.appendSteer("n1", "also do this")
+        val nodes = TranscriptTimeline.withLive(emptyList(), b.snapshot(), agent)
+        assertEquals(NodeContent.Thinking, nodes.last().content)
     }
 }

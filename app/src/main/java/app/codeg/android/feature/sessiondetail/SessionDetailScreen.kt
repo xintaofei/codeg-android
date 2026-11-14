@@ -372,7 +372,10 @@ fun SessionDetailScreen(
                 // unreconciled-turn promotion) clear only that flag, and leaving a live note
                 // button on a finished turn is worse than losing it a moment early.
                 val noteChannelLive = ui.noteTurnOpen && ui.isInFlight
-                if (ui.feedbackNotes.isNotEmpty() && noteChannelLive) FeedbackNotesStrip(ui.feedbackNotes)
+                // A note steered into the reply is shown there, as the user's message.
+                val steered = ui.live?.segments.orEmpty().mapNotNullTo(HashSet()) { (it as? LiveSegment.Steer)?.noteId }
+                val stripNotes = ui.feedbackNotes.filterNot { it.id in steered }
+                if (stripNotes.isNotEmpty() && noteChannelLive) FeedbackNotesStrip(stripNotes)
                 if (ui.queue.isNotEmpty()) {
                     QueueStrip(
                         items = ui.queue,

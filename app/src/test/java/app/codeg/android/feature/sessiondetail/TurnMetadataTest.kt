@@ -97,4 +97,20 @@ class TurnMetadataTest {
         val window = app.codeg.android.core.model.TurnWindowState(offset = 0, total = 1, prefixHash = FNV_SEED_HEX)
         assertEquals(extendPrefixFingerprint(FNV_SEED_HEX, listOf(user("u1"))), batchPrefixHash(window, listOf(user("u1"))))
     }
+
+    @Test
+    fun `a steered note splits the reply into the turns the transcript holds`() {
+        val b = LiveTurnBuilder("live-1")
+        b.appendText("first part")
+        assertTrue(b.appendSteer("n1", " also check the tests "))
+        // Once per note.
+        assertTrue(!b.appendSteer("n1", "also check the tests"))
+        b.appendText("second part")
+        val turns = b.snapshotAsMessageTurns()
+        assertEquals(listOf("live-1", "${STEER_TURN_PREFIX}n1", "live-1-1"), turns.map { it.id })
+        assertEquals(listOf(TurnRole.ASSISTANT, TurnRole.USER, TurnRole.ASSISTANT), turns.map { it.role })
+        assertEquals(listOf(ContentBlock.Text("also check the tests")), turns[1].blocks)
+        // A steer isn't a prompt of the batch: the server may not persist it as one.
+        assertEquals(1, promptCount(listOf(user("p1")) + turns))
+    }
 }

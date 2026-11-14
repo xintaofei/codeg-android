@@ -42,7 +42,18 @@ sealed interface LiveSegment {
     data class Tool(val call: LiveToolCallState) : LiveSegment {
         override val key: String get() = "x-${call.id}"
     }
+
+    /**
+     * A note steered into the turn while it ran ([LiveTurnBuilder.appendSteer]): the point
+     * where the agent took it in. Drawn as the user's message, splitting the reply around it.
+     */
+    data class Steer(val noteId: String, val text: String) : LiveSegment {
+        override val key: String get() = "s-$noteId"
+    }
 }
+
+/** Id prefix of the user turn a steered note becomes. See [promptCount]. */
+internal const val STEER_TURN_PREFIX = "steer-"
 
 /**
  * A turn's terminal failure: the line the error card states, plus the server's diagnostic
@@ -79,6 +90,7 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         class Text(val id: String, val text: StringBuilder) : Seg()
         class Thinking(val id: String, val text: StringBuilder) : Seg()
         class Tool(val call: ToolBuilder) : Seg()
+        class Steer(val noteId: String, val text: String, val at: Instant) : Seg()
     }
 
     private class ToolBuilder(
@@ -108,6 +120,18 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         if (delta.isEmpty()) return
         (segments.lastOrNull() as? Seg.Text)?.let { it.text.append(delta); return }
         segments.add(Seg.Text("text-${seq++}", StringBuilder(delta)))
+    }
+
+    /**
+     * Mark where a note was steered into this turn (codeg web 0.44 `STEERING_MESSAGE`): only a
+     * note the server delivered straight into the running turn, which the agent takes in at
+     * this point of its reply. Whatever streams next starts a new part after it. Once per
+     * note; returns whether it was added.
+     */
+    fun appendSteer(noteId: String, text: String): Boolean {
+        if (text.isBlank() || segments.any { it is Seg.Steer && it.noteId == noteId }) return false
+        segments.add(Seg.Steer(noteId, text.trim(), Instant.now()))
+        return true
     }
 
     fun appendThinking(delta: String) {
@@ -289,6 +313,7 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
             when (seg) {
                 is Seg.Text -> LiveSegment.Text(seg.id, seg.text.toString())
                 is Seg.Thinking -> LiveSegment.Thinking(seg.id, seg.text.toString())
+                is Seg.Steer -> LiveSegment.Steer(seg.noteId, seg.text)
                 is Seg.Tool -> LiveSegment.Tool(
                     LiveToolCallState(
                         id = seg.call.id,
@@ -309,9 +334,23 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
         error = error,
     )
 
-    /** Fold this (finished) turn into an immutable assistant [MessageTurn]. */
-    fun snapshotAsMessageTurn(): MessageTurn {
-        val blocks = mutableListOf<ContentBlock>()
+    /**
+     * Fold this (finished) turn into the transcript turns it stands for: one assistant turn,
+     * or — when notes were steered into it — the reply split at each, with the note as the
+     * user turn between, the way the server persists a steer. Parts with nothing to render
+     * are dropped. The first part keeps [id], so a reply never steered keeps its identity.
+     */
+    fun snapshotAsMessageTurns(): List<MessageTurn> {
+        val out = mutableListOf<MessageTurn>()
+        var blocks = mutableListOf<ContentBlock>()
+        var part = 0
+        fun closePart() {
+            if (blocks.isNotEmpty()) {
+                out.add(MessageTurn(if (part == 0) id else "$id-$part", TurnRole.ASSISTANT, blocks, Instant.now()))
+            }
+            part += 1
+            blocks = mutableListOf()
+        }
         for (seg in segments) {
             when (seg) {
                 is Seg.Text -> if (seg.text.toString().isNotBlank()) blocks.add(ContentBlock.Text(seg.text.toString()))
@@ -321,8 +360,18 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
                     val output = seg.call.rawOutput.toString().ifEmpty { seg.call.content }
                     blocks.add(ContentBlock.ToolResult(seg.call.id, output, LiveToolCallState(seg.call.id, "", "", seg.call.status, null, "", null).isError))
                 }
+                is Seg.Steer -> {
+                    closePart()
+                    out.add(MessageTurn("$STEER_TURN_PREFIX${seg.noteId}", TurnRole.USER, listOf(ContentBlock.Text(seg.text)), seg.at))
+                }
             }
         }
-        return MessageTurn(id = id, role = TurnRole.ASSISTANT, blocks = blocks, timestamp = Instant.now())
+        closePart()
+        return out
     }
+
+    /** [snapshotAsMessageTurns] for a reply never steered: its one assistant turn. */
+    fun snapshotAsMessageTurn(): MessageTurn =
+        snapshotAsMessageTurns().firstOrNull { it.role == TurnRole.ASSISTANT }
+            ?: MessageTurn(id = id, role = TurnRole.ASSISTANT, blocks = emptyList(), timestamp = Instant.now())
 }

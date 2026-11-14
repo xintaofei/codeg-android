@@ -25,22 +25,28 @@ import java.time.Instant
 internal fun loadedEnd(window: TurnWindowState?, turns: List<MessageTurn>): Int =
     (window?.offset ?: 0) + turns.size
 
-/** How many prompts (user turns) [turns] holds. */
-internal fun promptCount(turns: List<MessageTurn>): Int = turns.count { it.role == TurnRole.USER }
+/**
+ * How many prompts [turns] holds: user turns, less the ones a steered note became locally.
+ * Those are left out because whether the server persists a steer as a user turn depends on
+ * the agent; counting one it didn't would make a read that holds the batch look short of it.
+ */
+internal fun promptCount(turns: List<MessageTurn>): Int =
+    turns.count { it.role == TurnRole.USER && !it.id.startsWith(STEER_TURN_PREFIX) }
 
 /**
  * The turns a finished round adds to the transcript, in order: its prompts, the reply as it
  * streamed, and — when the round failed — its failure record, shaped the way the server
  * persists one (a system turn of [ContentBlock.TurnError]) so it draws as the same error row.
  *
- * A reply with nothing renderable is left out rather than shown as an empty turn. A cancel
+ * A reply with nothing renderable is left out rather than shown as an empty turn; one that
+ * had notes steered into it is split around them ([LiveTurnBuilder.snapshotAsMessageTurns]). A cancel
  * marker the client wrote itself ([LiveTurnBuilder.cancelledLocally]) is not a failure and
  * isn't kept: the transcript records none.
  */
 internal fun promotedTurns(prompts: List<MessageTurn>, builder: LiveTurnBuilder?): List<MessageTurn> = buildList {
     addAll(prompts)
     if (builder == null || builder.isEmpty) return@buildList
-    builder.snapshotAsMessageTurn().takeIf { it.blocks.isNotEmpty() }?.let(::add)
+    addAll(builder.snapshotAsMessageTurns())
     val error = builder.error?.takeIf { !builder.cancelledLocally } ?: return@buildList
     add(MessageTurn("${builder.id}#failed", TurnRole.SYSTEM, listOf(ContentBlock.TurnError(error.message)), Instant.now()))
 }

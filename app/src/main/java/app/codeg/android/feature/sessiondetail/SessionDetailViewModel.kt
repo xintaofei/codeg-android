@@ -1059,7 +1059,14 @@ class SessionDetailViewModel @Inject constructor(
             }
             // Any client's note, including the echo of one this client just sent — deduped by
             // id against the note the submit call already returned.
-            is AcpEvent.FeedbackSubmitted -> notes.onSubmitted(event.note)
+            is AcpEvent.FeedbackSubmitted -> {
+                notes.onSubmitted(event.note)
+                // A note born delivered went straight into the running turn (native steering):
+                // the agent takes it in here, so the reply splits around it, as the transcript
+                // will show it. A pending note waits for the agent to check; it stays a note.
+                val builder = liveBuilder?.takeIf { it.isStreaming && ownTurnStarted }
+                if (event.note.isDelivered && builder?.appendSteer(event.note.id, event.note.text) == true) emitLiveNow()
+            }
             is AcpEvent.FeedbackConsumed -> notes.onConsumed(event.ids)
             // A new turn — from this client or another. Notes are turn-scoped: the server
             // clears them here, so leaving ours on screen would attach the previous turn's

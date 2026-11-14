@@ -16,6 +16,7 @@ import app.codeg.android.feature.sessiondetail.LiveSegment
 import app.codeg.android.feature.sessiondetail.rendering.ContextCompaction
 import app.codeg.android.feature.sessiondetail.LiveToolCallState
 import app.codeg.android.feature.sessiondetail.LiveTurnState
+import app.codeg.android.feature.sessiondetail.STEER_TURN_PREFIX
 import app.codeg.android.feature.sessiondetail.rendering.MessageRender
 import app.codeg.android.feature.sessiondetail.rendering.RenderPart
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
@@ -282,7 +283,14 @@ object TranscriptTimeline {
         return out
     }
 
-    /** The in-flight reply → plan? + thinking? + grouped parts + error?. */
+    /**
+     * The in-flight reply → plan? + thinking? + grouped parts + error?.
+     *
+     * A note steered into the turn ([LiveSegment.Steer]) splits it the way the transcript
+     * will: the reply so far, the note as the user's message, then the reply that follows.
+     * Each part after the first takes the id its settled turn will have (`<id>-<n>`, see
+     * [LiveTurnBuilder.snapshotAsMessageTurns]).
+     */
     private fun liveNodes(live: LiveTurnState, agent: AgentType): List<TimelineNode> {
         val out = mutableListOf<TimelineNode>()
         if (live.livePlan.isNotEmpty()) {
@@ -291,10 +299,38 @@ object TranscriptTimeline {
         if (live.isEmpty && live.isStreaming) {
             out.add(TimelineNode("${live.id}#thinking", NodeContent.Thinking, agent))
         }
-        // Same grouping as the persisted path: consecutive non-task tools collapse.
-        // Live text is parsed uncached (each flush is a new key → cache churn).
-        val parts = MessageRender.groupConsecutiveTools(liveParts(live))
-        val partNodes = parts.flatMapIndexed { idx, part -> nodesFor(part, live.id, idx, agent, cached = false) }.toMutableList()
+        val chunks = mutableListOf(mutableListOf<LiveSegment>())
+        val steers = mutableListOf<LiveSegment.Steer>()
+        for (seg in live.segments) {
+            if (seg is LiveSegment.Steer) {
+                steers += seg
+                chunks += mutableListOf<LiveSegment>()
+            } else {
+                chunks.last() += seg
+            }
+        }
+        val partNodes = mutableListOf<TimelineNode>()
+        chunks.forEachIndexed { k, chunk ->
+            if (k > 0) {
+                val steer = steers[k - 1]
+                val turn = MessageTurn(
+                    "$STEER_TURN_PREFIX${steer.noteId}",
+                    TurnRole.USER,
+                    listOf(ContentBlock.Text(steer.text)),
+                    java.time.Instant.EPOCH,
+                )
+                partNodes.add(TimelineNode(turn.id, NodeContent.User(turn), agent, startsGroup = true))
+            }
+            // Same grouping as the persisted path: consecutive non-task tools collapse.
+            // Live text is parsed uncached (each flush is a new key → cache churn).
+            val ownerId = if (k == 0) live.id else "${live.id}-$k"
+            val parts = MessageRender.groupConsecutiveTools(liveParts(chunk))
+            partNodes.addAll(parts.flatMapIndexed { idx, part -> nodesFor(part, ownerId, idx, agent, cached = false) })
+        }
+        // A note just steered in, with nothing streamed after it yet: the agent is working on it.
+        if (live.isStreaming && live.segments.lastOrNull() is LiveSegment.Steer) {
+            partNodes.add(TimelineNode("${live.id}-${chunks.lastIndex}#thinking", NodeContent.Thinking, agent))
+        }
         // Caret only when the *final* block is prose — a trailing tool/group shows its
         // own pulsing marker instead (matches iOS `adaptLive` streaming-on-last-segment).
         if (live.isStreaming && partNodes.isNotEmpty()) {
@@ -312,9 +348,9 @@ object TranscriptTimeline {
         return out
     }
 
-    private fun liveParts(live: LiveTurnState): List<RenderPart> {
+    private fun liveParts(segments: List<LiveSegment>): List<RenderPart> {
         val parts = mutableListOf<RenderPart>()
-        for (seg in live.segments) {
+        for (seg in segments) {
             when (seg) {
                 is LiveSegment.Text -> if (seg.text.isNotBlank()) parts.add(RenderPart.Text(seg.text))
                 is LiveSegment.Thinking -> if (seg.text.isNotBlank()) parts.add(RenderPart.Reasoning(seg.text))
@@ -327,6 +363,8 @@ object TranscriptTimeline {
                 } else {
                     parts.add(RenderPart.Tool(seg.call.toVM()))
                 }
+                // Split on by [liveNodes]; never reaches a part list.
+                is LiveSegment.Steer -> Unit
             }
         }
         return parts
