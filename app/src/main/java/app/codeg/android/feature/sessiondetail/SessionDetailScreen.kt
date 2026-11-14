@@ -462,7 +462,24 @@ fun SessionDetailScreen(
                         onRemove = viewModel::removeQueued,
                     )
                 }
-                ComposeBar(
+                ui.configStale?.takeIf { !it.dismissed }?.let { stale ->
+                    ConfigStaleBanner(
+                        stale = stale,
+                        turnRunning = ui.isInFlight,
+                        onReconnect = viewModel::reapplyConfig,
+                        onDismiss = viewModel::dismissConfigStale,
+                    )
+                }
+                // A session that couldn't load takes the composer's place: a send would only
+                // fail the same way.
+                val loadError = ui.sessionLoadError
+                if (loadError != null) {
+                    SessionLoadErrorBanner(
+                        error = loadError,
+                        onReload = viewModel::reloadAfterLoadFailure,
+                        onNewSession = loadError.folderId?.let { id -> { onOpenSession(id) } },
+                    )
+                } else ComposeBar(
                     text = draft,
                     onTextChange = { draft = it },
                     onSend = {

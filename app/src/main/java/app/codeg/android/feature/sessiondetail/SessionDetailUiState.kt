@@ -79,6 +79,11 @@ data class SessionDetailUiState(
     val apiRetry: app.codeg.android.core.model.AcpEvent.ApiRetry? = null,
     /** The connection's AIR session-failure table, watermarks included ([SessionFailures]). */
     val sessionFailures: List<app.codeg.android.core.model.SessionFailureRecord> = emptyList(),
+    /** The running agent is on its launch-time config after a settings save; null when not. */
+    val configStale: ConfigStaleUi? = null,
+    /** `session/load` failed for good: the banner that offers reloading or a new session
+     *  stands where the composer was. */
+    val sessionLoadError: SessionLoadErrorUi? = null,
     /** Steering notes sent during the turn running now, oldest first. Turn-scoped — a new
      *  turn empties this. */
     val feedbackNotes: List<FeedbackNote> = emptyList(),
@@ -196,3 +201,14 @@ data class PendingPlanApprovalUi(
      *  empty-state notice rather than hiding, since the turn is blocked either way. */
     val planMarkdown: String,
 )
+
+/** A "restart to apply" drift. [kind]: `agent_config` or `model_provider`. Dismissal lasts
+ *  until a fresh drift. */
+data class ConfigStaleUi(val kind: String?, val dismissed: Boolean = false)
+
+/**
+ * A session that couldn't be loaded, localized by its code. [command] is the exact shell line
+ * that undoes it, when there is one (`codex unarchive <id>`); [folderId] is where a new session
+ * opens instead.
+ */
+data class SessionLoadErrorUi(val message: String, val command: String?, val folderId: Int?)

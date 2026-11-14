@@ -1013,7 +1013,10 @@ class SessionDetailViewModel @Inject constructor(
             }
             is AcpEvent.ConversationLinked -> adoptLinkedConversation(event.conversationId)
             is AcpEvent.StatusChanged -> when (event.status) {
-                ConnectionStatus.ERROR -> failLive(appContext.getString(R.string.live_agent_connection_errored))
+                // A session that failed to load says why, not just that the connection died.
+                ConnectionStatus.ERROR -> failLive(
+                    _ui.value.sessionLoadError?.message ?: appContext.getString(R.string.live_agent_connection_errored),
+                )
                 ConnectionStatus.PROMPTING -> {
                     // Self-heal the note channel. The read in `attemptSend` can beat a fresh
                     // agent's `initialize`, and would then have latched "no channel" for the
@@ -1149,8 +1152,78 @@ class SessionDetailViewModel @Inject constructor(
             }
             is AcpEvent.ApiRetry -> _ui.update { it.copy(apiRetry = event) }
             is AcpEvent.SessionFailure -> onSessionFailure(event.record)
+            // Reporting only: the saved preference keeps what was asked for, since a refusal is
+            // often about this session rather than the pick (grok's switch works in a new one).
+            is AcpEvent.ConfigOptionRejected -> tell(
+                appContext.getString(R.string.config_option_adjusted, agent.displayName, event.optionName, event.actual, event.requested),
+            )
+            is AcpEvent.SessionNotice -> SessionNotices.sessionNotice(event.severity, event.title, event.description)
+                ?.let { tell(appContext.getString(R.string.failure_notice_title, agent.displayName, it.title), it.description) }
+            is AcpEvent.PluginLoadFailures -> SessionNotices.pluginFailures(event.failures)?.let {
+                tell(appContext.resources.getQuantityString(R.plurals.plugin_load_failed_title, it.count, agent.displayName, it.count), it.description)
+            }
+            // A fresh drift shows again even after a dismissed one; a reverted one clears.
+            is AcpEvent.SessionConfigStale -> _ui.update { it.copy(configStale = if (event.stale) ConfigStaleUi(event.kind) else null) }
+            is AcpEvent.SessionLoadFailed -> _ui.update {
+                it.copy(
+                    sessionLoadError = SessionLoadErrorUi(
+                        message = sessionLoadMessage(event),
+                        command = SessionNotices.recoveryCommand(event.code, agent, event.sessionId),
+                        folderId = folder?.id,
+                    ),
+                )
+            }
             else -> Unit
         }
+    }
+
+    /** One advisory, told once: its headline, and what follows it below. */
+    private fun tell(headline: String, more: String? = null) {
+        _ui.update { it.copy(notice = if (more.isNullOrBlank()) headline else "$headline\n$more") }
+    }
+
+    /** A `session_load_failed`, localized by its code; an unknown code says the agent's own words. */
+    private fun sessionLoadMessage(event: AcpEvent.SessionLoadFailed): String {
+        val name = agent.displayName
+        return when (event.code) {
+            "resource_not_found" -> appContext.getString(R.string.session_load_not_found, name)
+            "session_unavailable" -> appContext.getString(R.string.session_load_unavailable, name)
+            "session_busy" -> appContext.getString(R.string.session_load_busy, name)
+            "provider_mismatch" -> appContext.getString(R.string.session_load_provider_mismatch, name, event.message)
+            "session_archived" -> SessionNotices.recoveryCommand(event.code, agent, event.sessionId)
+                ?.let { appContext.getString(R.string.session_load_archived, name, it) }
+                ?: event.message
+            else -> event.message
+        }.ifBlank { appContext.getString(R.string.live_agent_connection_errored) }
+    }
+
+    /**
+     * Restart the agent so a settings change made after it was spawned applies: end this
+     * connection; the next message connects afresh and resumes the conversation. Not mid-turn —
+     * that would kill the turn with the process.
+     */
+    fun reapplyConfig() {
+        if (_ui.value.isInFlight) return
+        val c = client ?: return
+        val conn = connectionId
+        _ui.update { it.copy(configStale = null) }
+        if (conn == null) return
+        // Off the stream first, so the connection's own teardown doesn't read as a failure here.
+        forgetConnection()
+        viewModelScope.launch {
+            runCatching { c.disconnect(conn) }
+                .onSuccess { _ui.update { it.copy(notice = appContext.getString(R.string.config_stale_applies_next)) } }
+                .onFailure { e -> if (e is kotlinx.coroutines.CancellationException) throw e else _ui.update { it.copy(notice = e.displayMessage()) } }
+        }
+    }
+
+    fun dismissConfigStale() = _ui.update { s -> s.configStale?.let { s.copy(configStale = it.copy(dismissed = true)) } ?: s }
+
+    /** Try the session again after a load failure: drop the dead connection and read it anew. */
+    fun reloadAfterLoadFailure() {
+        _ui.update { it.copy(sessionLoadError = null) }
+        forgetConnection()
+        load()
     }
 
     /**
@@ -1559,10 +1632,16 @@ class SessionDetailViewModel @Inject constructor(
         _ui.update {
             val approvals = ToolApprovals.merge(it.toolApprovals, snapshot.toolApprovals)
             val failures = SessionFailures.merge(it.sessionFailures, snapshot.sessionFailures)
-            if (approvals === it.toolApprovals && failures === it.sessionFailures) {
+            // The drift the one-shot event announced; a dismissal holds while it's the same one.
+            val stale = if (snapshot.configStale) {
+                it.configStale?.takeIf { s -> s.kind == snapshot.configStaleKind } ?: ConfigStaleUi(snapshot.configStaleKind)
+            } else {
+                null
+            }
+            if (approvals === it.toolApprovals && failures === it.sessionFailures && stale == it.configStale) {
                 it
             } else {
-                it.copy(toolApprovals = approvals, sessionFailures = failures)
+                it.copy(toolApprovals = approvals, sessionFailures = failures, configStale = stale)
             }
         }
     }

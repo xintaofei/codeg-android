@@ -227,6 +227,43 @@ sealed interface AcpEvent {
     /** A JetBrains AIR typed session-failure upsert (see [SessionFailureRecord]). */
     data class SessionFailure(val record: SessionFailureRecord) : AcpEvent
 
+    /**
+     * The agent settled a `set_config_option` on a value other than the one asked for (pi for a
+     * model that can't reason, grok for a mid-conversation model switch) — which otherwise reads
+     * as the selector springing back for no reason. Labels for the message, raw ids beside them.
+     * Arrives just before the `session_config_options` carrying what the agent adopted.
+     */
+    data class ConfigOptionRejected(
+        val configId: String,
+        val optionName: String,
+        val requested: String,
+        val actual: String,
+        val requestedValue: String,
+        val actualValue: String,
+    ) : AcpEvent
+
+    /** One ACP session notice — advisory text, adapter-authored English, shown once. */
+    data class SessionNotice(val severity: String, val title: String, val description: String?) : AcpEvent
+
+    /** The plugins Claude Code couldn't load (re-sent only when the list changes). */
+    data class PluginLoadFailures(val failures: List<PluginLoadFailure>) : AcpEvent
+
+    /**
+     * The agent's settings changed after this connection was spawned, so it still runs on its
+     * launch-time config ([stale]); false when the change was reverted. [kind]: `agent_config`
+     * or `model_provider`, for the wording.
+     */
+    data class SessionConfigStale(val stale: Boolean, val kind: String?) : AcpEvent
+
+    /**
+     * `session/load` failed in a way codeg won't paper over with a new session: the agent has
+     * no record of [sessionId] (`resource_not_found`), the session died
+     * (`session_unavailable`), another client holds it (`session_busy`), it belongs to another
+     * model provider (`provider_mismatch`, [message] is then codex's sentence), or it was
+     * archived (`session_archived`). The connection errors out right after.
+     */
+    data class SessionLoadFailed(val sessionId: String, val message: String, val code: String) : AcpEvent
+
     data class Unknown(val type: String) : AcpEvent
 
     companion object {
@@ -367,6 +404,37 @@ sealed interface AcpEvent {
                         )
                     }
                     ?: Unknown(type)
+                "config_option_rejected" -> ConfigOptionRejected(
+                    configId = obj.stringOrNull("config_id").orEmpty(),
+                    optionName = obj.stringOrNull("option_name").orEmpty(),
+                    requested = obj.stringOrNull("requested").orEmpty(),
+                    actual = obj.stringOrNull("actual").orEmpty(),
+                    requestedValue = obj.stringOrNull("requested_value").orEmpty(),
+                    actualValue = obj.stringOrNull("actual_value").orEmpty(),
+                )
+                "session_notice" -> obj.objectOrNull("notice")
+                    ?.let { n ->
+                        SessionNotice(
+                            severity = n.stringOrNull("severity") ?: "info",
+                            title = n.stringOrNull("title").orEmpty(),
+                            description = n.stringOrNull("description"),
+                        )
+                    }
+                    ?: Unknown(type)
+                "plugin_load_failures" -> PluginLoadFailures(
+                    obj.arrayOrNull("failures")
+                        ?.mapNotNull { decodeOrNull(json, it, PluginLoadFailure.serializer()) }
+                        ?: emptyList(),
+                )
+                "session_config_stale" -> SessionConfigStale(
+                    stale = obj.boolOrNull("stale") ?: false,
+                    kind = obj.stringOrNull("kind"),
+                )
+                "session_load_failed" -> SessionLoadFailed(
+                    sessionId = obj.stringOrNull("session_id").orEmpty(),
+                    message = obj.stringOrNull("message").orEmpty(),
+                    code = obj.stringOrNull("code").orEmpty(),
+                )
                 "session_failure" -> decodeOrNull(json, obj["record"], SessionFailureRecord.serializer())
                     ?.takeIf { it.id.isNotEmpty() && it.revision >= 1 }
                     ?.let(::SessionFailure)
@@ -534,6 +602,10 @@ data class LiveSessionSnapshot(
     /** The AIR session-failure table, resolved entries and revision watermarks included —
      *  seeded into the client's own by the same monotonic merge live events take. */
     val sessionFailures: List<SessionFailureRecord> = emptyList(),
+    /** The running session is on stale (launch-time) config after a later settings save, and
+     *  which surface drifted — the one-shot event won't replay for a late attach. */
+    val configStale: Boolean = false,
+    val configStaleKind: String? = null,
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -585,6 +657,8 @@ data class LiveSessionSnapshot(
                 sessionFailures = obj.arrayOrNull("session_failures")
                     ?.mapNotNull { AcpEvent.decodeOrNull(json, it, SessionFailureRecord.serializer()) }
                     ?: emptyList(),
+                configStale = obj.boolOrNull("config_stale") ?: false,
+                configStaleKind = obj.stringOrNull("config_stale_kind"),
             )
 
         private fun JsonObject.intOrNull(key: String): Int? =

@@ -293,6 +293,12 @@ class CodegClient(
         send("acp_cancel", encode(ConnectionIdBody(connectionId)))
     }
 
+    /** End a connection and its agent process. The conversation stays; the next prompt
+     *  connects afresh and resumes it (how a settings change made after spawn applies). */
+    suspend fun disconnect(connectionId: String) {
+        send("acp_disconnect", encode(ConnectionIdBody(connectionId)))
+    }
+
     /** Resolve a `permission_request` (or ExitPlanMode) by picking an option. */
     suspend fun respondPermission(connectionId: String, requestId: String, optionId: String) {
         send("acp_respond_permission", encode(RespondPermissionBody(connectionId, requestId, optionId)))

@@ -699,6 +699,25 @@
     <string name="failure_recovered">Recovered</string>
     <string name="failure_more_incidents">+%1$d more</string>
     <string name="failure_notice_title">%1$s: %2$s</string>
+    <string name="config_option_adjusted">%1$s set %2$s to %3$s instead of %4$s</string>
+    <plurals name="plugin_load_failed_title">
+        <item quantity="one">%1$s couldn\'t load %2$d plugin</item>
+        <item quantity="other">%1$s couldn\'t load %2$d plugins</item>
+    </plurals>
+    <string name="session_load_not_found">%1$s session failed to load. Reload to retry, or start a new conversation.</string>
+    <string name="session_load_unavailable">%1$s couldn\'t restore this session — it may have ended or the agent stopped. Reload to retry, or start a new conversation.</string>
+    <string name="session_load_busy">This session is open elsewhere. If another %1$s client (the app, the CLI or an IDE extension) has it, close it there or quit that client, then reload. If you just forked it, reload in about a minute.</string>
+    <string name="session_load_provider_mismatch">This conversation was started with a different model provider than the one %1$s uses now, and %1$s only continues a conversation on its own provider. Switch back to that provider in %1$s\'s settings and reload, or start a new conversation. (%2$s)</string>
+    <string name="session_load_archived">The previous session was archived on the %1$s side. Run %2$s in a terminal to restore it and reload, or start a new conversation.</string>
+    <string name="session_load_reload">Reload</string>
+    <string name="session_load_new">New conversation</string>
+    <string name="session_load_copy_command">Copy command</string>
+    <string name="session_load_command_copied">Copied</string>
+    <string name="config_stale_agent_title">Agent settings updated</string>
+    <string name="config_stale_provider_title">Model provider updated</string>
+    <string name="config_stale_description">This session is still using its previous configuration. Reconnect to apply — your conversation history is kept.</string>
+    <string name="config_stale_reconnect">Reconnect to apply</string>
+    <string name="config_stale_applies_next">The new configuration applies from your next message.</string>
     <string name="activity_expand">Show the steps</string>
     <string name="activity_collapse">Collapse</string>
 

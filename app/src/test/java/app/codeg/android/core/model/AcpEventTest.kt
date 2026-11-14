@@ -470,3 +470,43 @@ class AcpEventRetryTest {
         assertTrue(event("""{"type":"session_failure","record":{"revision":1}}""") is AcpEvent.Unknown)
     }
 }
+
+/** The 0.44 advisories and the session-load failure. */
+class AcpEventNoticeTest {
+
+    private val json: Json = CodegJson.response
+
+    private fun event(raw: String): AcpEvent = AcpEvent.fromWire(json.parseToJsonElement(raw).jsonObject, json)
+
+    @Test
+    fun `advisories decode`() {
+        assertEquals(
+            AcpEvent.ConfigOptionRejected("thought_level", "Thinking", "High", "Off", "high", "off"),
+            event("""{"type":"config_option_rejected","config_id":"thought_level","option_name":"Thinking","requested":"High","actual":"Off","requested_value":"high","actual_value":"off"}"""),
+        )
+        assertEquals(
+            AcpEvent.SessionNotice("warning", "Model fallback", null),
+            event("""{"type":"session_notice","notice":{"severity":"warning","title":"Model fallback"}}"""),
+        )
+        val plugins = event("""{"type":"plugin_load_failures","failures":[{"plugin":"a@m","kind":"generic-error","message":"boom"},{"bad":1}]}""") as AcpEvent.PluginLoadFailures
+        assertEquals(listOf("a@m"), plugins.failures.map { it.plugin })
+        assertEquals(AcpEvent.SessionConfigStale(true, "model_provider"), event("""{"type":"session_config_stale","stale":true,"kind":"model_provider"}"""))
+        assertEquals(AcpEvent.SessionConfigStale(false, null), event("""{"type":"session_config_stale","stale":false}"""))
+    }
+
+    @Test
+    fun `a session load failure carries its code`() {
+        assertEquals(
+            AcpEvent.SessionLoadFailed("s-1", "Resource not found", "resource_not_found"),
+            event("""{"type":"session_load_failed","session_id":"s-1","message":"Resource not found","code":"resource_not_found"}"""),
+        )
+    }
+
+    @Test
+    fun `the snapshot carries a stale config`() {
+        val snap = LiveSessionSnapshot.fromWire(json.parseToJsonElement("""{"config_stale":true,"config_stale_kind":"agent_config"}""").jsonObject, json)
+        assertTrue(snap.configStale)
+        assertEquals("agent_config", snap.configStaleKind)
+        assertFalse(LiveSessionSnapshot.fromWire(json.parseToJsonElement("{}").jsonObject, json).configStale)
+    }
+}

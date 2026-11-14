@@ -30,3 +30,16 @@ data class SessionFailureRecord(
      *  Client-local, never on the wire. */
     @Transient val dismissed: Boolean = false,
 )
+
+/**
+ * One plugin Claude Code could not load (Rust `PluginLoadFailure`, the CLI's `plugin_errors`
+ * entry): [plugin] is `name@marketplace`, or a positional `inline[N]` / `synced[N]` tag, which
+ * [path] then names better. [kind] is the CLI's open category; [message] its own English.
+ */
+@Serializable
+data class PluginLoadFailure(
+    val plugin: String,
+    val kind: String = "",
+    val message: String = "",
+    val path: String? = null,
+)
