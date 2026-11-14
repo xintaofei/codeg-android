@@ -49,7 +49,7 @@ import app.codeg.android.core.network.isFeedbackDisabled
 import app.codeg.android.core.network.isNoActiveTurn
 import app.codeg.android.core.network.isStaleConnection
 import app.codeg.android.feature.sessiondetail.interactive.ParsedPermission
-import app.codeg.android.feature.sessiondetail.timeline.dropTrailingAssistantRun
+import app.codeg.android.feature.sessiondetail.timeline.hideInFlightReply
 import app.codeg.android.feature.sessiondetail.timeline.endsRound
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -325,6 +325,7 @@ class SessionDetailViewModel @Inject constructor(
                             summary = detail.summary,
                             turns = detail.turns,
                             window = detail.window,
+                            inFlightUserTurnId = detail.inFlightUserTurnId,
                             sessionStats = detail.sessionStats,
                             agent = detail.summary.agentType,
                             folderName = folder?.let { f -> FolderVisibility.displayName(f, allFolders) },
@@ -1442,6 +1443,7 @@ class SessionDetailViewModel @Inject constructor(
                     it.copy(
                         turns = d.turns,
                         window = d.window,
+                        inFlightUserTurnId = d.inFlightUserTurnId,
                         sessionStats = d.sessionStats ?: it.sessionStats,
                         summary = d.summary,
                     )
@@ -1771,6 +1773,7 @@ class SessionDetailViewModel @Inject constructor(
                         it.copy(
                             turns = detail.turns,
                             window = detail.window,
+                            inFlightUserTurnId = detail.inFlightUserTurnId,
                             sessionStats = detail.sessionStats ?: it.sessionStats,
                             summary = detail.summary,
                         )
@@ -1794,6 +1797,7 @@ class SessionDetailViewModel @Inject constructor(
                         it.copy(
                             turns = detail.turns,
                             window = detail.window,
+                            inFlightUserTurnId = detail.inFlightUserTurnId,
                             sessionStats = detail.sessionStats ?: it.sessionStats,
                             summary = detail.summary,
                             pendingUserTurns = emptyList(),
@@ -1825,7 +1829,11 @@ class SessionDetailViewModel @Inject constructor(
         _ui.update { state ->
             // On a reattach-owned reply, the tail of `turns` is the server's partial copy
             // of the same reply — drop it so folding the live turn doesn't double it.
-            val base = if (state.liveFromReattach) state.turns.dropTrailingAssistantRun() else state.turns
+            val base = if (state.liveFromReattach) {
+                state.turns.hideInFlightReply(state.inFlightUserTurnId)
+            } else {
+                state.turns
+            }
             val folded = buildList {
                 addAll(base)
                 addAll(state.pendingUserTurns)
@@ -1840,6 +1848,9 @@ class SessionDetailViewModel @Inject constructor(
             }
             state.copy(
                 turns = folded,
+                // The round is over as far as this client knows; nothing in `folded` is
+                // still running.
+                inFlightUserTurnId = null,
                 pendingUserTurns = emptyList(),
                 live = null,
                 liveFromReattach = false,
@@ -3087,6 +3098,10 @@ data class SessionDetailUiState(
     val live: LiveTurnState? = null,
     /** The live turn was rebuilt from a reattach snapshot (owns the in-flight reply). */
     val liveFromReattach: Boolean = false,
+    /** The server's `in_flight_user_turn_id` from the last adopted detail: the prompt of the
+     *  round still running, if any. Scopes which persisted turns are that round's (hidden
+     *  behind a reattached live reply; their result-less tools still running). */
+    val inFlightUserTurnId: String? = null,
     val sessionStats: SessionStats? = null,
     val agent: AgentType = AgentType.CLAUDE_CODE,
     val isInFlight: Boolean = false,

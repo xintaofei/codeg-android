@@ -8,6 +8,7 @@ import app.codeg.android.core.model.TurnUsage
 import app.codeg.android.feature.sessiondetail.LiveSegment
 import app.codeg.android.feature.sessiondetail.LiveTurnError
 import app.codeg.android.feature.sessiondetail.LiveTurnState
+import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -236,5 +237,69 @@ class TranscriptTimelineTest {
                 listOf(user("u1", "hi"), MessageTurn("s1", TurnRole.SYSTEM, listOf(ContentBlock.Text("note")), Instant.EPOCH)),
             ),
         )
+    }
+
+    private fun toolStates(nodes: List<TimelineNode>) =
+        nodes.flatMap {
+            when (val c = it.content) {
+                is NodeContent.Tool -> listOf(c.vm)
+                is NodeContent.ToolGroup -> c.items
+                else -> emptyList()
+            }
+        }.associate { it.id to it.state }
+
+    @Test
+    fun `a persisted tool without a result is settled history, not running`() {
+        // An earlier round that was interrupted left a call with no result. That round
+        // ended, so the call must not spin forever.
+        val turns = listOf(
+            user("u1", "hi"),
+            assistant("a1", listOf(ContentBlock.ToolUse("t1", "Bash", """{"command":"sleep 99"}"""))),
+        )
+        val states = toolStates(TranscriptTimeline.build(turns, emptyList(), null, agent))
+        assertEquals(mapOf("t1" to ToolCallState.DONE), states)
+    }
+
+    @Test
+    fun `only the in-flight round's result-less tools run`() {
+        val turns = listOf(
+            user("u1", "first"),
+            assistant("a1", listOf(ContentBlock.ToolUse("old", "Bash", """{"command":"a"}"""))),
+            user("u2", "second"),
+            assistant(
+                "a2",
+                listOf(
+                    ContentBlock.ToolUse("done", "Bash", """{"command":"b"}"""),
+                    ContentBlock.ToolResult("done", "ok", false),
+                    ContentBlock.ToolUse("live", "Bash", """{"command":"c"}"""),
+                ),
+            ),
+        )
+        val states = toolStates(TranscriptTimeline.build(turns, emptyList(), null, agent, inFlightUserTurnId = "u2"))
+        assertEquals(ToolCallState.DONE, states["old"])
+        assertEquals(ToolCallState.DONE, states["done"])
+        assertEquals(ToolCallState.RUNNING, states["live"])
+    }
+
+    @Test
+    fun `the in-flight reply is hidden from its prompt on, past mid-turn user messages`() {
+        // The round runs past its prompt: a mid-turn user message, then more assistant turns.
+        val turns = listOf(
+            user("u1", "earlier"),
+            assistant("a0", listOf(ContentBlock.Text("earlier reply"))),
+            user("u2", "prompt"),
+            assistant("a1", listOf(ContentBlock.Text("partial one"))),
+            user("u3", "steer"),
+            assistant("a2", listOf(ContentBlock.Text("partial two"))),
+        )
+        assertEquals(
+            listOf("u1", "a0", "u2", "u3"),
+            turns.hideInFlightReply("u2").map { it.id },
+        )
+        // Only the trailing run would have been hidden before, leaving "partial one" doubled.
+        assertEquals(listOf("u1", "a0", "u2", "a1", "u3"), turns.dropTrailingAssistantRun().map { it.id })
+        // An id this window doesn't contain falls back to the trailing run.
+        assertEquals(turns.dropTrailingAssistantRun(), turns.hideInFlightReply("gone"))
+        assertEquals(turns.dropTrailingAssistantRun(), turns.hideInFlightReply(null))
     }
 }

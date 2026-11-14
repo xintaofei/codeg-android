@@ -136,7 +136,12 @@ sealed interface RenderPart {
 /** Adapts persisted [MessageTurn]s into `[RenderPart]`. Port of iOS `MessageRender`. */
 object MessageRender {
 
-    fun adaptTurn(turn: MessageTurn): List<RenderPart> {
+    /**
+     * [runningToolIds] are the calls the server affirms are still running (the in-flight
+     * round's, see `inFlightToolCallIds`). Any other `tool_use` without a result is settled
+     * history: the round it belonged to has ended.
+     */
+    fun adaptTurn(turn: MessageTurn, runningToolIds: Set<String> = emptySet()): List<RenderPart> {
         val blocks = turn.blocks
         val consumed = mutableSetOf<Int>()
         val parts = mutableListOf<RenderPart>()
@@ -164,7 +169,9 @@ object MessageRender {
                         }
                     }
                     val state = when {
-                        resultIdx == null -> ToolCallState.RUNNING
+                        resultIdx == null ->
+                            if (block.id != null && block.id in runningToolIds) ToolCallState.RUNNING
+                            else ToolCallState.DONE
                         isErr -> ToolCallState.ERROR
                         else -> ToolCallState.DONE
                     }

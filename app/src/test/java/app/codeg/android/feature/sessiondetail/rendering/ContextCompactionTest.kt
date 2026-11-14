@@ -67,15 +67,18 @@ class ContextCompactionTest {
     }
 
     @Test
-    fun `a compaction with no result yet renders as running`() {
+    fun `a compaction with no result renders as running only while its round is in flight`() {
         val turn = MessageTurn(
             id = "turn-2",
             role = TurnRole.ASSISTANT,
             blocks = listOf(ContentBlock.ToolUse("t1", "Context compacting", null, meta("""{"contextCompaction":true}"""))),
             timestamp = Instant.EPOCH,
         )
-        val part = MessageRender.adaptTurn(turn).single() as RenderPart.Compaction
-        assertTrue(part.running)
-        assertNull(part.before)
+        val running = MessageRender.adaptTurn(turn, runningToolIds = setOf("t1")).single() as RenderPart.Compaction
+        assertTrue(running.running)
+        assertNull(running.before)
+        // In settled history a missing result means the round ended, not that it still runs.
+        val settled = MessageRender.adaptTurn(turn).single() as RenderPart.Compaction
+        assertFalse(settled.running)
     }
 }

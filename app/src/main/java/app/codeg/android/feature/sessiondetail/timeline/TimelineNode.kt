@@ -126,12 +126,55 @@ internal fun endsRound(turns: List<MessageTurn>): Boolean {
 }
 
 /** Drop the trailing run of assistant turns (those after the last non-assistant turn).
- *  On reattach the live turn rebuilt from the snapshot owns the in-flight reply, so the
- *  partial copy the server has persisted at the tail must be hidden to avoid doubling it. */
+ *  The fallback for [hideInFlightReply] when the server names no in-flight prompt. */
 internal fun List<MessageTurn>.dropTrailingAssistantRun(): List<MessageTurn> {
     var end = size
     while (end > 0 && this[end - 1].role == TurnRole.ASSISTANT) end--
     return if (end == size) this else subList(0, end)
+}
+
+/** Index of the in-flight round's prompt ([inFlightUserTurnId]) in these turns, or -1 when
+ *  none is named or this window doesn't contain it. */
+internal fun List<MessageTurn>.inFlightRoundStart(inFlightUserTurnId: String?): Int =
+    if (inFlightUserTurnId == null) -1
+    else indexOfFirst { it.role == TurnRole.USER && it.id == inFlightUserTurnId }
+
+/**
+ * Hide the persisted partial reply of the round that is still running. On reattach the
+ * live turn rebuilt from the snapshot owns that reply, so the copy the server persists
+ * meanwhile must not render too.
+ *
+ * The server names the round by its prompt (`in_flight_user_turn_id`, which since 0.4x is
+ * the round's EARLIEST matching user turn), and the round can run past that prompt with
+ * mid-turn user messages and several assistant turns. So every assistant turn after it is
+ * hidden; the user/system turns stay. Without that id, fall back to the trailing assistant
+ * run. Mirrors the web's `visiblePersistedTurns` (`conversation-runtime-store.ts`).
+ */
+internal fun List<MessageTurn>.hideInFlightReply(inFlightUserTurnId: String?): List<MessageTurn> {
+    val start = inFlightRoundStart(inFlightUserTurnId)
+    if (start < 0) return dropTrailingAssistantRun()
+    return filterIndexed { i, turn -> i <= start || turn.role != TurnRole.ASSISTANT }
+}
+
+/**
+ * Tool calls of the round that is STILL RUNNING: a `tool_use` with no `tool_result` in an
+ * assistant turn after the in-flight prompt. Anywhere else a missing result is settled
+ * history (the round ended), never "running", or a call orphaned by an interrupted round
+ * would spin forever. Port of the web's `collectInFlightPersistedToolCalls`.
+ */
+internal fun List<MessageTurn>.inFlightToolCallIds(inFlightUserTurnId: String?): Set<String> {
+    val start = inFlightRoundStart(inFlightUserTurnId)
+    if (start < 0) return emptySet()
+    val out = mutableSetOf<String>()
+    for (i in (start + 1) until size) {
+        val turn = this[i]
+        if (turn.role != TurnRole.ASSISTANT) continue
+        val settled = turn.blocks.mapNotNullTo(mutableSetOf()) { (it as? ContentBlock.ToolResult)?.id }
+        turn.blocks.forEach { b ->
+            if (b is ContentBlock.ToolUse && b.id != null && b.id !in settled) out.add(b.id)
+        }
+    }
+    return out
 }
 
 /**
@@ -148,16 +191,17 @@ object TranscriptTimeline {
         live: LiveTurnState?,
         agent: AgentType,
         hideTrailingAssistantReply: Boolean = false,
+        inFlightUserTurnId: String? = null,
     ): List<TimelineNode> =
-        withLive(buildPersisted(turns, pending, agent, hideTrailingAssistantReply), live, agent)
+        withLive(buildPersisted(turns, pending, agent, hideTrailingAssistantReply, inFlightUserTurnId), live, agent)
 
     /**
      * The persisted + optimistic-pending nodes, with the rail NOT yet terminated.
      * Memoize this (it re-merges/adapts every turn) separately from [withLive] so the
      * ~50ms live stream only re-runs the cheap live append, not the whole transcript.
      *
-     * [hideTrailingAssistantReply] drops the trailing run of persisted assistant
-     * turns — used on reattach, where the live turn rebuilt from the snapshot is the
+     * [hideTrailingAssistantReply] drops the in-flight round's persisted assistant
+     * turns ([hideInFlightReply], keyed by [inFlightUserTurnId]) — used on reattach, where the live turn rebuilt from the snapshot is the
      * authoritative in-flight reply while the agent concurrently persists a partial
      * copy into [turns]; showing both would double the reply. Port of the iOS
      * `liveOwnsInFlightReply` de-dup.
@@ -167,8 +211,10 @@ object TranscriptTimeline {
         pending: List<MessageTurn>,
         agent: AgentType,
         hideTrailingAssistantReply: Boolean = false,
+        inFlightUserTurnId: String? = null,
     ): List<TimelineNode> {
-        val source = if (hideTrailingAssistantReply) turns.dropTrailingAssistantRun() else turns
+        val source = if (hideTrailingAssistantReply) turns.hideInFlightReply(inFlightUserTurnId) else turns
+        val runningToolIds = source.inFlightToolCallIds(inFlightUserTurnId)
         val nodes = mutableListOf<TimelineNode>()
         var lastUserId: String? = null
         var i = 0
@@ -196,7 +242,7 @@ object TranscriptTimeline {
                     var j = i + 1
                     while (j < source.size && source[j].role == TurnRole.ASSISTANT) j++
                     val merged = merge(source.subList(i, j))
-                    nodes.addAll(assistantNodes(merged, lastUserId, agent))
+                    nodes.addAll(assistantNodes(merged, lastUserId, agent, runningToolIds))
                     i = j
                 }
             }
@@ -220,8 +266,13 @@ object TranscriptTimeline {
 
     /** A merged reply → ordered part nodes + a footer (always emitted, even tool-only).
      *  Text parts split into per-block nodes; persisted text is parse-memoized. */
-    private fun assistantNodes(merged: MessageTurn, questionId: String?, agent: AgentType): List<TimelineNode> {
-        val out = MessageRender.adaptTurn(merged)
+    private fun assistantNodes(
+        merged: MessageTurn,
+        questionId: String?,
+        agent: AgentType,
+        runningToolIds: Set<String>,
+    ): List<TimelineNode> {
+        val out = MessageRender.adaptTurn(merged, runningToolIds)
             .flatMapIndexed { idx, part -> nodesFor(part, merged.id, idx, agent, cached = true) }
             .toMutableList()
         out.add(TimelineNode("${merged.id}#footer", NodeContent.Footer(merged, questionId), agent))
