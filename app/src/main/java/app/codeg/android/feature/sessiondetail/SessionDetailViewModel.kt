@@ -43,6 +43,7 @@ import app.codeg.android.feature.sessiondetail.interactive.PermissionMerge
 import app.codeg.android.feature.sessiondetail.interactive.permissionToolCallId
 import app.codeg.android.feature.sessiondetail.rendering.ToolApprovals
 import app.codeg.android.feature.sessiondetail.live.SessionStream
+import app.codeg.android.feature.sessiondetail.live.REASON_CONNECTION_GONE
 import app.codeg.android.feature.sessiondetail.live.StreamAttachFailed
 import app.codeg.android.feature.sessiondetail.live.asFrameSource
 import app.codeg.android.feature.sessiondetail.timeline.endsRound
@@ -562,7 +563,25 @@ class SessionDetailViewModel @Inject constructor(
                 bounceToQueue(userTurn, QueuedPrompt(UUID.randomUUID().toString(), text, attachments), origin)
             }
         } catch (e: Exception) {
-            discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = e.displayMessage())
+            // A resume whose connection was gone before the stream could attach — twice: the
+            // server ends a connection whose `session/load` failed for good, and announces why
+            // only on that connection's own stream, which nothing could be listening to yet.
+            // Say it the way the banner says a reported one, and keep the draft.
+            val unloaded = e is StreamAttachFailed && e.reason == REASON_CONNECTION_GONE && externalId != null && !createdConversation
+            if (unloaded) {
+                _ui.update {
+                    it.copy(
+                        sessionLoadError = it.sessionLoadError ?: SessionLoadErrorUi(
+                            message = appContext.getString(R.string.session_load_unconfirmed, agent.displayName),
+                            command = null,
+                            folderId = folder?.id,
+                        ),
+                    )
+                }
+                discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = null)
+            } else {
+                discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = e.displayMessage())
+            }
         }
     }
 
@@ -1163,6 +1182,10 @@ class SessionDetailViewModel @Inject constructor(
                 }
                 if (it.apiRetry == null && failures === it.sessionFailures) it else it.copy(apiRetry = null, sessionFailures = failures)
             }
+            // The agent's session for this conversation: what a later connect resumes. A draft
+            // has none to resume (its options connection may be for another agent), so only once
+            // the conversation exists.
+            is AcpEvent.SessionStarted -> if (conversationId != null && event.sessionId.isNotEmpty()) externalId = event.sessionId
             is AcpEvent.ApiRetry -> _ui.update { it.copy(apiRetry = event) }
             is AcpEvent.SessionFailure -> onSessionFailure(event.record)
             // Reporting only: the saved preference keeps what was asked for, since a refusal is
@@ -1300,7 +1323,14 @@ class SessionDetailViewModel @Inject constructor(
         if (conn == null) return
         // Off the stream first, so the connection's own teardown doesn't read as a failure here.
         forgetConnection()
+        val conversation = conversationId
         viewModelScope.launch {
+            // The next connect must resume THIS session, or the conversation would go on in a
+            // new one. A session this screen never learned the id of is read off the row.
+            if (externalId == null && conversation != null) {
+                externalId = runCatching { c.conversationDetail(conversation, TurnWindow.Tail(1)).summary.externalId }
+                    .getOrNull()?.takeIf { it.isNotEmpty() }
+            }
             runCatching { c.disconnect(conn) }
                 .onSuccess { _ui.update { it.copy(notice = appContext.getString(R.string.config_stale_applies_next)) } }
                 .onFailure { e -> if (e is kotlinx.coroutines.CancellationException) throw e else _ui.update { it.copy(notice = e.displayMessage()) } }
@@ -1720,6 +1750,11 @@ class SessionDetailViewModel @Inject constructor(
      * newer one back.
      */
     private fun adoptSnapshotConnectionState(snapshot: LiveSessionSnapshot) {
+        // The session this conversation's connection runs, for a later connect to resume.
+        val linked = snapshot.conversationId == null || snapshot.conversationId == conversationId
+        if (conversationId != null && linked && snapshot.connectionId == connectionId) {
+            snapshot.externalId?.takeIf { it.isNotEmpty() }?.let { externalId = it }
+        }
         // Another connection's tables (a restarted agent) describe work that died with it.
         val sameConnection = snapshot.connectionId != null && snapshot.connectionId == connectionStateOwner
         if (!sameConnection) {
@@ -2122,7 +2157,8 @@ class SessionDetailViewModel @Inject constructor(
         attachments: List<Attachment>,
         createdConversation: Boolean,
         createdConversationId: Int?,
-        notice: String,
+        /** Null when a banner already says what went wrong. */
+        notice: String?,
     ) {
         liveBuilder = null
         closeStream()
@@ -2151,7 +2187,7 @@ class SessionDetailViewModel @Inject constructor(
                 live = null,
                 isInFlight = false,
                 sendStatus = null,
-                notice = notice,
+                notice = notice ?: it.notice,
                 // Restore the composer so a failed send never silently loses the user's work —
                 // but don't clobber fresh input the user added during the in-flight window (the
                 // draft guard lives in the screen; attachments are owned here). iOS parity.

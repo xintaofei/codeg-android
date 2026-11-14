@@ -710,6 +710,7 @@
     <string name="session_load_busy">This session is open elsewhere. If another %1$s client (the app, the CLI or an IDE extension) has it, close it there or quit that client, then reload. If you just forked it, reload in about a minute.</string>
     <string name="session_load_provider_mismatch">This conversation was started with a different model provider than the one %1$s uses now, and %1$s only continues a conversation on its own provider. Switch back to that provider in %1$s\'s settings and reload, or start a new conversation. (%2$s)</string>
     <string name="session_load_archived">The previous session was archived on the %1$s side. Run %2$s in a terminal to restore it and reload, or start a new conversation.</string>
+    <string name="session_load_unconfirmed">%1$s couldn\'t open this session — it may have ended, been archived, or be open elsewhere. Reload to retry, or start a new conversation.</string>
     <string name="session_load_reload">Reload</string>
     <string name="session_load_new">New conversation</string>
     <string name="session_load_copy_command">Copy command</string>

@@ -698,6 +698,7 @@
     <string name="session_load_busy">这个会话正在别处打开。如果是另一个 %1$s 客户端（桌面应用、CLI 或 IDE 扩展）开着它，先在那边关闭它或退出那个客户端，再重新加载；如果刚从它分叉过，约一分钟后重新加载即可。</string>
     <string name="session_load_provider_mismatch">这个会话是用另一个模型供应商开始的，与 %1$s 现在使用的不同，而 %1$s 只会在原来的供应商上继续会话。请在 %1$s 设置里切回那个供应商后重新加载，或者开始新会话。（%2$s）</string>
     <string name="session_load_archived">原会话已在 %1$s 侧归档，可在终端运行 %2$s 找回历史后重载，或直接开始新会话。</string>
+    <string name="session_load_unconfirmed">%1$s 无法打开这个会话，它可能已结束、已归档或正在别处打开。可重新加载重试，或开始新会话。</string>
     <string name="session_load_reload">重新加载</string>
     <string name="session_load_new">新建会话</string>
     <string name="session_load_copy_command">复制命令</string>
