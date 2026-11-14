@@ -623,6 +623,9 @@
     <string name="compose_insert">Insert</string>
     <string name="compose_attach_image">Attach image</string>
     <string name="compose_message_placeholder">Message</string>
+    <string name="compose_queue">Queue message</string>
+    <string name="queue_edit">Edit queued message</string>
+    <string name="queue_remove">Remove from queue</string>
     <string name="compose_stop">Stop</string>
     <string name="compose_send">Send</string>
 
@@ -748,6 +751,10 @@
 
     <!-- ===== Tool group summary (timeline, pluralized) ===== -->
     <string name="tool_summary_todos">Updated todos</string>
+    <plurals name="queue_images">
+        <item quantity="one">%d image</item>
+        <item quantity="other">%d images</item>
+    </plurals>
     <plurals name="tool_summary_read">
         <item quantity="one">Read %d file</item>
         <item quantity="other">Read %d files</item>

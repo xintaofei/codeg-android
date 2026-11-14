@@ -41,6 +41,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.CircularProgressIndicator
@@ -68,6 +69,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -371,6 +373,18 @@ fun SessionDetailScreen(
                 // button on a finished turn is worse than losing it a moment early.
                 val noteChannelLive = ui.noteTurnOpen && ui.isInFlight
                 if (ui.feedbackNotes.isNotEmpty() && noteChannelLive) FeedbackNotesStrip(ui.feedbackNotes)
+                if (ui.queue.isNotEmpty()) {
+                    QueueStrip(
+                        items = ui.queue,
+                        onEdit = { id ->
+                            // Back into the composer, after anything already being written there.
+                            viewModel.takeQueued(id)?.let { item ->
+                                draft = if (draft.isBlank()) item.text else draft.trimEnd() + "\n" + item.text
+                            }
+                        },
+                        onRemove = viewModel::removeQueued,
+                    )
+                }
                 ComposeBar(
                     text = draft,
                     onTextChange = { draft = it },
@@ -380,7 +394,13 @@ fun SessionDetailScreen(
                     },
                     isInFlight = ui.isInFlight,
                     onStop = viewModel::cancel,
-                    onPlus = { showInsert = true },
+                    // Mid-turn the bar carries the queue (and note) buttons too; the insert sheet
+                    // gives up its slot to keep the field usable on a phone.
+                    onPlus = if (ui.isInFlight) null else ({ showInsert = true }),
+                    onQueue = if (ui.isInFlight) ({
+                        viewModel.send(draft)
+                        draft = ""
+                    }) else null,
                     onAttach = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     canSendOverride = ui.attachments.isNotEmpty(),
                     onSendNote = if (ui.supportsNotes && noteChannelLive) {
@@ -605,6 +625,63 @@ private fun FeedbackNotesStrip(notes: List<FeedbackNote>) {
                     fontSize = 11.sp,
                     color = colors.textTertiary,
                 )
+            }
+        }
+    }
+}
+
+/** The messages waiting for the running turn to end, in the order they will go out. */
+@Composable
+private fun QueueStrip(items: List<QueuedPrompt>, onEdit: (String) -> Unit, onRemove: (String) -> Unit) {
+    val colors = CodegTheme.colors
+    val scroll = rememberScrollState()
+    LaunchedEffect(items.size) { scroll.animateScrollTo(scroll.maxValue) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.bgElevated.copy(alpha = 0.92f))
+            .heightIn(max = 112.dp)
+            .verticalScroll(scroll)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        items.forEachIndexed { index, item ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.codeSurface)
+                    .padding(start = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("#${index + 1}", fontSize = 11.sp, color = colors.textTertiary)
+                Text(
+                    item.text.ifEmpty {
+                        pluralStringResource(R.plurals.queue_images, item.attachments.size, item.attachments.size)
+                    },
+                    fontSize = 12.sp,
+                    color = colors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { onEdit(item.id) }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Rounded.Edit,
+                        contentDescription = stringResource(R.string.queue_edit),
+                        tint = colors.textTertiary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                IconButton(onClick = { onRemove(item.id) }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = stringResource(R.string.queue_remove),
+                        tint = colors.textTertiary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
         }
     }

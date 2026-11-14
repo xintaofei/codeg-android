@@ -618,6 +618,9 @@
     <string name="compose_insert">插入</string>
     <string name="compose_attach_image">添加图片</string>
     <string name="compose_message_placeholder">输入消息</string>
+    <string name="compose_queue">加入队列</string>
+    <string name="queue_edit">编辑排队的消息</string>
+    <string name="queue_remove">移出队列</string>
     <string name="compose_stop">停止</string>
     <string name="compose_send">发送</string>
 
@@ -739,6 +742,9 @@
 
     <!-- ===== Tool group summary (timeline, pluralized) ===== -->
     <string name="tool_summary_todos">更新了待办事项</string>
+    <plurals name="queue_images">
+        <item quantity="other">%d 张图片</item>
+    </plurals>
     <plurals name="tool_summary_read">
         <item quantity="other">读取了 %d 个文件</item>
     </plurals>

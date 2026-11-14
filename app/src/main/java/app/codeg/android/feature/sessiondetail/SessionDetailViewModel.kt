@@ -3,6 +3,7 @@ package app.codeg.android.feature.sessiondetail
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -50,6 +51,7 @@ import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -199,6 +201,8 @@ class SessionDetailViewModel @Inject constructor(
     private var batchPrefixHash: String? = null
     /** The post-turn metadata read ([syncTurnMetadata]). */
     private var metadataJob: Job? = null
+    /** Plan-approval answers awaiting the server; the queue holds for them ([answerPlanApproval]). */
+    private var planAnswersInFlight = 0
     /** The live turn last handed off locally ([promoteLocally]). A plan approval answered on it
      *  may only hear back after it ended, and still owes it the revision notes. */
     private var handedOffBuilder: LiveTurnBuilder? = null
@@ -254,6 +258,23 @@ class SessionDetailViewModel @Inject constructor(
         },
     )
 
+    /** Messages waiting for the running turn to end. */
+    private val queue = SendQueueController(
+        scope = viewModelScope,
+        ui = _ui,
+        flushDispatcher = Dispatchers.Main,
+        clock = SystemClock::elapsedRealtime,
+        held = {
+            // Out of sight the stream is paused, and a send would attach it behind the
+            // screen's back; the revision notes of a plan answer still in flight must be the
+            // next prompt; and a turn whose end went unseen is still being read back — a send
+            // now would cancel that and keep only the part that streamed. Each re-arms the
+            // flush when it clears.
+            !screenVisible || planAnswersInFlight > 0 || reconcileJob?.isActive == true
+        },
+        sendQueued = { next -> send(next.text, next.attachments, SendOrigin.QUEUE) },
+    )
+
     /** The event subscription to [connectionId]. See [streamListener]. */
     private val stream = SessionStream(
         scope = viewModelScope,
@@ -294,6 +315,7 @@ class SessionDetailViewModel @Inject constructor(
     )
 
     init {
+        queue.start()
         load()
     }
 
@@ -392,18 +414,40 @@ class SessionDetailViewModel @Inject constructor(
 
     // region Send / cancel
 
-    fun send(text: String) = send(text, withAttachments = true)
-
     /**
-     * Send the composer's draft — or, with [withAttachments] `false`, a prompt the app
-     * itself generated (today: the revision notes from a plan-approval "request
-     * changes", which Grok expects as a follow-up turn). A generated send never
-     * consumes the composer's pending attachments, so images the user was staging
-     * survive.
+     * Send the composer's draft. While a turn runs — or while earlier messages are still
+     * waiting, so this one doesn't overtake them — it joins the queue instead, and goes out
+     * once the turn ends ([SendQueueController]).
      */
-    private fun send(text: String, withAttachments: Boolean) {
+    fun send(text: String) {
         val trimmed = text.trim()
-        val attachments = if (withAttachments) _ui.value.attachments else emptyList()
+        val state = _ui.value
+        if (trimmed.isEmpty() && state.attachments.isEmpty()) return
+        if (state.isInFlight || state.queue.isNotEmpty()) {
+            queue.enqueue(QueuedPrompt(UUID.randomUUID().toString(), trimmed, state.attachments), front = false)
+            _ui.update { it.copy(attachments = emptyList()) }
+            return
+        }
+        send(trimmed, state.attachments, SendOrigin.COMPOSER)
+    }
+
+    /** Who a send is for, which decides what it consumes and where a bounce puts it back. */
+    private enum class SendOrigin {
+        /** The composer's draft: consumes its attachments; a bounce queues it at the tail. */
+        COMPOSER,
+
+        /** A queued message: a bounce puts it back at the head, ahead of the ones behind it. */
+        QUEUE,
+
+        /** A prompt the app itself wrote (today: the revision notes from a plan-approval
+         *  "request changes", which Grok expects as the very next turn). Never consumes the
+         *  composer's attachments, so images the user was staging survive; a bounce puts it
+         *  at the head, since it has to come first. */
+        GENERATED,
+    }
+
+    private fun send(text: String, attachments: List<Attachment>, origin: SendOrigin) {
+        val trimmed = text.trim()
         if ((trimmed.isEmpty() && attachments.isEmpty()) || _ui.value.isInFlight) return
 
         // Supersede any post-turn reconcile still running for the previous turn so it can't
@@ -453,11 +497,11 @@ class SessionDetailViewModel @Inject constructor(
                 sendStatus = "Connecting…",
                 notice = null,
                 restoreDraft = null,
-                attachments = if (withAttachments) emptyList() else it.attachments,
+                attachments = if (origin == SendOrigin.COMPOSER) emptyList() else it.attachments,
                 isDraftEditable = false,
             )
         }
-        sendJob = viewModelScope.launch { runSend(trimmed, userTurn, attachments, wasNew) }
+        sendJob = viewModelScope.launch { runSend(trimmed, userTurn, attachments, wasNew, origin) }
     }
 
     private suspend fun runSend(
@@ -465,6 +509,7 @@ class SessionDetailViewModel @Inject constructor(
         userTurn: MessageTurn,
         attachments: List<Attachment>,
         createdConversation: Boolean,
+        origin: SendOrigin,
     ) {
         val c = client ?: return
         // One id for both attempts so the server dedupes if the first prompt actually landed.
@@ -503,7 +548,14 @@ class SessionDetailViewModel @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: ApiError.TurnInProgress) {
-            discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = "A turn is already running on this session.")
+            // Another client's turn holds the connection. Not a failure: the message waits
+            // for that turn like any other queued one. (A conversation this send just created
+            // can't be busy, but if it were there'd be nothing to queue it on.)
+            if (createdConversation) {
+                discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = "A turn is already running on this session.")
+            } else {
+                bounceToQueue(userTurn, QueuedPrompt(UUID.randomUUID().toString(), text, attachments), origin)
+            }
         } catch (e: Exception) {
             discardOptimistic(userTurn, text, attachments, createdConversation, createdId, notice = e.displayMessage())
         }
@@ -906,6 +958,7 @@ class SessionDetailViewModel @Inject constructor(
         if (visible == screenVisible) return
         screenVisible = visible
         if (visible) stream.resume() else stream.pause()
+        if (visible) queue.schedule()
     }
 
     private fun applyEvent(event: AcpEvent, @Suppress("UNUSED_PARAMETER") seq: Long) {
@@ -1137,6 +1190,9 @@ class SessionDetailViewModel @Inject constructor(
         // the follow-up bound to the turn it belongs to.
         val origin = liveBuilder
         _ui.update { it.copy(pendingPlanApproval = null) }
+        // The revision notes have to be the next prompt: hold the queue until they are sent
+        // (or known not to be), or a queued message would go out first and take that slot.
+        planAnswersInFlight += 1
         viewModelScope.launch {
             runCatching { client?.answerPlanApproval(conn, pending.approvalId, decision, notes.ifEmpty { null }) }
                 .onSuccess {
@@ -1150,12 +1206,14 @@ class SessionDetailViewModel @Inject constructor(
                         )
                     ) {
                         PlanFollowUp.PARK -> pendingPlanFollowUp = origin?.let { ParkedPlanNotes(it.id, notes) }
-                        PlanFollowUp.SEND_NOW -> send(notes, withAttachments = false)
+                        PlanFollowUp.SEND_NOW -> send(notes, emptyList(), SendOrigin.GENERATED)
                         PlanFollowUp.DROP ->
                             _ui.update { it.copy(notice = appContext.getString(R.string.plan_approval_notes_dropped)) }
                     }
                 }
                 .onFailure { e -> _ui.update { it.copy(notice = e.displayMessage(), pendingPlanApproval = pending) } }
+            planAnswersInFlight -= 1
+            queue.schedule()
         }
     }
 
@@ -1409,7 +1467,7 @@ class SessionDetailViewModel @Inject constructor(
         // prompt Grok expects (it discards them on the reply itself). After an unseen end
         // `send` supersedes the reconcile just started and folds the finished reply in
         // locally, exactly as a user typing the instant a turn ends would.
-        if (planFollowUp != null) send(planFollowUp, withAttachments = false)
+        if (planFollowUp != null) send(planFollowUp, emptyList(), SendOrigin.GENERATED)
     }
 
     /** [details] is the server's redacted evidence, carried only by errors codeg inferred.
@@ -1550,6 +1608,8 @@ class SessionDetailViewModel @Inject constructor(
                 syncTurnMetadata()
             }
         }
+        // Held while this ran: a send would have cut it short ([SendQueueController]).
+        reconcileJob?.invokeOnCompletion { queue.schedule() }
     }
 
     /**
@@ -1654,6 +1714,49 @@ class SessionDetailViewModel @Inject constructor(
             }
         }
     }
+
+    // region Send queue
+
+    /** Drop a queued message. */
+    fun removeQueued(id: String) = queue.remove(id)
+
+    /**
+     * Take a queued message back out to edit it: its images return to the composer, its
+     * text is handed to the caller (which owns the draft). Null when it already went out.
+     */
+    fun takeQueued(id: String): QueuedPrompt? {
+        val item = _ui.value.queue.firstOrNull { it.id == id } ?: return null
+        _ui.update {
+            it.copy(
+                queue = it.queue.filterNot { q -> q.id == id },
+                attachments = (it.attachments + item.attachments).distinctBy { a -> a.id },
+            )
+        }
+        return item
+    }
+
+    /**
+     * The send bounced off a turn this client didn't know was running: undo its optimistic
+     * turn and put it back in the queue — at the head when it was already next in line (or
+     * must be), at the tail when it came straight from the composer. Unlike a failed send it
+     * keeps the stream: the busy turn is exactly what it should now show.
+     */
+    private fun bounceToQueue(userTurn: MessageTurn, item: QueuedPrompt, origin: SendOrigin) {
+        queue.noteBounce()
+        liveBuilder = null
+        ownPendingTurn = null
+        _ui.update {
+            it.copy(
+                pendingUserTurns = it.pendingUserTurns.filterNot { t -> t.id == userTurn.id },
+                live = null,
+                isInFlight = false,
+                sendStatus = null,
+                queue = SendQueueController.queued(it.queue, item, front = origin != SendOrigin.COMPOSER),
+            )
+        }
+    }
+
+    // endregion
 
     private fun discardOptimistic(
         userTurn: MessageTurn,

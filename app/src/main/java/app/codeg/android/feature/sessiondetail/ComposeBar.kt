@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -80,6 +81,8 @@ fun ComposeBar(
     noteLandsInstantly: Boolean = false,
     /** A note submit is awaiting the server. */
     sendingNote: Boolean = false,
+    /** Queue the draft to go out once the running turn ends. Null when no turn is running. */
+    onQueue: (() -> Unit)? = null,
 ) {
     val colors = CodegTheme.colors
     // `sendingNote` blocks the ordinary Send too. The draft is deliberately still on screen
@@ -88,6 +91,9 @@ fun ComposeBar(
     // Send with the note's own text sitting there, one tap from being delivered twice.
     val canSend = (text.isNotBlank() || canSendOverride) && !isInFlight && !sendingNote
     val canSendNote = onSendNote != null && text.isNotBlank() && !sendingNote
+    // Same reason as `canSend` for holding it while a note is in flight: the queued copy
+    // would be the note's own text, sent a second time once the turn ends.
+    val canQueue = onQueue != null && (text.isNotBlank() || canSendOverride) && !sendingNote
     val sendContainer by animateColorAsState(
         targetValue = if (isInFlight) colors.danger else colors.accent,
         animationSpec = tween(220),
@@ -193,6 +199,25 @@ fun ComposeBar(
                             modifier = Modifier.size(20.dp),
                         )
                     }
+                }
+            }
+
+            if (onQueue != null) {
+                FilledTonalIconButton(
+                    onClick = onQueue,
+                    enabled = canQueue,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = colors.accent.copy(alpha = 0.16f),
+                        contentColor = colors.accent,
+                        disabledContainerColor = colors.textPrimary.copy(alpha = 0.06f),
+                        disabledContentColor = colors.textTertiary,
+                    ),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.PlaylistAdd,
+                        contentDescription = stringResource(R.string.compose_queue),
+                        modifier = Modifier.size(22.dp),
+                    )
                 }
             }
 
