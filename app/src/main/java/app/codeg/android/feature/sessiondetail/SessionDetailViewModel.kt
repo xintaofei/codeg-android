@@ -77,6 +77,10 @@ private const val VERIFY_UNSEEN_ATTEMPTS = 5
 private const val INITIAL_TAIL_TURNS = 120
 private const val OLDER_TURNS_PAGE_SIZE = 120
 
+/** How long after a local hand-off the conversation's summary is re-read: the web's first
+ *  turn-end metadata read, by when the server has normally finished its own bookkeeping. */
+private const val SUMMARY_REFRESH_DELAY_MS = 1_500L
+
 /** Transcript polls a turn that ended without a `turn_complete` gets to judge. */
 private const val TURN_RECONCILE_ATTEMPTS = 5
 
@@ -173,13 +177,23 @@ class SessionDetailViewModel @Inject constructor(
     private var liveBuilder: LiveTurnBuilder? = null
     private var liveFlushScheduled = false
     /**
-     * How many turns the FULL transcript held when the current turn started —
-     * global, not window-relative. `reconcileAfterTurn` compares the server's
-     * total against it to decide whether the reply landed; comparing loaded
-     * lengths instead would misfire the moment a window slides or a page is
-     * prepended.
+     * Where the current turn's round would start in the FULL transcript — global, not
+     * window-relative, so a page prepended meanwhile doesn't move it. With local turns
+     * unconfirmed it is their batch start, since the server may hold them in a different
+     * number of turns than they show here; [turnPriorPrompts] then says how many of the
+     * prompts past it are theirs. Set by [captureTurnBaseline].
      */
     private var turnBaseline = 0
+    /** Prompts of the unconfirmed local batch that sit past [turnBaseline]. */
+    private var turnPriorPrompts = 0
+    /**
+     * The full-transcript index where [SessionDetailUiState.localTurns] begin, or null while
+     * there are none. Set by the hand-off that creates the first of them ([promoteLocally]),
+     * cleared with them when a server read takes their place.
+     */
+    private var batchStart: Int? = null
+    /** The light post-turn refresh ([refreshSummaryAfterTurn]). */
+    private var summaryJob: Job? = null
     /** Single-flight guard for history paging. */
     private var pagingJob: Job? = null
     /** Consecutive history pages that added nothing; reset by any real prepend. */
@@ -292,6 +306,7 @@ class SessionDetailViewModel @Inject constructor(
                     // scrolls up. A pre-0.24.0 server ignores the selector and answers in
                     // full, which `detail.window == null` then reports.
                     val detail = c.conversationDetail(id, TurnWindow.Tail(INITIAL_TAIL_TURNS))
+                    batchStart = null
                     agent = detail.summary.agentType
                     externalId = detail.summary.externalId
                     folder = allFolders.firstOrNull { it.id == detail.summary.folderId }
@@ -301,6 +316,7 @@ class SessionDetailViewModel @Inject constructor(
                             loading = false,
                             summary = detail.summary,
                             turns = detail.turns,
+                            localTurns = emptyList(),
                             window = detail.window,
                             inFlightUserTurnId = detail.inFlightUserTurnId,
                             sessionStats = detail.sessionStats,
@@ -388,7 +404,7 @@ class SessionDetailViewModel @Inject constructor(
         // A previous turn that finished / cancelled / errored but was never reconciled into
         // `turns` still lives in `liveBuilder`; fold it in before we reuse the live slot so
         // its (partial) reply isn't dropped by this send. Mirrors iOS `send()`.
-        liveBuilder?.takeIf { !it.isStreaming && !it.isEmpty }?.let { promoteUnreconciled() }
+        liveBuilder?.takeIf { !it.isStreaming && !it.isEmpty }?.let { promoteLocally() }
 
         // A draft's first send locks the agent/folder pickers (the conversation is
         // about to be created against them).
@@ -413,7 +429,7 @@ class SessionDetailViewModel @Inject constructor(
         observedTurn = false
         ownPendingTurn = userTurn
         verifyJob?.cancel()
-        turnBaseline = _ui.value.globalTurnCount
+        captureTurnBaseline()
         // Steering notes belong to the turn that was running when they were written; the
         // server drops them on this send's `user_message` and so do we. `isInFlight` above
         // is optimistic — it covers connect and attach, during which the server has no turn
@@ -682,7 +698,7 @@ class SessionDetailViewModel @Inject constructor(
             // The turn finished while nothing was listening, so its `turn_complete` is among
             // the lost events. End it the way that event would have: the reconcile fetches
             // the reply as persisted.
-            ReconnectRecovery.ENDED_UNSEEN -> finalizeTurn(STOP_REASON_UNSEEN)
+            ReconnectRecovery.ENDED_UNSEEN -> finalizeTurn(STOP_REASON_UNSEEN, unseen = true)
             ReconnectRecovery.VERIFY -> verifyUnseenTurn()
             ReconnectRecovery.OBSERVE -> {
                 beginObservedTurn()
@@ -700,7 +716,10 @@ class SessionDetailViewModel @Inject constructor(
         val builder = liveBuilder
         if (builder != null) {
             builder.isStreaming = false
-            if (builder.isEmpty) builder.error = LiveTurnError(appContext.getString(R.string.live_cancelled))
+            if (builder.isEmpty) {
+                builder.error = LiveTurnError(appContext.getString(R.string.live_cancelled))
+                builder.cancelledLocally = true
+            }
             emitLiveNow()
         }
         sendJob?.cancel()
@@ -746,7 +765,7 @@ class SessionDetailViewModel @Inject constructor(
             // Reattaching to the running turn: what streams IS that turn.
             ownTurnStarted = true
             observedTurn = true
-            turnBaseline = _ui.value.globalTurnCount
+            captureTurnBaseline()
             _ui.update { it.copy(isInFlight = true, sendStatus = "Reattaching…", live = builder.snapshot()) }
             try {
                 openStream(found.connectionId, seedOnAttach = true)
@@ -779,6 +798,7 @@ class SessionDetailViewModel @Inject constructor(
         val builder = liveBuilder ?: return
         val sent = ownPendingTurn ?: return
         val baseline = turnBaseline
+        val priorPrompts = turnPriorPrompts
         verifyJob?.cancel()
         verifyJob = viewModelScope.launch {
             repeat(VERIFY_UNSEEN_ATTEMPTS) { attempt ->
@@ -787,7 +807,7 @@ class SessionDetailViewModel @Inject constructor(
                 // Read from the baseline on: a tail could miss the prompt entirely behind one
                 // long round (the server's window alignment walks back only so far).
                 val fromBaseline = orNull { c.conversationDetail(id, TurnWindow.FromIndex(baseline)) } ?: return@repeat
-                if (!sentPromptAt(fromBaseline, baseline, sent)) return@repeat
+                if (!sentPromptAt(fromBaseline, baseline, sent, priorPrompts)) return@repeat
                 // The window is capped, so it may stop short of the end; the round's end is
                 // then read off the tail.
                 val ended = if (reachesEnd(fromBaseline)) {
@@ -797,7 +817,7 @@ class SessionDetailViewModel @Inject constructor(
                 }
                 if (liveBuilder !== builder || ownTurnStarted || !builder.isStreaming) return@launch
                 if (ended) {
-                    finalizeTurn(STOP_REASON_UNSEEN)
+                    finalizeTurn(STOP_REASON_UNSEEN, unseen = true)
                     return@launch
                 }
             }
@@ -839,12 +859,12 @@ class SessionDetailViewModel @Inject constructor(
     private fun beginObservedTurn() {
         reconcileJob?.cancel()
         // The previous turn ended but was never reconciled: fold it in before reusing the slot.
-        liveBuilder?.takeIf { !it.isStreaming && !it.isEmpty }?.let { promoteUnreconciled() }
+        liveBuilder?.takeIf { !it.isStreaming && !it.isEmpty }?.let { promoteLocally() }
         val builder = LiveTurnBuilder()
         liveBuilder = builder
         ownTurnStarted = true
         observedTurn = true
-        turnBaseline = _ui.value.globalTurnCount
+        captureTurnBaseline()
         notes.clear()
         _ui.update {
             it.copy(
@@ -1177,8 +1197,16 @@ class SessionDetailViewModel @Inject constructor(
         val id = conversationId ?: return
         viewModelScope.launch {
             val generation = bumpFetchGeneration()
-            refetchWindow(c, id)?.let { (d, _) ->
+            refetchWindow(c, id)?.let { (d, reanchored) ->
                 if (!isLatestFetch(generation)) return@launch
+                // Local turns give way only to a read that holds them all; one that doesn't
+                // (still being written, or one more round behind) would show them twice or
+                // drop them, so it is left for a later read. A rewrite leaves nothing to
+                // check against: the read is taken and they stay after it.
+                val state = _ui.value
+                val holds = state.localTurns.isEmpty() ||
+                    holdsBatch(d, batchStart ?: state.loadedEnd, promptCount(state.localTurns))
+                if (!holds && !reanchored) return@launch
                 _ui.update {
                     it.copy(
                         turns = d.turns,
@@ -1186,8 +1214,10 @@ class SessionDetailViewModel @Inject constructor(
                         inFlightUserTurnId = d.inFlightUserTurnId,
                         sessionStats = d.sessionStats ?: it.sessionStats,
                         summary = d.summary,
+                        localTurns = if (holds) emptyList() else it.localTurns,
                     )
                 }
+                if (holds) batchStart = null else reanchorBatch()
             }
         }
     }
@@ -1316,7 +1346,14 @@ class SessionDetailViewModel @Inject constructor(
     }
 
 
-    private fun finalizeTurn(stopReason: String) {
+    /**
+     * End the live turn. One this client watched to its end ([unseen] false) is handed off
+     * locally: what streamed becomes its transcript ([promoteLocally]). One whose end was
+     * inferred — its `turn_complete` lost in a reconnect gap, or never sent while this send
+     * was still waiting to start — streamed only partly, so the transcript is read for it
+     * instead ([reconcileAfterTurn]).
+     */
+    private fun finalizeTurn(stopReason: String, unseen: Boolean = false) {
         // Once per turn: a cancel is answered by the server's own `turn_complete`, and the
         // agent may send a second one afterwards.
         val builder = liveBuilder?.takeIf { it.stopReason == null } ?: return
@@ -1324,9 +1361,6 @@ class SessionDetailViewModel @Inject constructor(
         builder.stopReason = stopReason
         emitLiveNow()
         // Return the composer to Send and clear the status line immediately — the turn is done.
-        // The transcript keeps showing the finished live reply until `reconcileAfterTurn` swaps
-        // in the server copy in the background. Mirrors iOS's computed `isInFlight`, which flips
-        // the instant `live.isStreaming` goes false rather than waiting on the reconcile.
         // Read before clearing: this is the one transition that delivers parked
         // plan-revision notes (every other terminal path drops them). Notes parked by a
         // DIFFERENT turn — one whose own completion never came, so a reconcile ended it
@@ -1337,11 +1371,17 @@ class SessionDetailViewModel @Inject constructor(
         if (parked != null && planFollowUp == null) {
             _ui.update { it.copy(notice = appContext.getString(R.string.plan_approval_notes_dropped)) }
         }
-        reconcileAfterTurn()
+        if (unseen) {
+            reconcileAfterTurn()
+        } else {
+            reconcileJob?.cancel()
+            promoteLocally()
+            refreshSummaryAfterTurn()
+        }
         // The keep-planning turn just ended — deliver the revision notes as the follow-up
-        // prompt Grok expects (it discards them on the reply itself). `send` supersedes
-        // the reconcile it just started and folds the finished reply in locally, exactly
-        // as a user typing the instant a turn ends would.
+        // prompt Grok expects (it discards them on the reply itself). After an unseen end
+        // `send` supersedes the reconcile just started and folds the finished reply in
+        // locally, exactly as a user typing the instant a turn ends would.
         if (planFollowUp != null) send(planFollowUp, withAttachments = false)
     }
 
@@ -1362,6 +1402,11 @@ class SessionDetailViewModel @Inject constructor(
         clearInteractivePrompts()
     }
 
+    /**
+     * Read the transcript for a turn whose end this client didn't see whole, and take the
+     * server's copy once a read holds every round shown locally ([holdsBatch]); failing that,
+     * keep what streamed ([promoteLocally]). The finished live reply stays on screen meanwhile.
+     */
     private fun reconcileAfterTurn() {
         val c = client ?: return
         val id = conversationId ?: return
@@ -1387,10 +1432,6 @@ class SessionDetailViewModel @Inject constructor(
                 if (!isLatestFetch(generation)) continue
                 attempt += 1
                 val detail = fetched.detail
-                // A failed round ends on its `turn_error` record, not on a reply — without
-                // that arm a failed turn never reads as landed and falls to local promotion.
-                val endsInReply = endsRound(detail.turns)
-
                 // Getting this response cost a re-anchor: the transcript was REWRITTEN
                 // (a compaction) while the turn was ending. Every index moved, so the
                 // baseline counts turns that no longer exist — and there is no
@@ -1422,14 +1463,19 @@ class SessionDetailViewModel @Inject constructor(
                             summary = detail.summary,
                         )
                     }
+                    // Local turns already shown stay, after the new window, for the same
+                    // reason; the batch start they had names a turn that no longer exists.
+                    reanchorBatch()
                     break
                 }
 
-                // Counted against the FULL transcript, not the loaded window: a window
-                // that slid (or a page that was prepended) moves the loaded length
-                // without a turn being added, which would read as the reply landing.
-                val advanced = endsInReply && detail.effectiveTotal > turnBaseline
-                if (advanced) {
+                // Taken only when it holds every round shown locally, this one included: the
+                // server may split a reply into more turns than streamed here, so no count of
+                // turns can say so — see [holdsBatch]. A failed round ends on its
+                // `turn_error` record, not on a reply, and that counts as ended too.
+                val state = _ui.value
+                val prompts = promptCount(state.localTurns) + state.pendingUserTurns.size
+                if (holdsBatch(detail, batchStart ?: state.loadedEnd, prompts)) {
                     if (liveBuilder !== builder) return@launch
                     // This turn ended without a `turn_complete` of its own (a dead
                     // connection, an exhausted reconnect), so `finalizeTurn` never ran:
@@ -1449,6 +1495,7 @@ class SessionDetailViewModel @Inject constructor(
                             inFlightUserTurnId = detail.inFlightUserTurnId,
                             sessionStats = detail.sessionStats ?: it.sessionStats,
                             summary = detail.summary,
+                            localTurns = emptyList(),
                             pendingUserTurns = emptyList(),
                             live = null,
                             liveFromReattach = false,
@@ -1464,41 +1511,38 @@ class SessionDetailViewModel @Inject constructor(
                             },
                         )
                     }
+                    batchStart = null
                     liveBuilder = null
                     return@launch
                 }
             }
-            // Couldn't confirm — fold the streamed reply in locally so nothing is lost.
-            if (liveBuilder === builder) promoteUnreconciled()
+            // Couldn't confirm — keep what streamed, so nothing is lost.
+            if (liveBuilder === builder) promoteLocally()
         }
     }
 
-    private fun promoteUnreconciled() {
+    /**
+     * Hand the finished live turn off to the transcript as local turns: its prompts, the reply
+     * as it streamed, its failure record ([promotedTurns]). The first hand-off of a batch pins
+     * where the batch sits in the full transcript ([batchStart]).
+     */
+    private fun promoteLocally() {
         val builder = liveBuilder
+        var start: Int? = null
         _ui.update { state ->
             // On a reattach-owned reply, the tail of `turns` is the server's partial copy
-            // of the same reply — drop it so folding the live turn doesn't double it.
+            // of the same reply — drop it so the local one doesn't double it.
             val base = if (state.liveFromReattach) {
                 state.turns.hideInFlightReply(state.inFlightUserTurnId)
             } else {
                 state.turns
             }
-            val folded = buildList {
-                addAll(base)
-                addAll(state.pendingUserTurns)
-                // Only fold in an assistant turn that has renderable blocks. A finalized
-                // builder can be non-empty solely because of an inline error / "Cancelled."
-                // message (which snapshotAsMessageTurn can't represent as a block), and folding
-                // its zero-block snapshot would render as an empty "No content" turn (iOS parity).
-                if (builder != null && !builder.isEmpty) {
-                    val snapshot = builder.snapshotAsMessageTurn()
-                    if (snapshot.blocks.isNotEmpty()) add(snapshot)
-                }
-            }
+            val promoted = promotedTurns(state.pendingUserTurns, builder)
+            start = if (promoted.isEmpty()) null else loadedEnd(state.window, base)
             state.copy(
-                turns = folded,
-                // The round is over as far as this client knows; nothing in `folded` is
-                // still running.
+                turns = base,
+                localTurns = state.localTurns + promoted,
+                // The round is over as far as this client knows; nothing shown is still running.
                 inFlightUserTurnId = null,
                 pendingUserTurns = emptyList(),
                 live = null,
@@ -1507,7 +1551,37 @@ class SessionDetailViewModel @Inject constructor(
                 sendStatus = null,
             )
         }
+        if (batchStart == null) batchStart = start
         liveBuilder = null
+    }
+
+    /** After a rewrite moved every index, local turns sit after whatever window was adopted. */
+    private fun reanchorBatch() {
+        val state = _ui.value
+        batchStart = if (state.localTurns.isEmpty()) null else state.loadedEnd
+    }
+
+    /** Where the next round starts, for the "did it run / has it landed" reads. See [turnBaseline]. */
+    private fun captureTurnBaseline() {
+        val state = _ui.value
+        turnBaseline = batchStart ?: state.globalTurnCount
+        turnPriorPrompts = promptCount(state.localTurns)
+    }
+
+    /**
+     * After a local hand-off, pick up what the turn changed about the conversation itself —
+     * its summary and stats — leaving the turns alone. The web's turn-end metadata sync reads
+     * these along with per-turn usage/duration/model, which nothing here shows yet.
+     */
+    private fun refreshSummaryAfterTurn() {
+        val c = client ?: return
+        val id = conversationId ?: return
+        summaryJob?.cancel()
+        summaryJob = viewModelScope.launch {
+            delay(SUMMARY_REFRESH_DELAY_MS)
+            val detail = orNull { c.conversationDetail(id, TurnWindow.Tail(1)) } ?: return@launch
+            _ui.update { it.copy(summary = detail.summary, sessionStats = detail.sessionStats ?: it.sessionStats) }
+        }
     }
 
     private fun discardOptimistic(

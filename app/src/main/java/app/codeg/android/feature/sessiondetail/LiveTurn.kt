@@ -100,6 +100,9 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
     var isStreaming: Boolean = true
     var stopReason: String? = null
     var error: LiveTurnError? = null
+    /** [error] is the client's own "Cancelled" marker for a reply cancelled before it said
+     *  anything, not a failure the server reported — see [promotedTurns]. */
+    var cancelledLocally: Boolean = false
 
     fun appendText(delta: String) {
         if (delta.isEmpty()) return

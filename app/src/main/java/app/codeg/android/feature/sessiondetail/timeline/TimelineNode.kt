@@ -212,8 +212,11 @@ object TranscriptTimeline {
         agent: AgentType,
         hideTrailingAssistantReply: Boolean = false,
         inFlightUserTurnId: String? = null,
+        localTurns: List<MessageTurn> = emptyList(),
     ): List<TimelineNode> {
-        val source = if (hideTrailingAssistantReply) turns.hideInFlightReply(inFlightUserTurnId) else turns
+        // Only the server's window can hold a partial copy of the running reply; the local
+        // turns after it are finished rounds.
+        val source = (if (hideTrailingAssistantReply) turns.hideInFlightReply(inFlightUserTurnId) else turns) + localTurns
         val runningToolIds = source.inFlightToolCallIds(inFlightUserTurnId)
         val nodes = mutableListOf<TimelineNode>()
         var lastUserId: String? = null

@@ -37,7 +37,14 @@ data class SessionDetailUiState(
     val isDraftEditable: Boolean = false,
     val availableFolders: List<FolderDetail> = emptyList(),
     val availableAgents: List<AgentChoice> = emptyList(),
+    /** The loaded window of the server's transcript. */
     val turns: List<MessageTurn> = emptyList(),
+    /**
+     * Finished rounds this client saw stream to their end, kept as they streamed rather than
+     * re-read from the transcript (see TurnHandoff.kt). They follow [turns], and give way to
+     * the server's copy only once a read is proven to hold all of them.
+     */
+    val localTurns: List<MessageTurn> = emptyList(),
     val pendingUserTurns: List<MessageTurn> = emptyList(),
     val live: LiveTurnState? = null,
     /** The live turn was rebuilt from a reattach snapshot (owns the in-flight reply). */
@@ -105,20 +112,17 @@ data class SessionDetailUiState(
     /** Whether older history exists above what is loaded. */
     val hasOlderTurns: Boolean get() = window?.hasOlder == true
 
+    /** Where the loaded server window ends in the full transcript. See [loadedEnd]. */
+    val loadedEnd: Int get() = loadedEnd(window, turns)
+
     /**
-     * Turns in the FULL transcript, not just the loaded window — the coordinate
-     * any "did the transcript advance?" comparison has to use, since the loaded
-     * length also moves when a window slides or a page is prepended.
-     *
-     * Takes the larger of the server's count and where the loaded window now
-     * ends, because turns can be appended locally: `promoteUnreconciled` folds a
-     * finished live turn into [turns] without a refetch, so the server's total
-     * is a turn or two behind until the next one. Reading it raw there hands the
-     * next send a baseline the transcript has ALREADY passed, and the reconcile
-     * poll would then accept the previous reply as the new one.
+     * Turns in the FULL transcript, not just the loaded window — the coordinate a "did this
+     * prompt run?" read has to start from, since the loaded length also moves when a window
+     * slides or a page is prepended. The larger of the server's count and [loadedEnd]: the
+     * window can sit short of the total (a reattach drops the server's partial reply from it).
      */
     val globalTurnCount: Int
-        get() = window?.let { maxOf(it.total, it.offset + turns.size) } ?: turns.size
+        get() = window?.let { maxOf(it.total, loadedEnd) } ?: turns.size
 }
 
 /**

@@ -150,6 +150,14 @@ data class AgentOptionsData(
     val initialConfig: Map<String, String> = emptyMap(),
 )
 
+/**
+ * What to highlight when [AgentOptionsController.reconcileSelection]'s budget runs out
+ * without the agent confirming `desired`.
+ *
+ * Adopt [lastSeen] only when it proves the agent moved somewhere else on its own. A value
+ * still sitting on [previous] — or no readable snapshot at all — means nothing was observed,
+ * and the optimistic pick is the better guess (see the caller for why).
+ */
 internal fun reconcileTimeout(lastSeen: String?, desired: String, previous: String?): String {
     val seen = lastSeen ?: return desired
     // No baseline (the option had no value on screen) means no way to tell a value the agent

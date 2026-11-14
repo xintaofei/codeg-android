@@ -130,12 +130,9 @@ class OlderTurnsMergeTest {
     }
 
     @Test
-    fun `the baseline follows turns folded in without a refetch`() {
-        // `promoteUnreconciled` appends a finished live turn straight into `turns`,
-        // and `send` reads the baseline on the very next line. Trusting the server's
-        // now-stale total there hands the next turn a baseline the transcript has
-        // already passed — and the reconcile poll would accept the PREVIOUS reply as
-        // the new one and end the turn early.
+    fun `the baseline never trails the loaded window`() {
+        // A total the server reported before the window last grew must not hand the next
+        // turn a baseline the loaded transcript has already passed.
         val promoted = SessionDetailUiState(
             isNew = false,
             // Window ends at 120 + 2 = 122, but the server last said 120.

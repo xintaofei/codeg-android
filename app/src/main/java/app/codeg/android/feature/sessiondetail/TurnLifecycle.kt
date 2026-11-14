@@ -14,32 +14,29 @@ import java.time.Instant
 // Pure rules for a live turn's lifecycle: whose turn an event or snapshot is, how a reconnect snapshot is reconciled, and plan follow-ups.
 
 /**
- * What to highlight when [SessionDetailViewModel.reconcileSelection]'s budget runs out
- * without the agent confirming `desired`.
- *
- * Adopt [lastSeen] only when it proves the agent moved somewhere else on its own. A value
- * still sitting on [previous] — or no readable snapshot at all — means nothing was observed,
- * and the optimistic pick is the better guess (see the caller for why).
- */
-/**
- * Whether [detail] holds a user turn matching the prompt [sent] at or past [baseline] (the
- * full transcript's length when it was sent).
+ * Whether [detail] holds a user turn matching the prompt [sent] at or past [baseline] (where
+ * the transcript stood when it was sent), skipping the first [priorPrompts] there — prompts
+ * of earlier rounds this client already shows locally, which sit past the same baseline
+ * while their batch is unconfirmed ([holdsBatch]).
  *
  * Matched on content, as the web does while it waits for a batch to persist: parser turn ids
  * aren't the client's. Text must contain what was sent (agents may wrap it); an image-only
- * prompt needs as many images. Not an identity, but scoped past the baseline it would take
- * the same prompt sent again by another client in the same gap to fool it.
+ * prompt needs as many images. Not an identity, but scoped past the baseline and the batch's
+ * earlier prompts it would take the same prompt sent again by another client in the same gap
+ * to fool it.
  */
-internal fun sentPromptAt(detail: ConversationDetail, baseline: Int, sent: MessageTurn): Boolean {
+internal fun sentPromptAt(detail: ConversationDetail, baseline: Int, sent: MessageTurn, priorPrompts: Int = 0): Boolean {
     val offset = detail.window?.offset ?: 0
     val sentText = sent.blocks.mapNotNull { (it as? ContentBlock.Text)?.text }.joinToString("\n").trim()
     val sentImages = sent.blocks.count { it is ContentBlock.Image }
-    return detail.turns.withIndex().any { (i, turn) ->
-        if (offset + i < baseline || turn.role != TurnRole.USER) return@any false
-        val text = turn.blocks.mapNotNull { (it as? ContentBlock.Text)?.text }.joinToString("\n")
-        val images = turn.blocks.count { it is ContentBlock.Image }
-        if (sentText.isNotEmpty()) text.contains(sentText) else images >= sentImages && sentImages > 0
-    }
+    return detail.turns
+        .filterIndexed { i, turn -> offset + i >= baseline && turn.role == TurnRole.USER }
+        .drop(priorPrompts)
+        .any { turn ->
+            val text = turn.blocks.mapNotNull { (it as? ContentBlock.Text)?.text }.joinToString("\n")
+            val images = turn.blocks.count { it is ContentBlock.Image }
+            if (sentText.isNotEmpty()) text.contains(sentText) else images >= sentImages && sentImages > 0
+        }
 }
 
 /** Whether [detail]'s turns run to the end of the transcript (a legacy full response does). */
