@@ -59,4 +59,15 @@ class DelegationTest {
         assertEquals(StepFamily.DELEGATION_POLL, stepFamily(polls[0]))
         assertNull("the delegation itself stands alone", stepFamily(call("x", "mcp__codeg-mcp__delegate_to_agent")))
     }
+
+    @Test
+    fun `a resume card finds its task's binding only on its own evidence`() {
+        val original = DelegationBinding("call-orig", "child", 9, "codex", DelegationBinding.Status.RUNNING, "Port it", "task-7", null)
+        fun resume(output: String?) = ToolCallVM.of("call-resume", "mcp__codeg-mcp__resume_delegation", "", ToolCallState.DONE, """{"task_id":"task-7","reason":"go on"}""", output, null, false)
+        assertEquals(original, Delegations.resumedBinding(resume("""{"child_conversation_id":9,"status":"running"}"""), listOf(original)))
+        assertNull("another child", Delegations.resumedBinding(resume("""{"child_conversation_id":10}"""), listOf(original)))
+        assertEquals(original, Delegations.resumedBinding(resume("Delegation resumed: task-7"), listOf(original)))
+        assertNull("refused", Delegations.resumedBinding(resume("Unknown task id: task-7"), listOf(original)))
+        assertNull("not a resume", Delegations.resumedBinding(call("x", "delegate_to_agent"), listOf(original)))
+    }
 }

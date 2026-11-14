@@ -21,6 +21,7 @@ import app.codeg.android.feature.sessiondetail.rendering.ContextCompaction
 import app.codeg.android.feature.sessiondetail.rendering.MessageRender
 import app.codeg.android.feature.sessiondetail.rendering.ProposedPlan
 import app.codeg.android.feature.sessiondetail.rendering.RenderPart
+import app.codeg.android.feature.sessiondetail.rendering.Goals
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallVM
 import app.codeg.android.feature.sessiondetail.rendering.ToolKindBucket
@@ -582,6 +583,18 @@ object TranscriptTimeline {
             calls = calls,
             callRows = callRows,
         )
+    }
+
+    /** The thread's latest goal call (see [GoalControl.currentCallId]), or null when it has none. */
+    fun latestGoalCallId(entries: List<ThreadEntry>): String? {
+        for (entry in entries.asReversed()) {
+            val rows = (entry as? ThreadEntry.Reply)?.rows ?: continue
+            for (part in rows.calls.asReversed()) {
+                val vm = (part as? RenderPart.Tool)?.vm ?: continue
+                if (Goals.isGoalCall(vm.rawName)) return vm.id
+            }
+        }
+        return null
     }
 
     /**

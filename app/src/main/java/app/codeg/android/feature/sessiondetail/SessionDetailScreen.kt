@@ -222,8 +222,9 @@ fun SessionDetailScreen(
     }
     // Goal controls go out on the live connection, gated on what its adapter offers.
     // The actions are a live connection's (they go when it does).
-    val goalControl = remember(ui.goalActions) {
-        GoalControl(onControl = viewModel::goalControl, actions = ui.goalActions)
+    val currentGoal = remember(entries) { TranscriptTimeline.latestGoalCallId(entries) }
+    val goalControl = remember(ui.goalActions, currentGoal) {
+        GoalControl(onControl = viewModel::goalControl, actions = ui.goalActions, currentCallId = currentGoal)
     }
     // The "load older" row sits at the head of the list, so every list index the
     // screen computes from a NODE index has to step over it.

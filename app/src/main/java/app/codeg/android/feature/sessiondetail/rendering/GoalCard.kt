@@ -73,7 +73,7 @@ fun GoalCard(vm: ToolCallVM, modifier: Modifier = Modifier) {
         else -> goal.status
     }
     val tokensWord = stringResource(R.string.goal_tokens)
-    val onControl = control.onControl
+    val onControl = control.onControl?.takeIf { control.currentCallId == vm.id }
     val canPause = onControl != null && "pause" in control.actions && status == "active"
     val canClear = onControl != null && "clear" in control.actions && (status == "active" || status == "paused")
     Column(

@@ -1875,10 +1875,12 @@ class SessionDetailViewModel @Inject constructor(
                 // Whole sets, the server's current state.
                 backgroundTasks = snapshot.backgroundOutstandingTasks,
                 delegatedChildren = snapshot.delegatedChildren,
-                // The running ones it still holds; a finished binding seen here stays finished.
+                // The running ones it holds. A snapshot newer than every event applied here is the
+                // current word — a delegation it shows running after this client saw it end was
+                // resumed (under the same call id). Only an overtaken one can't revive an end.
                 delegations = snapshot.activeDelegations.fold(it.delegations) { acc, d ->
-                    if (acc[d.parentToolUseId]?.status?.let { s -> s != app.codeg.android.core.model.DelegationBinding.Status.RUNNING } == true) acc
-                    else acc + (d.parentToolUseId to d)
+                    val ended = acc[d.parentToolUseId]?.status?.let { s -> s != app.codeg.android.core.model.DelegationBinding.Status.RUNNING } == true
+                    if (overtaken && ended) acc else acc + (d.parentToolUseId to d)
                 },
             )
         }

@@ -30,6 +30,32 @@ object Delegations {
     /** A call that hands a task to another agent: `delegate_to_agent` or `resume_delegation`. */
     fun isDelegateCall(name: String): Boolean = bareName(name).let { it == "delegate_to_agent" || it == "resume_delegation" }
 
+    /** A `resume_delegation` call: it re-runs a task under the ORIGINAL delegation's call id. */
+    fun isResumeCall(name: String): Boolean = bareName(name) == "resume_delegation"
+
+    private const val RESUMED_ACK = "Delegation resumed"
+    private val CHILD_CONVERSATION = Regex("\"child_conversation_id\"\\s*:\\s*(\\d+)")
+
+    /**
+     * The binding a resume card stands for (web `useDelegationCardModel`): the broker re-binds
+     * the child to the original call, so a resume finds it by the task id it names — and only
+     * on this call's own evidence, since that id is an argument the model wrote: the result
+     * names the same child conversation, or (a host that drops the structured report) affirms
+     * the resume in words. A refusal ("Unknown task id") affirms nothing.
+     */
+    fun resumedBinding(vm: ToolCallVM, bindings: Collection<DelegationBinding>): DelegationBinding? {
+        if (!isResumeCall(vm.rawName)) return null
+        val taskId = (ToolDerive.parseJson(vm.input)?.get("task_id") as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ?.takeIf { it.isNotBlank() } ?: return null
+        val binding = bindings.firstOrNull { it.taskId == taskId } ?: return null
+        val result = vm.output?.takeIf { it.isNotBlank() } ?: vm.content.orEmpty()
+        val named = CHILD_CONVERSATION.find(result)?.groupValues?.get(1)?.toIntOrNull()
+            ?: fromMeta(vm.meta)?.childConversationId
+        if (named != null) return binding.takeIf { it.childConversationId == named }
+        val text = (ToolOutputFormat.mcpResultText(result.trim()) ?: result).trim()
+        return binding.takeIf { text.startsWith(RESUMED_ACK) }
+    }
+
     /** A `get_delegation_status` check on a delegated task. */
     fun isStatusPoll(name: String): Boolean = bareName(name) == "get_delegation_status"
 

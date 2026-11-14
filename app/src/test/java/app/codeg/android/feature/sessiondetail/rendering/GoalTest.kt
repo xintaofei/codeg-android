@@ -48,4 +48,15 @@ class GoalTest {
         assertTrue(Goals.isGoalCall("mcp__codex__update_goal"))
         assertFalse(Goals.isGoalCall("get_goal_status"))
     }
+
+    @Test
+    fun `a structured live goal is read off its title`() {
+        assertEquals("create_goal", Goals.nameFromTitle("Goal updated (active): Ship the port"))
+        assertEquals("update_goal", Goals.nameFromTitle("Goal updated (Budget Limited)： 发布"))
+        assertNull(Goals.nameFromTitle("Goal updated (): x"))
+        assertNull(Goals.nameFromTitle("Run tests"))
+        val live = ToolCallVM.of("codex-goal-1", "Goal updated (active): Ship the port", "other", ToolCallState.DONE, """{"objective":"Ship the port"}""", """{"goal":{"objective":"Ship the port","status":"active"}}""", null, false)
+        assertTrue(Goals.isGoalCall(live.rawName))
+        assertEquals("active", Goals.parse(live).normalizedStatus)
+    }
 }

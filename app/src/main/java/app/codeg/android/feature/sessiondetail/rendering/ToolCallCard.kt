@@ -88,7 +88,7 @@ fun ToolCallCard(vm: ToolCallVM, modifier: Modifier = Modifier, nested: Boolean 
     // A delegated task: who took it and how it stands, ahead of the call's own fields.
     val delegation = remember(vm, activity.delegations) {
         if (Delegations.isDelegateCall(vm.rawName) || vm.meta?.containsKey(Delegations.META_KEY) == true) {
-            Delegations.view(vm, activity.delegations[vm.id])
+            Delegations.view(vm, activity.delegations[vm.id] ?: Delegations.resumedBinding(vm, activity.delegations.values))
         } else {
             null
         }

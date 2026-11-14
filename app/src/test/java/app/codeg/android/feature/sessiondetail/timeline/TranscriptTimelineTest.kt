@@ -583,4 +583,13 @@ class TranscriptTimelineTest {
         )
         assertEquals(4, prompted.size)
     }
+
+    @Test
+    fun `only the thread's latest goal call may offer controls`() {
+        val first = assistant("a1", call("g1", "create_goal", """{"objective":"A"}""") + call("g2", "update_goal", """{"status":"complete"}"""))
+        val second = assistant("a2", call("g3", "create_goal", """{"objective":"B"}""") + listOf(ContentBlock.Text("on it")))
+        val entries = TranscriptTimeline.persistedEntries(listOf(user("u1", "q"), first, user("u2", "q2"), second), emptyList(), agent)
+        assertEquals("g3", TranscriptTimeline.latestGoalCallId(entries))
+        assertNull(TranscriptTimeline.latestGoalCallId(TranscriptTimeline.persistedEntries(listOf(user("u1", "q")), emptyList(), agent)))
+    }
 }

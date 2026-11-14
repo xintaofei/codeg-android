@@ -64,7 +64,8 @@ data class ToolCallVM(
             // mode entered"). Resolve them to the canonical name up front so the live
             // stream lands on the same identity the persisted path reads — and so the
             // card's title stops changing mid-stream.
-            val planName = ToolDerive.grokPlanModeName(meta)
+            // A structured goal update arrives titled `Goal updated (<status>): <objective>`.
+            val planName = ToolDerive.grokPlanModeName(meta) ?: Goals.nameFromTitle(rawName)
             // A codex-acp command action announces no tool name and no input at all,
             // only a human title, so both have to be read back out of it.
             val action = if (planName == null) CodexCommandAction.resolve(rawName) else null

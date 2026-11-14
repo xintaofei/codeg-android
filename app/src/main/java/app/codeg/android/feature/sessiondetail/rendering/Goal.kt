@@ -30,6 +30,12 @@ data class GoalControl(
     val onControl: ((String) -> Unit)?,
     /** The actions the adapter offers; empty while unknown. */
     val actions: List<String>,
+    /**
+     * The thread's latest goal call: the only card that may offer controls. A control acts on
+     * the session's goal as it stands now, so an earlier goal's card offering one would pause
+     * or clear a different goal.
+     */
+    val currentCallId: String? = null,
 )
 
 object Goals {
@@ -37,6 +43,21 @@ object Goals {
     private fun bareName(name: String) = name.trim().lowercase().substringAfterLast("__").substringAfterLast('/')
 
     fun isGoalCall(name: String): Boolean = bareName(name).let { it == "create_goal" || it == "update_goal" }
+
+    /** The live title the server gives a structured goal update (`codex_goal.rs`). */
+    private val UPDATE_TITLE = Regex("^goal updated\\s*\\(([^)]+)\\)\\s*[:：]\\s*([\\s\\S]*)$", RegexOption.IGNORE_CASE)
+
+    /**
+     * The goal call a live title names (web `parseGoalUpdateTitle`): `Goal updated (active): …`
+     * opens a goal (`create_goal`), any other status updates it (`update_goal`). Null for any
+     * other title.
+     */
+    fun nameFromTitle(title: String): String? {
+        val m = UPDATE_TITLE.find(title.trim()) ?: return null
+        val status = m.groupValues[1].trim().lowercase().replace(Regex("[\\s-]+"), "_")
+        if (status.isEmpty() || m.groupValues[2].isBlank()) return null
+        return if (status == "active") "create_goal" else "update_goal"
+    }
 
     private fun obj(raw: String?): JsonObject? = raw?.let { ToolDerive.parseJson(it) }
 
