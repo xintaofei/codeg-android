@@ -674,6 +674,14 @@
     <string name="activity_reply">Reply</string>
     <string name="activity_separator">" · "</string>
     <string name="activity_show_failure">Show the failure</string>
+    <string name="activity_needs_you">needs you</string>
+    <string name="activity_waiting_on_you">Waiting for you</string>
+    <string name="activity_declined">declined</string>
+    <string name="approval_allow_once">approved once</string>
+    <string name="approval_allow_always">always allowed</string>
+    <string name="approval_rejected">declined</string>
+    <string name="approval_via_chat_channel">via a chat channel</string>
+    <string name="approval_by_policy">by the run\'s permission policy</string>
     <string name="activity_expand">Show the steps</string>
     <string name="activity_collapse">Collapse</string>
 
@@ -938,6 +946,11 @@
     <string name="perm_scope_project">Saved to project settings</string>
     <string name="perm_scope_project_local">Saved to local project settings</string>
     <string name="perm_scope_persistent">Saved permanently</string>
+    <string name="perm_network_request">Network request outside the sandbox</string>
+    <string name="perm_network_question">Allow this connection?</string>
+    <string name="perm_network_host">Host</string>
+    <string name="perm_kind_network">network</string>
+    <string name="perm_queued_count">+%1$d waiting</string>
 
     <!-- ===== ViewModel toasts (interactive flows) ===== -->
     <string name="cc_test_message_sent">Test message sent.</string>

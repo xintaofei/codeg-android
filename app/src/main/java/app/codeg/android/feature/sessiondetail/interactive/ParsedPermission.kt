@@ -23,6 +23,24 @@ data class PermissionAllowedPrompt(val prompt: String, val tool: String)
  */
 data class ParsedPermission(
     val title: String,
+    /**
+     * The human-readable heading: `_meta.claudeCode.title` (claude-agent-acp ≥0.63), else the
+     * `_meta.permission.title` the server hoists off the request (codex ≥1.7.0, claude ≥0.73.0).
+     * A heading that merely restates [command] gives way to the model's own label for it
+     * (claude-agent-acp 0.79.0 made the heading the raw command). Null: the card uses [title].
+     */
+    val description: String? = null,
+    /** Why the agent needs this approval, in its own words (`_meta.permission.description`,
+     *  version 1) — the sentence the decision rests on. */
+    val reason: String? = null,
+    /** `_meta.permission.defaultToNo` (claude-agent-acp ≥0.77.0): this ask must not be approvable
+     *  by a stray tap, so the decline takes the emphasis. Only a literal `true` counts. */
+    val defaultToNo: Boolean = false,
+    /** The host a Claude Code sandbox asks to let a command reach (`SandboxNetworkAccess`), read
+     *  only when the request names that tool in `_meta.claudeCode.toolName`. */
+    val networkHost: String? = null,
+    /** The tool call the request is about, when it names one. */
+    val toolCallId: String? = null,
     val kind: String,
     val command: String?,
     val cwd: String?,
@@ -45,7 +63,7 @@ data class ParsedPermission(
 
     /** Whether the body has anything richer than the raw-JSON fallback. */
     val hasStructuredBody: Boolean
-        get() = command != null || diffFiles.isNotEmpty() || planMarkdown != null ||
+        get() = networkHost != null || command != null || diffFiles.isNotEmpty() || planMarkdown != null ||
             planEntries.isNotEmpty() || allowedPrompts.isNotEmpty() ||
             modeTarget != null || url != null || query != null || prompt != null
 
@@ -76,8 +94,31 @@ data class ParsedPermission(
             val prompt = pickString(rawInputObj, listOf("prompt")) ?: pickString(obj, listOf("prompt"))
             val title = pickString(obj, listOf("title", "toolName", "tool_name", "name")) ?: fallbackTitle(rawKind)
 
+            // NOTE the underscore: the request forwards the raw ACP tool call (serde renames
+            // `meta` to `_meta`), unlike tool calls, whose event field is plain `meta`.
+            val meta = asObject(pickValue(obj, listOf("_meta")))
+            val claudeCode = asObject(pickValue(meta, listOf("claudeCode")))
+            val permissionMeta = pickValue(meta, listOf("permission"))
+            val metaHeading = pickString(claudeCode, listOf("title"))
+                ?: pickString(asObject(permissionMeta), listOf("title"))
+            val description = if (metaHeading != null && command != null && metaHeading == command) {
+                shellCommandLabel(rawInputObj, command) ?: metaHeading
+            } else {
+                metaHeading
+            }
+            val networkHost = if (pickString(claudeCode, listOf("toolName")) == SANDBOX_NETWORK_TOOL) {
+                pickString(rawInputObj, listOf("host"))
+            } else {
+                null
+            }
+
             return ParsedPermission(
-                title = title, kind = rawKind, command = command, cwd = cwd, diffFiles = diffFiles,
+                title = title, description = description,
+                reason = permissionMetaDescription(permissionMeta),
+                defaultToNo = permissionMetaFlag(permissionMeta, "defaultToNo"),
+                networkHost = networkHost,
+                toolCallId = permissionToolCallId(toolCall),
+                kind = rawKind, command = command, cwd = cwd, diffFiles = diffFiles,
                 planMarkdown = planMarkdown, planEntries = planEntries, allowedPrompts = allowedPrompts,
                 modeTarget = modeTarget, url = url, query = query, prompt = prompt,
                 jsonPreview = prettyPrint(toolCall),
@@ -115,6 +156,46 @@ private fun pickString(obj: JsonObject?, keys: List<String>): String? {
     return null
 }
 
+/** Claude Code's name for a sandbox's network request (see [ParsedPermission.networkHost]). */
+private const val SANDBOX_NETWORK_TOOL = "SandboxNetworkAccess"
+
+/** Longest agent-authored label promoted to the card's heading (the field is unbounded). */
+private const val MAX_HEADING_CHARS = 200
+
+/**
+ * The model's own one-line label for a shell command (`input.description`), or null when it is
+ * missing or only restates the command — so the heading isn't the command a second time.
+ */
+private fun shellCommandLabel(rawInputObj: JsonObject?, command: String): String? {
+    val label = pickString(rawInputObj, listOf("description")) ?: return null
+    return if (label == command) null else label.take(MAX_HEADING_CHARS)
+}
+
+/** The tool call a request names (web `extractPermissionToolCallId`). */
+internal fun permissionToolCallId(toolCall: JsonElement?): String? {
+    val obj = toolCall as? JsonObject ?: return null
+    for (key in listOf("call_id", "callId", "tool_call_id", "toolCallId", "id")) {
+        obj[key].str()?.takeIf { it.isNotBlank() }?.let { return it }
+    }
+    return null
+}
+
+/** The plain `description` of a version-1 `_meta.permission` block, within the card's budget. */
+private fun permissionMetaDescription(permission: JsonElement?): String? {
+    val record = asObject(permission) ?: return null
+    if (!isPermissionMetaV1(record["version"])) return null
+    return pickString(record, listOf("description"))?.take(MAX_PERMISSION_CHANGE_CHARS)
+}
+
+/** A flag of the same block, under the same version gate. Only a real `true` counts: these
+ *  flags gate a SAFER presentation, so a shape this build doesn't understand reads as unset. */
+private fun permissionMetaFlag(permission: JsonElement?, key: String): Boolean {
+    val record = asObject(permission) ?: return false
+    if (!isPermissionMetaV1(record["version"])) return false
+    val flag = record[key] as? JsonPrimitive ?: return false
+    return !flag.isString && flag.content == "true"
+}
+
 private fun fallbackTitle(kind: String): String {
     val normalized = kind.replace("_", " ").trim()
     if (normalized.isEmpty()) return ""
@@ -122,15 +203,30 @@ private fun fallbackTitle(kind: String): String {
         .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
 }
 
-private fun extractCommand(value: JsonElement?, depth: Int = 0): String? {
+/**
+ * The command a request asks to run, dug out of whatever shape the agent used.
+ *
+ * [verbatim] marks a string leaf directly under a key that names a command (`command`, `cmd`,
+ * `script`, `args`, …): such a string IS the command, so the two heuristics guarding the broad
+ * walk don't apply to it — a `{`/`[` prefix (`[ -f x ] && make`, `{ npm test; }`) is shell
+ * unless it parses as JSON, and a command that writes a patch isn't a diff payload. Either
+ * would leave the card without its command block, the one thing a command approval must
+ * show. The mark lasts one hop: a wrapper key below it reads conservatively again.
+ */
+private fun extractCommand(value: JsonElement?, depth: Int = 0, verbatim: Boolean = false): String? {
     if (depth > 4 || value == null || value.isNullElem()) return null
     when (value) {
         is JsonPrimitive -> {
             if (!value.isString) return null
             val t = value.content.trim()
-            if (t.isEmpty() || UnifiedDiff.looksLikeDiff(t)) return null
-            if (!t.startsWith("{") && !t.startsWith("[")) return t
-            return extractCommand(parseJsonString(t), depth + 1)
+            if (t.isEmpty()) return null
+            if (!t.startsWith("{") && !t.startsWith("[")) {
+                return if (!verbatim && UnifiedDiff.looksLikeDiff(t)) null else t
+            }
+            // A real envelope is read as before; one that doesn't parse is shell on a
+            // command leaf, and an unreadable payload anywhere else.
+            val parsed = parseJsonString(t) ?: return if (verbatim) t else null
+            return extractCommand(parsed, depth + 1)
         }
         is JsonArray -> {
             val parts = value.mapNotNull { it.str() }.filter { it.trim().isNotEmpty() }
@@ -139,7 +235,7 @@ private fun extractCommand(value: JsonElement?, depth: Int = 0): String? {
         }
         is JsonObject -> {
             for (key in listOf("command", "cmd", "script", "args", "argv", "command_args", "commandArgs")) {
-                extractCommand(value[key], depth + 1)?.let { return it }
+                extractCommand(value[key], depth + 1, verbatim = true)?.let { return it }
             }
             for (key in listOf("rawInput", "raw_input", "input", "arguments", "params", "payload")) {
                 extractCommand(value[key], depth + 1)?.let { return it }
@@ -320,7 +416,10 @@ private const val MAX_PERMISSION_CHANGES_SCANNED = 32
 fun parsePermissionOptionChanges(meta: JsonElement?): List<PermissionOptionChange> {
     val permission = asObject(pickValue(asObject(meta), listOf("permission"))) ?: return emptyList()
     if (!isPermissionMetaV1(permission["version"])) return emptyList()
-    val changes = permission["changes"] as? JsonArray ?: return emptyList()
+    // codex-acp ≥1.7.0 dropped `changes[]` for a flat `{version: 1, description}` (MCP
+    // elicitation approvals): read as one change with no stated lifetime.
+    val changes = permission["changes"] as? JsonArray
+        ?: return permissionMetaDescription(permission)?.let { listOf(PermissionOptionChange(it, null)) } ?: emptyList()
 
     val out = mutableListOf<PermissionOptionChange>()
     for (change in changes.asSequence().take(MAX_PERMISSION_CHANGES_SCANNED)) {

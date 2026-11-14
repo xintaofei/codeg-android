@@ -54,6 +54,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import app.codeg.android.feature.sessiondetail.rendering.ActivityLive
+import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
@@ -193,6 +195,15 @@ fun SessionDetailScreen(
         TranscriptTimeline.terminate(TranscriptTimeline.flatten(entries) { folds.isOpen(foldView, it) })
     }
     val hasContent = nodes.isNotEmpty()
+    // What the connection knows that the transcript doesn't: the call a permission request
+    // waits on, and how the answered ones went (the chips on their rows).
+    val activityLive = remember(ui.pendingPermission, ui.pendingQuestion, ui.pendingPlanApproval, ui.toolApprovals) {
+        ActivityLive(
+            awaitingToolCallId = ui.pendingPermission?.parsed?.toolCallId,
+            awaitingUser = ui.pendingPermission != null || ui.pendingQuestion != null || ui.pendingPlanApproval != null,
+            approvals = ui.toolApprovals,
+        )
+    }
     // The "load older" row sits at the head of the list, so every list index the
     // screen computes from a NODE index has to step over it.
     val headerCount = if (ui.hasOlderTurns) 1 else 0
@@ -380,6 +391,7 @@ fun SessionDetailScreen(
                         options = p.options,
                         onRespond = viewModel::respondPermission,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        queued = p.queued,
                     )
                 }
                 ui.pendingQuestion?.let { q ->
@@ -517,6 +529,7 @@ fun SessionDetailScreen(
                     LocalTimelineScroll provides scrollToId,
                     LocalReplyFoldActions provides foldActions,
                     LocalDisclosures provides disclosures,
+                    LocalActivityLive provides activityLive,
                 ) {
                     LazyColumn(
                         state = listState,

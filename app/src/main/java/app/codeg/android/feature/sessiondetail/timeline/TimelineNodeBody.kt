@@ -65,6 +65,8 @@ import app.codeg.android.core.designsystem.markdown.SingleBlockView
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.ContentBlock
 import app.codeg.android.core.model.MessageTurn
+import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
+import app.codeg.android.feature.sessiondetail.rendering.ToolWarning
 import app.codeg.android.feature.sessiondetail.rendering.InlineImage
 import app.codeg.android.feature.sessiondetail.rendering.LivePlanView
 import app.codeg.android.feature.sessiondetail.rendering.ProposedPlanCard
@@ -107,7 +109,17 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
         is NodeContent.Footer -> TurnFooter(c.turn, c.questionId, modifier)
         is NodeContent.Plan -> LivePlanView(c.entries, modifier)
         is NodeContent.ProposedPlan -> ProposedPlanCard(c.markdown, c.streaming, modifier)
-        is NodeContent.Thinking -> ThinkingShimmer(modifier)
+        // Blocked on a card above the composer, the agent isn't thinking: say who it waits on.
+        is NodeContent.Thinking -> if (LocalActivityLive.current.awaitingUser) {
+            Text(
+                stringResource(R.string.activity_waiting_on_you),
+                fontSize = 12.sp,
+                color = ToolWarning,
+                modifier = modifier.padding(vertical = 3.dp),
+            )
+        } else {
+            ThinkingShimmer(modifier)
+        }
         is NodeContent.Error -> InlineTurnError(c.message, c.details, modifier)
         is NodeContent.ReplyHeader -> ReplyHeaderBody(c, modifier)
         is NodeContent.ReplyFoot -> ReplyFootBody(c, modifier)

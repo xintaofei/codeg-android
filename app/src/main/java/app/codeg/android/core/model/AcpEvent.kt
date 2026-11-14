@@ -125,8 +125,24 @@ sealed interface AcpEvent {
         val requestId: String,
         val toolCall: JsonElement,
         val options: List<PermissionOption>,
+        /**
+         * How many further requests wait behind this card. The server shows one card at a
+         * time, so without this "the agent is waiting on me once" reads like "three more
+         * times" — or like a hang. Zero on a freshly admitted card; non-zero only on one
+         * promoted while others trail it.
+         */
+        val queued: Int = 0,
     ) : AcpEvent
+    /** The number waiting behind the card on screen changed, the card itself didn't. */
+    data class PermissionQueueDepth(val depth: Int) : AcpEvent
     data class PermissionResolved(val requestId: String) : AcpEvent
+    /**
+     * How an answered permission request went for its tool call. Follows the
+     * [PermissionResolved] that retired the card, only for an answer that took effect.
+     * Agent transcripts record no approvals, so this (and the snapshot's recent ones, and
+     * the stamp a detail load puts on the call) is all that can say it.
+     */
+    data class ToolApproval(val approval: ToolApprovalInfo) : AcpEvent
     /** Agent asks one or more multiple-choice questions. Resolve via
      * `acp_answer_question`. */
     data class QuestionRequest(val questionId: String, val questions: List<QuestionSpec>) : AcpEvent
@@ -259,8 +275,14 @@ sealed interface AcpEvent {
                     requestId = obj.stringOrNull("request_id").orEmpty(),
                     toolCall = obj["tool_call"] ?: JsonNull,
                     options = decodeList(json, obj["options"], PermissionOption.serializer()),
+                    queued = obj.intOrZero("queued").coerceAtLeast(0),
                 )
+                "permission_queue_depth" -> PermissionQueueDepth(obj.intOrZero("depth").coerceAtLeast(0))
                 "permission_resolved" -> PermissionResolved(obj.stringOrNull("request_id").orEmpty())
+                "tool_approval" -> decodeOrNull(json, obj["approval"], ToolApprovalInfo.serializer())
+                    ?.takeIf { it.toolCallId.isNotEmpty() }
+                    ?.let(::ToolApproval)
+                    ?: Unknown(type)
                 "question_request" -> QuestionRequest(
                     questionId = obj.stringOrNull("question_id").orEmpty(),
                     questions = decodeList(json, obj["questions"], QuestionSpec.serializer()),
@@ -321,7 +343,7 @@ sealed interface AcpEvent {
                 .getOrDefault(emptyList())
         }
 
-        private fun <T> decodeOrNull(json: Json, element: JsonElement?, serializer: KSerializer<T>): T? {
+        internal fun <T> decodeOrNull(json: Json, element: JsonElement?, serializer: KSerializer<T>): T? {
             val obj = element as? JsonObject ?: return null
             return runCatching { json.decodeFromJsonElement(serializer, obj) }.getOrNull()
         }
@@ -445,6 +467,12 @@ data class LiveSessionSnapshot(
      * moments later. See [AcpEvent.SelectorsReady].
      */
     val selectorsReady: Boolean,
+    /**
+     * The connection's recent approval records, oldest first — for a client that attached
+     * after they were answered. Folded into what this client already holds, never replacing
+     * it (see `ToolApprovals.merge`).
+     */
+    val toolApprovals: List<ToolApprovalInfo> = emptyList(),
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -488,6 +516,11 @@ data class LiveSessionSnapshot(
                     json, obj["config_options"], SessionConfigOption.serializer(),
                 ),
                 selectorsReady = obj.boolOrNull("selectors_ready") ?: false,
+                // One by one, so a record this build can't read drops alone.
+                toolApprovals = obj.arrayOrNull("tool_approvals")
+                    ?.mapNotNull { AcpEvent.decodeOrNull(json, it, ToolApprovalInfo.serializer()) }
+                    ?.filter { it.toolCallId.isNotEmpty() }
+                    ?: emptyList(),
             )
 
         private fun JsonObject.intOrNull(key: String): Int? =
@@ -643,12 +676,15 @@ data class PendingPermissionSnapshot(
     val requestId: String,
     val toolCall: JsonElement,
     val options: List<PermissionOption>,
+    /** See [AcpEvent.PermissionRequest.queued]. */
+    val queued: Int = 0,
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): PendingPermissionSnapshot =
             PendingPermissionSnapshot(
                 requestId = obj.stringOrNull("request_id").orEmpty(),
                 toolCall = obj["tool_call"] ?: JsonNull,
+                queued = (obj["queued"] as? JsonPrimitive)?.content?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
                 options = (obj["options"] as? JsonArray)?.let {
                     runCatching {
                         json.decodeFromJsonElement(ListSerializer(PermissionOption.serializer()), it)

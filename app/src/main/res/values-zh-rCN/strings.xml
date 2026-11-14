@@ -664,6 +664,14 @@
     <string name="activity_reply">回复</string>
     <string name="activity_separator">" · "</string>
     <string name="activity_show_failure">查看失败的步骤</string>
+    <string name="activity_needs_you">等你处理</string>
+    <string name="activity_waiting_on_you">等你处理</string>
+    <string name="activity_declined">已拒绝</string>
+    <string name="approval_allow_once">已批准一次</string>
+    <string name="approval_allow_always">总是允许</string>
+    <string name="approval_rejected">已拒绝</string>
+    <string name="approval_via_chat_channel">来自聊天频道</string>
+    <string name="approval_by_policy">由运行的权限策略决定</string>
     <string name="activity_expand">展开执行过程</string>
     <string name="activity_collapse">收起</string>
 
@@ -907,6 +915,11 @@
     <string name="perm_scope_project">保存到项目设置</string>
     <string name="perm_scope_project_local">保存到本地项目设置</string>
     <string name="perm_scope_persistent">永久保存</string>
+    <string name="perm_network_request">沙箱外的网络请求</string>
+    <string name="perm_network_question">允许这个连接吗？</string>
+    <string name="perm_network_host">主机</string>
+    <string name="perm_kind_network">网络</string>
+    <string name="perm_queued_count">还有 %1$d 项待审批</string>
 
     <!-- ===== ViewModel toasts (interactive flows) ===== -->
     <string name="cc_test_message_sent">测试消息已发送。</string>

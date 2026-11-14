@@ -41,7 +41,9 @@ import app.codeg.android.core.designsystem.component.AgentAvatar
 import app.codeg.android.core.designsystem.component.SectionBadgeIcon
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.core.model.AgentType
+import app.codeg.android.feature.sessiondetail.rendering.LocalActivityLive
 import app.codeg.android.feature.sessiondetail.rendering.ToolCallState
+import app.codeg.android.feature.sessiondetail.rendering.ToolWarning
 import app.codeg.android.feature.sessiondetail.rendering.ToolKindBucket
 import app.codeg.android.feature.sessiondetail.rendering.bucketIcon
 
@@ -73,8 +75,9 @@ sealed interface MarkerKind {
     data object User : MarkerKind
     data class Assistant(val agent: AgentType) : MarkerKind
     data object Reasoning : MarkerKind
-    data class Tool(val bucket: ToolKindBucket, val state: ToolCallState) : MarkerKind
-    data class ToolGroup(val error: Boolean, val streaming: Boolean) : MarkerKind
+    /** [callId]: so the marker can turn amber while a permission request waits on the call. */
+    data class Tool(val bucket: ToolKindBucket, val state: ToolCallState, val callId: String? = null) : MarkerKind
+    data class ToolGroup(val error: Boolean, val streaming: Boolean, val unsettledIds: List<String> = emptyList()) : MarkerKind
     data object Image : MarkerKind
     data object System : MarkerKind
     data object Plan : MarkerKind
@@ -169,25 +172,36 @@ fun NodeMarker(kind: MarkerKind, modifier: Modifier = Modifier) {
             is MarkerKind.Assistant -> AgentAvatar(kind.agent, size = size)
             is MarkerKind.Reasoning -> SectionBadgeIcon(Icons.Rounded.Psychology, colors.textTertiary, size = size)
             is MarkerKind.Tool -> {
-                val tint = when (kind.state) {
-                    ToolCallState.RUNNING, ToolCallState.INPUT_STREAMING -> colors.accent
-                    ToolCallState.DONE -> SuccessGreen
-                    ToolCallState.ERROR -> colors.danger
+                val running = kind.state == ToolCallState.RUNNING || kind.state == ToolCallState.INPUT_STREAMING
+                // Waiting on the user's approval, the call isn't at work: no ping.
+                val awaiting = running && kind.callId != null && kind.callId == LocalActivityLive.current.awaitingToolCallId
+                val tint = when {
+                    awaiting -> ToolWarning
+                    running -> colors.accent
+                    kind.state == ToolCallState.DONE -> SuccessGreen
+                    else -> colors.danger
                 }
                 SectionBadgeIcon(bucketIcon(kind.bucket), tint, size = size)
-                if (kind.state == ToolCallState.RUNNING || kind.state == ToolCallState.INPUT_STREAMING) {
-                    PulseRing(tint, size)
-                }
+                if (running && !awaiting) PulseRing(tint, size)
             }
             is MarkerKind.ToolGroup -> {
-                SectionBadgeIcon(Icons.Rounded.Layers, if (kind.error) colors.danger else colors.accent, size = size)
-                if (kind.streaming) PulseRing(colors.accent, size)
+                val awaitedId = LocalActivityLive.current.awaitingToolCallId
+                val awaiting = awaitedId != null && awaitedId in kind.unsettledIds
+                val tint = when {
+                    awaiting -> ToolWarning
+                    kind.error -> colors.danger
+                    else -> colors.accent
+                }
+                SectionBadgeIcon(Icons.Rounded.Layers, tint, size = size)
+                if (kind.streaming && !awaiting) PulseRing(colors.accent, size)
             }
             is MarkerKind.Image -> SectionBadgeIcon(Icons.Rounded.Image, colors.textSecondary, size = size)
             is MarkerKind.System ->
                 Box(Modifier.size(size * 0.34f).clip(CircleShape).background(colors.textTertiary.copy(alpha = 0.55f)))
             is MarkerKind.Plan -> SectionBadgeIcon(Icons.Rounded.Checklist, colors.accent, size = size)
-            is MarkerKind.Thinking -> {
+            is MarkerKind.Thinking -> if (LocalActivityLive.current.awaitingUser) {
+                SectionBadgeIcon(Icons.Rounded.MoreHoriz, ToolWarning, size = size)
+            } else {
                 SectionBadgeIcon(Icons.Rounded.MoreHoriz, colors.accent, size = size)
                 PulseRing(colors.accent, size)
             }

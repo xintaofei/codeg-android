@@ -389,3 +389,41 @@ class AcpEventTest {
         )
     }
 }
+
+/** The 0.44 permission-queue and approval events. */
+class AcpEventApprovalTest {
+
+    private val json: Json = CodegJson.response
+
+    private fun event(raw: String): AcpEvent = AcpEvent.fromWire(json.parseToJsonElement(raw).jsonObject, json)
+
+    @Test
+    fun `a request says how many wait behind it, and the depth moves alone`() {
+        val request = event("""{"type":"permission_request","request_id":"r","tool_call":{},"options":[],"queued":2}""") as AcpEvent.PermissionRequest
+        assertEquals(2, request.queued)
+        assertEquals(0, (event("""{"type":"permission_request","request_id":"r","tool_call":{},"options":[]}""") as AcpEvent.PermissionRequest).queued)
+        assertEquals(AcpEvent.PermissionQueueDepth(3), event("""{"type":"permission_queue_depth","depth":3}"""))
+    }
+
+    @Test
+    fun `an approval record decodes, an unreadable one is dropped`() {
+        val approval = event(
+            """{"type":"tool_approval","approval":{"tool_call_id":"t","option_kind":"allow_once","option_name":"Yes","origin":"user","decided_at":"2026-11-14T03:00:00Z"}}""",
+        ) as AcpEvent.ToolApproval
+        assertEquals(ToolApprovalInfo("t", "allow_once", "Yes", "user", "2026-11-14T03:00:00Z"), approval.approval)
+        assertTrue(event("""{"type":"tool_approval","approval":{"option_kind":"allow_once"}}""") is AcpEvent.Unknown)
+    }
+
+    @Test
+    fun `the snapshot carries the queue depth and the recent approvals`() {
+        val snap = LiveSessionSnapshot.fromWire(
+            json.parseToJsonElement(
+                """{"pending_permission":{"request_id":"r","tool_call":{},"options":[],"queued":1},
+                   "tool_approvals":[{"tool_call_id":"t","option_kind":"reject_once","decided_at":"2026-11-14T03:00:00Z"},{"bogus":1}]}""",
+            ).jsonObject,
+            json,
+        )
+        assertEquals(1, snap.pendingPermission?.queued)
+        assertEquals(listOf("t"), snap.toolApprovals.map { it.toolCallId })
+    }
+}

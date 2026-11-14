@@ -38,6 +38,27 @@ data class PermissionOption(
     val isReject: Boolean get() = kind.lowercase().startsWith("reject")
 }
 
+/**
+ * One answered permission request, as a record about its tool call (Rust
+ * `ToolApprovalInfo`): what was chosen, by whom, and when. Live on the `tool_approval` event
+ * and the attach snapshot's `tool_approvals`; a reopened conversation's detail load stamps the
+ * same fields onto the call's `meta["codeg.approval"]`.
+ */
+@Serializable
+data class ToolApprovalInfo(
+    val toolCallId: String,
+    /** The chosen option's ACP kind (`allow_once` / `allow_always` / `reject_once` /
+     *  `reject_always`), passed through verbatim so a kind a newer agent invents survives. */
+    val optionKind: String,
+    /** The chosen option's label in the agent's own words — the only place that says what
+     *  an "always" covers for that agent. */
+    val optionName: String = "",
+    /** Who answered: `user`, `chat_channel`, `cli_policy`. */
+    val origin: String = "",
+    /** RFC 3339. */
+    val decidedAt: String = "",
+)
+
 /** One option of an `ask_user_question` question (Rust `QuestionOption`). */
 @Serializable
 data class QuestionOption(

@@ -68,6 +68,12 @@ data class SessionDetailUiState(
     val pendingPermission: PendingPermissionUi? = null,
     val pendingQuestion: PendingQuestionUi? = null,
     val pendingPlanApproval: PendingPlanApprovalUi? = null,
+    /**
+     * How this session's answered permission requests went, by tool call id — for the chips on
+     * their rows. Live records from `tool_approval` and the attach snapshot, folded by
+     * `ToolApprovals.merge`; a reopened transcript's calls carry their own stamps besides.
+     */
+    val toolApprovals: Map<String, app.codeg.android.core.model.ToolApprovalInfo> = emptyMap(),
     /** Steering notes sent during the turn running now, oldest first. Turn-scoped — a new
      *  turn empties this. */
     val feedbackNotes: List<FeedbackNote> = emptyList(),
@@ -157,6 +163,11 @@ data class PendingPermissionUi(
     val requestId: String,
     val parsed: app.codeg.android.feature.sessiondetail.interactive.ParsedPermission,
     val options: List<app.codeg.android.core.model.PermissionOption>,
+    /** Requests queued behind this card (`queued`, then `permission_queue_depth`). */
+    val queued: Int = 0,
+    /** The request's `tool_call` as merged so far ([parsed] is read from it), so a call
+     *  update arriving after the card can still fill what the request left out. */
+    val toolCall: kotlinx.serialization.json.JsonElement = kotlinx.serialization.json.JsonNull,
 )
 
 /** A `question_request` awaiting answers. */

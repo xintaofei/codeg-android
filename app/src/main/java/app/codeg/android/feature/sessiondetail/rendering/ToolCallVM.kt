@@ -31,6 +31,9 @@ data class ToolCallVM(
     /** The agent's opaque ACP metadata for this call (Grok's `x.ai/tool` identity,
      *  the context-compaction tag, …). Null for most tools and hosts. */
     val meta: JsonObject? = null,
+    /** How the call's permission request was answered, as a detail load stamped it on [meta]
+     *  ([ToolApprovals.fromMeta]). The live connection's own record outranks it ([liveToolStep]). */
+    val approval: ToolApproval? = null,
 ) {
     val trimmedOutput: String get() = (output ?: "").trim()
     val hasOutput: Boolean get() = trimmedOutput.isNotEmpty()
@@ -109,6 +112,7 @@ data class ToolCallVM(
                 bucket = bucket,
                 diffFiles = ToolDerive.diff(bucket, effectiveInput, output, content, parsed),
                 meta = meta,
+                approval = ToolApprovals.fromMeta(meta),
             )
         }
     }

@@ -113,4 +113,23 @@ class LiveTurnBuilderTest {
         assertTrue(turn.blocks[1] is ContentBlock.ToolUse)
         assertTrue(turn.blocks[2] is ContentBlock.ToolResult)
     }
+
+    @Test
+    fun `a permission request announces the call it comes ahead of, and fills one that sent no input`() {
+        val b = LiveTurnBuilder("t")
+        assertTrue(b.noteAwaitedCall("c1", "Run", "execute", """{"command":"ls"}"""))
+        val announced = (b.snapshot().segments.single() as LiveSegment.Tool).call
+        assertEquals("pending", announced.status)
+        assertFalse(announced.isFinished)
+        // The call itself then arrives and settles in place.
+        b.upsertToolCall("c1", "Bash", "execute", "in_progress", null, null, null)
+        assertEquals("""{"command":"ls"}""", b.toolCall("c1")?.rawInput)
+        assertEquals(1, b.snapshot().segments.size)
+
+        b.upsertToolCall("c2", "Edit", "edit", "in_progress", null, null, null)
+        assertTrue(b.noteAwaitedCall("c2", "", "", """{"file_path":"a"}"""))
+        // Arguments the call sent are never replaced.
+        assertFalse(b.noteAwaitedCall("c2", "", "", """{"file_path":"b"}"""))
+        assertEquals("""{"file_path":"a"}""", b.toolCall("c2")?.rawInput)
+    }
 }

@@ -39,6 +39,9 @@ import app.codeg.android.core.network.conversationMoved
 import app.codeg.android.core.network.displayMessage
 import app.codeg.android.core.network.isStaleConnection
 import app.codeg.android.feature.sessiondetail.interactive.ParsedPermission
+import app.codeg.android.feature.sessiondetail.interactive.PermissionMerge
+import app.codeg.android.feature.sessiondetail.interactive.permissionToolCallId
+import app.codeg.android.feature.sessiondetail.rendering.ToolApprovals
 import app.codeg.android.feature.sessiondetail.live.SessionStream
 import app.codeg.android.feature.sessiondetail.live.StreamAttachFailed
 import app.codeg.android.feature.sessiondetail.live.asFrameSource
@@ -708,6 +711,7 @@ class SessionDetailViewModel @Inject constructor(
         // current ones whichever branch we take next, and an idle connection is exactly when
         // an open sheet has no other source.
         options.adoptSnapshotSelectors(snapshot)
+        adoptSnapshotConnectionState(snapshot)
         if (pendingObserve && cause == SessionStream.AttachCause.ATTACH) {
             pendingObserve = false
             // A turn that started between the transcript load and this attach is shown as it
@@ -985,11 +989,13 @@ class SessionDetailViewModel @Inject constructor(
             is AcpEvent.Thinking -> if (builder?.append(event) != false) scheduleLiveEmit()
             is AcpEvent.ToolCall -> {
                 builder?.upsertToolCall(event.id, event.title, event.kind, event.status, event.rawInput, event.rawOutput, event.content, event.meta)
+                refreshPendingPermission(event.id)
                 _ui.update { if (it.isInFlight) it.copy(sendStatus = runningStatus()) else it }
                 scheduleLiveEmit()
             }
             is AcpEvent.ToolCallUpdate -> {
                 builder?.updateToolCall(event.id, event.title, event.status, event.rawInput, event.rawOutput, event.content, event.append, event.meta)
+                refreshPendingPermission(event.id)
                 // A tool finishing must revert the status line from "Running <tool>…" back to
                 // "Thinking…" (or to the next still-running tool); iOS recomputes on every update.
                 _ui.update { if (it.isInFlight) it.copy(sendStatus = runningStatus()) else it }
@@ -1037,11 +1043,22 @@ class SessionDetailViewModel @Inject constructor(
             // cancelled and close the stream before its reply arrives.
             is AcpEvent.TurnComplete -> if (liveBuilder == null || ownTurnStarted) finalizeTurn(event.stopReason)
             is AcpEvent.Error -> failLive(event.message, event.details)
-            is AcpEvent.PermissionRequest -> _ui.update {
-                it.copy(pendingPermission = PendingPermissionUi(event.requestId, ParsedPermission.parse(event.toolCall), event.options))
+            is AcpEvent.PermissionRequest -> {
+                val pending = permissionUi(event.requestId, event.toolCall, event.options, event.queued)
+                _ui.update { it.copy(pendingPermission = pending) }
+            }
+            // A request queued up behind the card on screen. No card up, nothing to annotate:
+            // a late depth after a drain must not resurrect one.
+            is AcpEvent.PermissionQueueDepth -> _ui.update {
+                val pending = it.pendingPermission
+                if (pending == null || pending.queued == event.depth) it else it.copy(pendingPermission = pending.copy(queued = event.depth))
             }
             is AcpEvent.PermissionResolved -> _ui.update {
                 if (it.pendingPermission?.requestId == event.requestId) it.copy(pendingPermission = null) else it
+            }
+            is AcpEvent.ToolApproval -> _ui.update {
+                val merged = ToolApprovals.merge(it.toolApprovals, listOf(event.approval))
+                if (merged === it.toolApprovals) it else it.copy(toolApprovals = merged)
             }
             is AcpEvent.QuestionRequest -> _ui.update {
                 it.copy(pendingQuestion = PendingQuestionUi(event.questionId, event.questions))
@@ -1416,9 +1433,63 @@ class SessionDetailViewModel @Inject constructor(
     /** False once a newer fetch superseded [generation]; its response must be dropped. */
     private fun isLatestFetch(generation: Int): Boolean = fetchGeneration == generation
 
+    /**
+     * A permission request as its card shows it: merged with the live call it is about, each
+     * filling what the other left out ([PermissionMerge]). The live turn learns of the call
+     * too, so the step the user is asked about stands on the rail, waiting on them.
+     */
+    private fun permissionUi(
+        requestId: String,
+        toolCall: kotlinx.serialization.json.JsonElement,
+        options: List<app.codeg.android.core.model.PermissionOption>,
+        queued: Int,
+    ): PendingPermissionUi {
+        val callId = permissionToolCallId(toolCall)
+        val builder = liveBuilder
+        val merged = PermissionMerge.merge(toolCall, callId?.let { builder?.toolCall(it) })
+        if (callId != null && builder != null && builder.isStreaming) {
+            val announced = builder.noteAwaitedCall(
+                callId,
+                title = PermissionMerge.requestTitle(toolCall).orEmpty(),
+                kind = PermissionMerge.requestKind(toolCall).orEmpty(),
+                rawInput = PermissionMerge.requestInput(merged),
+            )
+            if (announced) scheduleLiveEmit()
+        }
+        return PendingPermissionUi(requestId, ParsedPermission.parse(merged), options, queued, merged)
+    }
+
+    /**
+     * Call [callId] moved after the card about it went up: fill what the request still lacks
+     * from it (web `mergePendingPermissionWithLiveInfo`, on every call and call update) — a
+     * bare request then shows the command, the edit or the network host the call brings later.
+     */
+    private fun refreshPendingPermission(callId: String) {
+        val pending = _ui.value.pendingPermission ?: return
+        if (pending.parsed.toolCallId != callId) return
+        val live = liveBuilder?.toolCall(callId) ?: return
+        val merged = PermissionMerge.merge(pending.toolCall, live)
+        if (merged === pending.toolCall) return
+        val refreshed = pending.copy(toolCall = merged, parsed = ParsedPermission.parse(merged))
+        _ui.update { if (it.pendingPermission?.requestId == pending.requestId) it.copy(pendingPermission = refreshed) else it }
+    }
+
+    /**
+     * What a snapshot says about the connection beyond the turn — whichever branch the attach
+     * takes next. Answered approvals only ever fold in, so an older snapshot can't walk a
+     * newer one back.
+     */
+    private fun adoptSnapshotConnectionState(snapshot: LiveSessionSnapshot) {
+        _ui.update {
+            val merged = ToolApprovals.merge(it.toolApprovals, snapshot.toolApprovals)
+            if (merged === it.toolApprovals) it else it.copy(toolApprovals = merged)
+        }
+    }
+
     private fun restorePending(snap: app.codeg.android.core.model.LiveSessionSnapshot) {
         snap.pendingPermission?.let { p ->
-            _ui.update { it.copy(pendingPermission = PendingPermissionUi(p.requestId, ParsedPermission.parse(p.toolCall), p.options)) }
+            val pending = permissionUi(p.requestId, p.toolCall, p.options, p.queued)
+            _ui.update { it.copy(pendingPermission = pending) }
         }
         snap.pendingQuestion?.let { q ->
             _ui.update { it.copy(pendingQuestion = PendingQuestionUi(q.questionId, q.questions)) }

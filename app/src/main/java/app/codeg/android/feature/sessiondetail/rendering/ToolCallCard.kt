@@ -28,6 +28,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Layers
@@ -39,6 +40,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +83,10 @@ fun ToolCallCard(vm: ToolCallVM, modifier: Modifier = Modifier, nested: Boolean 
         (vm.diffFiles != null && (vm.diffFiles.sumOf { f -> f.hunks.sumOf { it.rows.size } } <= 40))
     var expanded by remember(vm.id) { mutableStateOf(autoExpand) }
     val hasBody = vm.diffFiles != null || !vm.input.isNullOrBlank() || vm.hasOutput
+    val live = liveToolStep(vm, LocalActivityLive.current)
+    // A call waiting on the user's approval shows what it would do, as its card above the
+    // composer asks about it.
+    LaunchedEffect(live.awaiting) { if (live.awaiting && hasBody) expanded = true }
 
     Column(
         modifier
@@ -97,7 +103,7 @@ fun ToolCallCard(vm: ToolCallVM, modifier: Modifier = Modifier, nested: Boolean 
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            ToolStateIcon(vm)
+            ToolStateIcon(vm, live.awaiting)
             Text(
                 text = vm.displayTitle,
                 fontSize = 13.sp,
@@ -111,6 +117,11 @@ fun ToolCallCard(vm: ToolCallVM, modifier: Modifier = Modifier, nested: Boolean 
                 val dels = files.sumOf { it.deletions }
                 if (adds > 0) Text("+$adds", color = SuccessGreen, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 if (dels > 0) Text("−$dels", color = colors.danger, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            }
+            if (live.showsApproval) live.approval?.let { ApprovalChip(it) }
+            when {
+                live.awaiting -> Text(stringResource(R.string.activity_needs_you), color = ToolWarning, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                live.declined -> Text(stringResource(R.string.activity_declined), color = colors.danger, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             }
             if (hasBody) {
                 Icon(
@@ -480,8 +491,12 @@ private fun SearchOutputSection(vm: ToolCallVM, out: String) {
 }
 
 @Composable
-private fun ToolStateIcon(vm: ToolCallVM) {
+private fun ToolStateIcon(vm: ToolCallVM, awaiting: Boolean = false) {
     val colors = CodegTheme.colors
+    if (awaiting) {
+        Icon(Icons.Rounded.GppMaybe, null, tint = ToolWarning, modifier = Modifier.size(15.dp))
+        return
+    }
     when (vm.state) {
         ToolCallState.RUNNING, ToolCallState.INPUT_STREAMING ->
             CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = colors.accent)
@@ -510,6 +525,10 @@ fun ToolGroupCard(
         if (shared != null) store?.set(shared, open) else ownExpanded = open
     }
     val errorCount = items.count { it.state == ToolCallState.ERROR }
+    val activityLive = LocalActivityLive.current
+    // The member a pending permission request is about: the group says it waits on the user,
+    // and keeps that member in view folded, so the step under question is never hidden.
+    val awaited = items.firstOrNull { liveToolStep(it, activityLive).awaiting }
 
     Column(
         modifier
@@ -535,7 +554,9 @@ fun ToolGroupCard(
                 maxLines = 1,
                 modifier = Modifier.weight(1f),
             )
-            if (streaming) {
+            if (awaited != null) {
+                Text(stringResource(R.string.activity_needs_you), color = ToolWarning, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            } else if (streaming) {
                 LivePulse(dotSize = 7.dp)
             } else if (errorCount > 0) {
                 Text(stringResource(R.string.toolcall_failed_count, errorCount), color = colors.danger, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
@@ -557,6 +578,11 @@ fun ToolGroupCard(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 for (item in items) ToolCallCard(item, nested = true)
+            }
+        }
+        if (awaited != null && !expanded) {
+            Box(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) {
+                ToolCallCard(awaited, nested = true)
             }
         }
     }

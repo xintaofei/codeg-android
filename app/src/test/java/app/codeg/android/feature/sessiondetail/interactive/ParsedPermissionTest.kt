@@ -64,3 +64,53 @@ class ParsedPermissionTest {
         assertNull(p.command)
     }
 }
+
+/** What 0.44 reads off a request's `_meta` (web `parsePermissionToolCall`). */
+class ParsedPermissionMetaTest {
+
+    private fun parse(json: String) = ParsedPermission.parse(Json.parseToJsonElement(json))
+
+    @Test
+    fun `the heading prefers the agent's description, but not one that is the command`() {
+        assertEquals("List files", parse("""{"title":"ls","rawInput":{"command":"ls"},"_meta":{"claudeCode":{"title":"List files"}}}""").description)
+        assertEquals("Run command?", parse("""{"title":"Run","rawInput":{"command":"ls"},"_meta":{"permission":{"title":"Run command?"}}}""").description)
+        // claude-agent-acp 0.79.0: the heading IS the command; the model's own label replaces it.
+        assertEquals(
+            "Lists the folder",
+            parse("""{"title":"ls -la","rawInput":{"command":"ls -la","description":"Lists the folder"},"_meta":{"permission":{"title":"ls -la"}}}""").description,
+        )
+        assertNull(parse("""{"title":"ls","rawInput":{"command":"ls"}}""").description)
+    }
+
+    @Test
+    fun `reason and defaultToNo read only a version 1 block`() {
+        val p = parse("""{"rawInput":{"command":"rm x"},"_meta":{"permission":{"version":1,"description":"Needs write access","defaultToNo":true}}}""")
+        assertEquals("Needs write access", p.reason)
+        assertTrue(p.defaultToNo)
+        val reshaped = parse("""{"rawInput":{"command":"rm x"},"_meta":{"permission":{"version":2,"description":"x","defaultToNo":true}}}""")
+        assertNull(reshaped.reason)
+        assertFalse(reshaped.defaultToNo)
+        assertFalse(parse("""{"_meta":{"permission":{"version":1,"defaultToNo":"true"}}}""").defaultToNo)
+    }
+
+    @Test
+    fun `a network ask is read only off Claude Code's sandbox tool`() {
+        assertEquals("api.x.com", parse("""{"rawInput":{"host":"api.x.com"},"_meta":{"claudeCode":{"toolName":"SandboxNetworkAccess"}}}""").networkHost)
+        assertNull(parse("""{"rawInput":{"host":"api.x.com"}}""").networkHost)
+    }
+
+    @Test
+    fun `a command leaf is the command even when it looks like JSON or a patch`() {
+        assertEquals("[ -f package.json ] && pnpm test", parse("""{"rawInput":{"command":"[ -f package.json ] && pnpm test"}}""").command)
+        assertEquals("ls", parse("""{"rawInput":{"command":"[\"ls\"]"}}""").command)
+        // A wrapper below a command key reads conservatively again.
+        assertNull(parse("""{"rawInput":{"args":{"payload":"{\"query\":"}}}""").command)
+    }
+
+    @Test
+    fun `the request names its call`() {
+        assertEquals("c-1", parse("""{"toolCallId":"c-1"}""").toolCallId)
+        assertEquals("c-2", parse("""{"call_id":"c-2","id":"other"}""").toolCallId)
+        assertNull(parse("""{"toolCallId":"  "}""").toolCallId)
+    }
+}

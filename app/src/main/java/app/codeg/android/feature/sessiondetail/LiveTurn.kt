@@ -329,6 +329,28 @@ class LiveTurnBuilder(val id: String = "live-${java.util.UUID.randomUUID()}") {
 
     val isEmpty: Boolean get() = segments.isEmpty() && error == null
 
+    /** Call [id] as this turn holds it, or null when the turn hasn't seen it. */
+    fun toolCall(id: String): LiveToolCallState? = toolIndex[id]?.let {
+        LiveToolCallState(it.id, it.title, it.kind, it.status, it.rawInput, it.rawOutput.toString(), it.content, it.meta)
+    }
+
+    /**
+     * A permission request is about call [id] (web `PERMISSION_REQUEST`): the arguments it
+     * names fill a call that hasn't sent its own yet, and a call the request comes ahead of is
+     * announced here, pending, so the step the user is asked about stands on the rail. Returns
+     * whether anything changed.
+     */
+    fun noteAwaitedCall(id: String, title: String, kind: String, rawInput: String?): Boolean {
+        val existing = toolIndex[id]
+        if (existing != null) {
+            if (!existing.rawInput.isNullOrEmpty() || rawInput.isNullOrEmpty()) return false
+            existing.rawInput = rawInput
+            return true
+        }
+        upsertToolCall(id, title, kind, "pending", rawInput, null, null)
+        return true
+    }
+
     /** The active (unfinished) tool's title, for the compose status line. */
     fun activeToolTitle(): String? {
         for (s in segments.asReversed()) {

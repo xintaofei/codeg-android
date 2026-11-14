@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Assignment
 import androidx.compose.material.icons.rounded.GppMaybe
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.codeg.android.R
@@ -53,6 +55,9 @@ fun PermissionRequestCard(
     options: List<PermissionOption>,
     onRespond: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** Requests waiting behind this one. One card shows at a time, so without the count the
+     *  rest read as the agent having stopped. */
+    queued: Int = 0,
 ) {
     val colors = CodegTheme.colors
     var submitting by remember(parsed.jsonPreview) { mutableStateOf<String?>(null) }
@@ -84,16 +89,39 @@ fun PermissionRequestCard(
                 modifier = Modifier.size(20.dp),
             )
             Column(Modifier.weight(1f)) {
-                Text(parsed.title.ifBlank { stringResource(R.string.perm_request_title) }, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.textPrimary)
+                // A sandbox's network request is only a host, so it gets the CLI's own framing.
+                val heading = if (parsed.networkHost != null) {
+                    stringResource(R.string.perm_network_request)
+                } else {
+                    (parsed.description ?: parsed.title).ifBlank { stringResource(R.string.perm_request_title) }
+                }
+                Text(heading, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = colors.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                // The agent's own reason, when it gave one, says more than the boilerplate.
                 Text(
-                    if (parsed.isPlan) stringResource(R.string.perm_plan_subtitle) else stringResource(R.string.perm_permission_subtitle),
+                    when {
+                        parsed.reason != null -> parsed.reason
+                        parsed.networkHost != null -> stringResource(R.string.perm_network_question)
+                        parsed.isPlan -> stringResource(R.string.perm_plan_subtitle)
+                        else -> stringResource(R.string.perm_permission_subtitle)
+                    },
                     fontSize = 12.sp,
                     color = colors.textSecondary,
                 )
             }
+            if (queued > 0) {
+                Text(
+                    stringResource(R.string.perm_queued_count, queued),
+                    fontSize = 10.sp,
+                    color = colors.textSecondary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(colors.textPrimary.copy(alpha = 0.1f))
+                        .padding(horizontal = 7.dp, vertical = 2.dp),
+                )
+            }
             if (!parsed.isPlan) {
                 Text(
-                    parsed.kind,
+                    if (parsed.networkHost != null) stringResource(R.string.perm_kind_network) else parsed.kind,
                     fontSize = 10.sp,
                     color = colors.textTertiary,
                     modifier = Modifier
@@ -117,10 +145,12 @@ fun PermissionRequestCard(
             if (grants.isNotEmpty()) OptionGrants(grants)
         }
 
-        // Option buttons.
+        // Option buttons. A `defaultToNo` ask hands the emphasis to the decline, so the one
+        // filled button isn't an approve a stray tap lands on.
         for (option in options) {
             OptionButton(
                 option = option,
+                emphasized = if (parsed.defaultToNo) option.isReject else !option.isReject,
                 submitting = submitting == option.optionId,
                 enabled = submitting == null,
                 onClick = {
@@ -138,6 +168,13 @@ private fun PermissionBody(parsed: ParsedPermission) {
     if (!parsed.hasStructuredBody) {
         CodeBlock(code = parsed.jsonPreview, language = "json")
         return
+    }
+    parsed.networkHost?.let { host ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(Icons.Rounded.Public, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.size(14.dp))
+            Text(stringResource(R.string.perm_network_host), fontSize = 12.sp, color = colors.textSecondary)
+            Text(host, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = colors.textPrimary, modifier = Modifier.weight(1f))
+        }
     }
     parsed.command?.let { cmd ->
         CodeBlock(code = cmd, language = "bash")
@@ -266,14 +303,13 @@ private fun ScopeBadge(scope: PermissionChangeScope) {
 }
 
 @Composable
-private fun OptionButton(option: PermissionOption, submitting: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun OptionButton(option: PermissionOption, emphasized: Boolean, submitting: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val colors = CodegTheme.colors
-    val isReject = option.isReject
     val shape = RoundedCornerShape(10.dp)
     // Keep the actively-submitting button enabled-looking (spinner) while the
     // others disable; clicking is gated by `enabled` regardless.
     val clickable = enabled
-    if (isReject) {
+    if (!emphasized) {
         OutlinedButton(
             onClick = onClick,
             enabled = clickable,
