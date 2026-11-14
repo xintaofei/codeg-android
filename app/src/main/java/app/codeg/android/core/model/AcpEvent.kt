@@ -224,6 +224,12 @@ sealed interface AcpEvent {
         val reportsError: Boolean,
     ) : AcpEvent
 
+    /**
+     * The prompt the agent predicts the user sends next (claude-agent-acp 0.92.0), offered in
+     * the empty composer; null withdraws it. Spent when a prompt starts, whatever was sent.
+     */
+    data class PromptSuggestion(val text: String?) : AcpEvent
+
     /** A JetBrains AIR typed session-failure upsert (see [SessionFailureRecord]). */
     data class SessionFailure(val record: SessionFailureRecord) : AcpEvent
 
@@ -404,6 +410,7 @@ sealed interface AcpEvent {
                         )
                     }
                     ?: Unknown(type)
+                "prompt_suggestion" -> PromptSuggestion(obj.stringOrNull("text")?.trim()?.takeIf { it.isNotEmpty() })
                 "config_option_rejected" -> ConfigOptionRejected(
                     configId = obj.stringOrNull("config_id").orEmpty(),
                     optionName = obj.stringOrNull("option_name").orEmpty(),
@@ -606,6 +613,8 @@ data class LiveSessionSnapshot(
      *  which surface drifted — the one-shot event won't replay for a late attach. */
     val configStale: Boolean = false,
     val configStaleKind: String? = null,
+    /** The follow-up prompt the agent last predicted, for a client attaching between turns. */
+    val promptSuggestion: String? = null,
 ) {
     companion object {
         fun fromWire(obj: JsonObject, json: Json): LiveSessionSnapshot =
@@ -659,6 +668,7 @@ data class LiveSessionSnapshot(
                     ?: emptyList(),
                 configStale = obj.boolOrNull("config_stale") ?: false,
                 configStaleKind = obj.stringOrNull("config_stale_kind"),
+                promptSuggestion = obj.stringOrNull("prompt_suggestion")?.trim()?.takeIf { it.isNotEmpty() },
             )
 
         private fun JsonObject.intOrNull(key: String): Int? =

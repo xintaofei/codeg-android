@@ -513,6 +513,7 @@ fun SessionDetailScreen(
                     },
                     noteLandsInstantly = ui.notesLandInstantly,
                     sendingNote = ui.sendingNote,
+                    suggestion = ui.promptSuggestion?.takeIf { !ui.isInFlight },
                 )
             }
         },

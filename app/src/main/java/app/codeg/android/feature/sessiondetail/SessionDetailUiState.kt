@@ -79,6 +79,9 @@ data class SessionDetailUiState(
     val apiRetry: app.codeg.android.core.model.AcpEvent.ApiRetry? = null,
     /** The connection's AIR session-failure table, watermarks included ([SessionFailures]). */
     val sessionFailures: List<app.codeg.android.core.model.SessionFailureRecord> = emptyList(),
+    /** The prompt the agent predicts comes next (`prompt_suggestion`), offered in the empty
+     *  composer. Spent when a prompt starts. */
+    val promptSuggestion: String? = null,
     /** The running agent is on its launch-time config after a settings save; null when not. */
     val configStale: ConfigStaleUi? = null,
     /** `session/load` failed for good: the banner that offers reloading or a new session

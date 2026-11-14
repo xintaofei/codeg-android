@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.KeyboardTab
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -44,6 +45,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.codeg.android.R
@@ -83,6 +85,9 @@ fun ComposeBar(
     sendingNote: Boolean = false,
     /** Queue the draft to go out once the running turn ends. Null when no turn is running. */
     onQueue: (() -> Unit)? = null,
+    /** The prompt the agent predicts comes next, offered in gray while the field is empty; a
+     *  tap on the button beside it fills it in (nothing is sent). */
+    suggestion: String? = null,
 ) {
     val colors = CodegTheme.colors
     // `sendingNote` blocks the ordinary Send too. The draft is deliberately still on screen
@@ -144,7 +149,16 @@ fun ComposeBar(
                     .padding(horizontal = 14.dp, vertical = 9.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                if (text.isEmpty()) {
+                val offered = suggestion?.takeIf { text.isEmpty() && onSendNote == null && it.isNotBlank() }
+                if (offered != null) {
+                    Text(
+                        offered,
+                        color = colors.textTertiary,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else if (text.isEmpty()) {
                     Text(
                         // Mid-turn the field means something different, and the two note
                         // channels differ in when the agent sees it — say which before the
@@ -168,6 +182,23 @@ fun ComposeBar(
                     maxLines = 6,
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+            // The web fills it in on Tab; a phone has none, so the fill is a button of its own.
+            val fill = suggestion?.takeIf { text.isEmpty() && onSendNote == null && it.isNotBlank() }
+            if (fill != null) {
+                FilledTonalIconButton(
+                    onClick = { onTextChange(fill) },
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = colors.textPrimary.copy(alpha = 0.06f),
+                        contentColor = colors.textSecondary,
+                    ),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.KeyboardTab,
+                        contentDescription = stringResource(R.string.compose_use_suggestion),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
 
             if (onSendNote != null) {

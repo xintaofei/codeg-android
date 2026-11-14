@@ -620,6 +620,7 @@
     <string name="compose_insert">插入</string>
     <string name="compose_attach_image">添加图片</string>
     <string name="compose_message_placeholder">输入消息</string>
+    <string name="compose_use_suggestion">使用建议的消息</string>
     <string name="compose_queue">加入队列</string>
     <string name="queue_edit">编辑排队的消息</string>
     <string name="queue_remove">移出队列</string>

@@ -625,6 +625,7 @@
     <string name="compose_insert">Insert</string>
     <string name="compose_attach_image">Attach image</string>
     <string name="compose_message_placeholder">Message</string>
+    <string name="compose_use_suggestion">Use the suggested message</string>
     <string name="compose_queue">Queue message</string>
     <string name="queue_edit">Edit queued message</string>
     <string name="queue_remove">Remove from queue</string>

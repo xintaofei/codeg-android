@@ -1136,12 +1136,18 @@ class SessionDetailViewModel @Inject constructor(
             is AcpEvent.ToolCallUpdate, is AcpEvent.PlanUpdate, is AcpEvent.Error -> _ui.update {
                 if (it.apiRetry == null) it else it.copy(apiRetry = null)
             }
+            // The predicted prompt was for this prompt's place, so it is spent whatever was sent.
             is AcpEvent.StatusChanged -> if (event.status == ConnectionStatus.PROMPTING) {
                 _ui.update {
                     val failures = SessionFailures.settle(it.sessionFailures, SessionFailures.SettleScope.ALL)
-                    if (it.apiRetry == null && failures === it.sessionFailures) it else it.copy(apiRetry = null, sessionFailures = failures)
+                    if (it.apiRetry == null && failures === it.sessionFailures && it.promptSuggestion == null) {
+                        it
+                    } else {
+                        it.copy(apiRetry = null, sessionFailures = failures, promptSuggestion = null)
+                    }
                 }
             }
+            is AcpEvent.PromptSuggestion -> _ui.update { if (it.promptSuggestion == event.text) it else it.copy(promptSuggestion = event.text) }
             is AcpEvent.TurnComplete -> _ui.update {
                 val failures = if (event.stopReason == "end_turn") {
                     SessionFailures.settle(it.sessionFailures, SessionFailures.SettleScope.WARNINGS)
@@ -1638,10 +1644,15 @@ class SessionDetailViewModel @Inject constructor(
             } else {
                 null
             }
-            if (approvals === it.toolApprovals && failures === it.sessionFailures && stale == it.configStale) {
+            // Current state, like the selectors: the snapshot's prediction (or its absence) is
+            // the one that stands.
+            val suggestion = snapshot.promptSuggestion
+            if (approvals === it.toolApprovals && failures === it.sessionFailures && stale == it.configStale &&
+                suggestion == it.promptSuggestion
+            ) {
                 it
             } else {
-                it.copy(toolApprovals = approvals, sessionFailures = failures, configStale = stale)
+                it.copy(toolApprovals = approvals, sessionFailures = failures, configStale = stale, promptSuggestion = suggestion)
             }
         }
     }

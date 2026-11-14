@@ -510,3 +510,20 @@ class AcpEventNoticeTest {
         assertFalse(LiveSessionSnapshot.fromWire(json.parseToJsonElement("{}").jsonObject, json).configStale)
     }
 }
+
+/** The predicted next prompt, live and on the snapshot. */
+class AcpEventPromptSuggestionTest {
+
+    private val json: Json = CodegJson.response
+
+    private fun obj(raw: String) = json.parseToJsonElement(raw).jsonObject
+
+    @Test
+    fun `a prediction is trimmed, and a blank or null one withdraws it`() {
+        assertEquals(AcpEvent.PromptSuggestion("run the tests"), AcpEvent.fromWire(obj("""{"type":"prompt_suggestion","text":"  run the tests "}"""), json))
+        assertEquals(AcpEvent.PromptSuggestion(null), AcpEvent.fromWire(obj("""{"type":"prompt_suggestion","text":"  "}"""), json))
+        assertEquals(AcpEvent.PromptSuggestion(null), AcpEvent.fromWire(obj("""{"type":"prompt_suggestion"}"""), json))
+        assertEquals("commit it", LiveSessionSnapshot.fromWire(obj("""{"prompt_suggestion":"commit it"}"""), json).promptSuggestion)
+        assertNull(LiveSessionSnapshot.fromWire(obj("{}"), json).promptSuggestion)
+    }
+}
