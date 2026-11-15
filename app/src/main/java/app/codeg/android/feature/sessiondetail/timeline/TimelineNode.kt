@@ -804,8 +804,13 @@ object TranscriptTimeline {
 
     private fun toolRowId(vm: ToolCallVM) = "tool-${vm.id}"
 
+    /**
+     * A group is keyed as its first call's own row: while a reply is written, that call stands
+     * alone until the next one of its kind joins it, and the row has to stay the same row when
+     * it turns into the group — a new key would drop the card and draw another in its place.
+     */
     private fun groupRowId(group: RenderPart.ToolGroup, base: String) =
-        group.items.firstOrNull()?.let { "toolgroup-${it.id}" } ?: base
+        group.items.firstOrNull()?.let(::toolRowId) ?: base
 
     /**
      * One render part → node(s). Text splits into per-block nodes (below); everything

@@ -343,6 +343,18 @@ class TranscriptTimelineTest {
         assertEquals(NodeContent.Thinking, nodes.last().content)
     }
 
+    @Test
+    fun `a call the next one joins stays the same row as it becomes their group`() {
+        val b = LiveTurnBuilder("live-1")
+        b.upsertToolCall("r1", "Read", "read", "completed", """{"file_path":"a.kt"}""", "a", null)
+        val alone = TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent)
+        assertTrue(alone.single { it.id == "tool-r1" }.content is NodeContent.Tool)
+        b.upsertToolCall("r2", "Read", "read", "in_progress", """{"file_path":"b.kt"}""", null, null)
+        val joined = TranscriptTimeline.build(emptyList(), emptyList(), b.snapshot(), agent)
+        assertTrue(joined.single { it.id == "tool-r1" }.content is NodeContent.ToolGroup)
+        assertTrue(joined.none { it.id == "tool-r2" })
+    }
+
     private fun call(id: String, name: String, input: String = """{"file_path":"$id"}""", error: Boolean = false) = listOf(
         ContentBlock.ToolUse(id, name, input),
         ContentBlock.ToolResult(id, if (error) "boom" else "ok", error),
@@ -362,7 +374,7 @@ class TranscriptTimelineTest {
         val entries = entries(listOf(user("u1", "q"), worked("a1")))
         val open = TranscriptTimeline.flatten(entries) { true }.map { it.id }
         assertEquals(
-            listOf("u1", "a1#header", "a1#0", "toolgroup-a1-r1", "a1#foot", "a1#2", "a1#footer"),
+            listOf("u1", "a1#header", "a1#0", "tool-a1-r1", "a1#foot", "a1#2", "a1#footer"),
             open,
         )
         val folded = TranscriptTimeline.flatten(entries) { false }.map { it.id }
@@ -398,7 +410,7 @@ class TranscriptTimelineTest {
         val header = rows.first { it.content is NodeContent.ReplyHeader }.content as NodeContent.ReplyHeader
         assertEquals(2, header.summary.unrecovered)
         // Folded into the exploration group.
-        assertEquals("toolgroup-r1", header.failureRowId)
+        assertEquals("tool-r1", header.failureRowId)
         assertTrue(rows.any { it.id == header.failureRowId })
     }
 

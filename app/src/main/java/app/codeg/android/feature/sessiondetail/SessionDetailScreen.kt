@@ -13,6 +13,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.stopScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -120,6 +123,9 @@ import app.codeg.android.feature.sessiondetail.timeline.ReplyFolds
 import app.codeg.android.feature.sessiondetail.timeline.ThreadEntry
 import app.codeg.android.feature.sessiondetail.timeline.TimelineRow
 import app.codeg.android.feature.sessiondetail.timeline.TranscriptTimeline
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /**
@@ -129,6 +135,39 @@ import kotlinx.coroutines.launch
  * before the user reaches the top.
  */
 private const val OLDER_HISTORY_TRIGGER_ROWS = 6
+
+/** Rows past the last visible one beyond which [followToEnd] jumps rather than scrolls. */
+private const val FOLLOW_SCROLL_MAX_ROWS = 20
+
+/** Viewports [followToEnd] scrolls through before it gives up and jumps. */
+private const val FOLLOW_SCROLL_MAX_STEPS = 12
+
+/**
+ * Bring the end of the list into view by SCROLLING to it, not by snapping to an index.
+ *
+ * In this Compose (foundation 1.7) a snap to an index resets the list's item animator to an
+ * empty key map (`LazyLayoutItemAnimator.reset`), after which every row with an item animation
+ * reads as newly inserted: following each streamed update that way faded the prompt, the reply
+ * header, its thoughts and tool cards out and back in at every step. A scroll is not a jump.
+ *
+ * Far from the end (a long thread just opened, a send from well up the history) it jumps
+ * instead: scrolling there would lay out every row in between.
+ */
+private suspend fun LazyListState.followToEnd() {
+    val info = layoutInfo
+    val last = info.totalItemsCount - 1
+    val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: return
+    if (last - lastVisible <= FOLLOW_SCROLL_MAX_ROWS) {
+        val step = info.viewportSize.height.toFloat().coerceAtLeast(1f)
+        scroll {
+            var steps = 0
+            while (canScrollForward && steps++ < FOLLOW_SCROLL_MAX_STEPS) {
+                if (scrollBy(step) <= 0f) break
+            }
+        }
+    }
+    if (canScrollForward) scrollToItem(last)
+}
 
 /**
  * The session detail screen: the transcript rendered as a vertical **timeline**
@@ -266,27 +305,53 @@ fun SessionDetailScreen(
         }
     }
     var stick by remember { mutableStateOf(true) }
+    // An explicit ask for the bottom (a send, "jump to latest") that holds until the bottom is
+    // reached or the user drags: a scroll already under way when it came — a fling, the jump's
+    // own animation — mustn't unpin it as it settles short of the end.
+    var repin by remember { mutableStateOf(false) }
     // Re-evaluate "follow" only when a *user* scroll settles — programmatic scrolls
     // and streamed growth must not flip it (that would race the auto-follow off).
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.collect { inProgress ->
-            if (!inProgress) stick = isAtBottom
+            if (inProgress) return@collect
+            val atBottom = isAtBottom
+            stick = atBottom || repin
+            if (atBottom) repin = false
         }
     }
-    // A freshly sent message always re-pins to the bottom.
-    LaunchedEffect(ui.pendingUserTurns.lastOrNull()?.id) {
-        if (ui.pendingUserTurns.isNotEmpty()) stick = true
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { if (it is DragInteraction.Start) repin = false }
     }
-    // Follow new / streamed content while pinned.
-    LaunchedEffect(nodes.size, ui.live, stick) {
-        if (stick && nodes.isNotEmpty()) listState.scrollToItem(nodes.size + headerCount)
+    // A freshly sent message always re-pins to the bottom — stopping a fling still under way,
+    // which the follow would otherwise wait out.
+    LaunchedEffect(ui.pendingUserTurns.lastOrNull()?.id) {
+        if (ui.pendingUserTurns.isEmpty()) return@LaunchedEffect
+        stick = true
+        repin = true
+        if (listState.isScrollInProgress) listState.stopScroll()
+    }
+    // Follow while pinned: whenever the end of the list is out of view and no one is scrolling,
+    // scroll to it. Driven by the layout, not by the update that grew it, so a card unfolding,
+    // a diagram landing or the keyboard taking room is followed like a streamed word.
+    LaunchedEffect(listState) {
+        snapshotFlow { stick && listState.canScrollForward && !listState.isScrollInProgress }
+            .collect { behind ->
+                if (!behind) return@collect
+                try {
+                    listState.followToEnd()
+                } catch (e: CancellationException) {
+                    // A drag outranks the follow and interrupts it; only this effect ending
+                    // ends the collection.
+                    currentCoroutineContext().ensureActive()
+                }
+            }
     }
     // A diagram or HTML preview that lands after the first layout grows its row: a reader who
-    // was at the bottom stays there (iOS 0893d53) — the same follow, asked for by the block.
-    val latestNodeCount by rememberUpdatedState(nodes.size + headerCount)
+    // was at the bottom stays there (iOS 0893d53). The follow above sees that growth too; this
+    // only asks sooner.
     val latestStick by rememberUpdatedState(stick)
     val richBlockGrew: () -> Unit = remember(listState, scope) {
-        { if (latestStick) scope.launch { listState.scrollToItem(latestNodeCount) } }
+        { if (latestStick) scope.launch { listState.followToEnd() } }
     }
     // Set by a deliberate jump (a transcript link, "jump to latest") so a scroll
     // restore queued before it does not undo it. `stick` alone does not cover
@@ -344,8 +409,9 @@ fun SessionDetailScreen(
 
             override fun showFailure(replyId: String, rowId: String) {
                 folds.setOpen(latestFoldView, replyId, true)
-                // A group, or a goal run, opens onto the failed step it holds.
-                if (rowId.startsWith("toolgroup-") || rowId.startsWith("goal-")) disclosures[rowId] = true
+                // A group (keyed as its first call's row), or a goal run, opens onto the
+                // failed step it holds; a lone call's card keeps no state here.
+                if (rowId.startsWith("tool-") || rowId.startsWith("goal-")) disclosures[rowId] = true
                 pendingScroll = rowId
             }
         }
@@ -682,16 +748,19 @@ fun SessionDetailScreen(
                             }
                         }
                         items(nodes, key = { it.id }, contentType = { it.contentTypeKey }) { node ->
+                            // No item animation: every change lands at once. A fade blinked a
+                            // re-keyed row (live → saved, a pending prompt → the saved one) out
+                            // and back, left a removed row over its successor, and after any
+                            // index snap faded every row on screen in anew ([followToEnd]).
+                            // Moves alone slid rows across the ones that land in place — the
+                            // reply's text, a row just inserted — as a turn ended or a reply
+                            // folded.
                             TimelineRow(
                                 marker = node.marker,
                                 connectTop = node.connectTop,
                                 connectBottom = node.connectBottom,
                                 startsGroup = node.startsGroup,
                                 rail = node.rail,
-                                // Block rows skip item animation: streaming appends a tail
-                                // block on every blank line, and the live→persisted re-key
-                                // would otherwise flash all N blocks of the reply at once.
-                                modifier = if (node.content is NodeContent.AssistantBlock) Modifier else Modifier.animateItem(),
                             ) {
                                 NodeBody(node)
                             }
@@ -702,15 +771,17 @@ fun SessionDetailScreen(
             }
             // Floating "jump to latest" — overlaid bottom-center OVER the transcript rather
             // than sitting in the composer stack, where its full-width row pushed the bottom
-            // of the transcript up under a band. Shown only while scrolled up.
+            // of the transcript up under a band. Shown only while scrolled up — not while
+            // following, when growth puts the end out of view for the frame before the follow.
             AnimatedVisibility(
-                visible = hasContent && !isAtBottom,
+                visible = hasContent && !isAtBottom && !stick,
                 enter = fadeIn(tween(150)),
                 exit = fadeOut(tween(150)),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
             ) {
                 JumpToLatestButton {
                     stick = true
+                    repin = true
                     jumped = true
                     scope.launch { listState.animateScrollToItem(nodes.size + headerCount) }
                 }

@@ -245,7 +245,7 @@ class LaneRowsTest {
         assertEquals("goal-g1", goal.id)
         assertEquals("u1", content.run.end?.id)
         // The two commands, one each side of the seam, are one run of commands inside it.
-        assertEquals(listOf("toolgroup-c1"), content.steps.map { it.id })
+        assertEquals(listOf("tool-c1"), content.steps.map { it.id })
         assertEquals(1, reply.answer.size)
         assertEquals(2, reply.summary.steps)
         assertEquals("a1", reply.id)
