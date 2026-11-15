@@ -34,8 +34,7 @@ android {
 
     defaultConfig {
         applicationId = "app.codeg.android"
-        // Lowered to Android 11 support while keeping the project otherwise unchanged.
-        // This is the primary fix for the Motorola G Fast / Android 11 installation failure.
+        // Android 11 and up: lint's NewApi check keeps any newer call behind a version check.
         minSdk = 30
         targetSdk = 36
         versionCode = 3
