@@ -789,6 +789,7 @@
     <string name="fork_done_untitled">Forked. The full history stays in a new conversation in the list.</string>
     <string name="fork_session_busy">Failed to fork session: a turn is running</string>
     <string name="fork_failed">Failed to fork session: %1$s</string>
+    <string name="fork_history_pending">Forked, but its history isn\'t ready yet. Reopen the conversation in a moment to see it.</string>
     <string name="tags_title">Tags</string>
     <string name="tags_menu">Tags…</string>
     <string name="tags_manage">Manage tags…</string>

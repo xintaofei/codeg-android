@@ -17,6 +17,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import app.codeg.android.feature.sessiondetail.ReplyFork
 import org.junit.Test
 import java.time.Instant
 
@@ -609,11 +610,11 @@ class TranscriptTimelineTest {
         assertEquals(listOf("turn-2", "live-x"), f.map { it.forkTurnId })
         assertEquals(listOf(false, true), f.map { it.forkAtTail })
         // A transcript turn forks from anywhere; a local one only as the tail.
-        assertTrue(f.all { it.forkPointNamed })
+        assertTrue(f.all { it.forkOffer(agent)?.ready == true })
         val queued = footers(TranscriptTimeline.persistedEntries(turns, listOf(user("p1", "next")), agent, localTurns = local))
-        assertFalse(queued.last().forkPointNamed)
+        assertEquals(false, queued.last().forkOffer(agent)?.ready)
         val overlay = footers(TranscriptTimeline.persistedEntries(listOf(user("u1", "q"), assistant("bg-1-0", listOf(ContentBlock.Text("x"))), user("u2", "q2"), assistant("turn-3", listOf(ContentBlock.Text("y")))), emptyList(), agent))
-        assertEquals(listOf(false, true), overlay.map { it.forkPointNamed })
+        assertEquals(listOf(false, true), overlay.map { it.forkOffer(agent)?.ready })
     }
 
     @Test
@@ -633,6 +634,27 @@ class TranscriptTimelineTest {
         )
         val f = footers(TranscriptTimeline.persistedEntries(turns, emptyList(), agent, localTurns = local))
         assertEquals(listOf("turn-1", "live-b"), f.map { it.forkTurnId })
-        assertEquals(listOf(true, true), f.map { it.forkPointNamed })
+        assertEquals(listOf(true, true), f.map { it.forkOffer(agent)?.ready })
+    }
+
+    @Test
+    fun `a reply that ended on a tool call forks only as the tail, and only the pointable agents fork mid-thread`() {
+        val turns = listOf(
+            user("u1", "q"),
+            assistant("turn-1", call("c1", "Bash", """{"command":"ls"}""")),
+            user("u2", "q2"),
+            assistant("turn-2", listOf(ContentBlock.Text("done"))),
+            user("u3", "q3"),
+            assistant("turn-3", call("c2", "Bash", """{"command":"pwd"}""")),
+        )
+        val f = footers(TranscriptTimeline.persistedEntries(turns, emptyList(), agent))
+        assertEquals(listOf(false, true, false), f.map { it.forkHasText })
+        // Text-less before the tail: nothing to name it by, so no fork; at the tail it is the tail.
+        assertEquals(listOf(null, "turn-2", "turn-3"), f.map { it.forkOffer(agent)?.forkFromTurnId })
+        assertNull(f[0].forkOffer(agent))
+        // An agent that forks only at the tail offers it on the last reply alone, naming nothing.
+        val gemini = AgentType.GEMINI
+        assertEquals(listOf(null, null), f.take(2).map { it.forkOffer(gemini) })
+        assertEquals(ReplyFork.Offer(forkFromTurnId = null, ready = true), f.last().forkOffer(gemini))
     }
 }

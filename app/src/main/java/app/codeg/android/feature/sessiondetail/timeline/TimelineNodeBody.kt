@@ -62,6 +62,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.codeg.android.R
+import app.codeg.android.core.model.AgentType
+import app.codeg.android.feature.sessiondetail.ReplyFork
 import app.codeg.android.core.common.RelativeTime
 import app.codeg.android.core.designsystem.markdown.MarkdownContent
 import app.codeg.android.core.designsystem.markdown.SingleBlockView
@@ -91,9 +93,10 @@ val LocalTimelineScroll = staticCompositionLocalOf<(String) -> Unit> { {} }
 /**
  * "Fork from here", as the session screen offers it: [onFork] is null where no fork can go out
  * (no live connection, an agent that can't fork, a conversation not saved yet); [busy] while a
- * turn runs, which the server would refuse.
+ * turn runs, which the server would refuse. [onFork] takes the turn to fork from, null for the
+ * tail ([ReplyFork.Offer.forkFromTurnId]).
  */
-data class ForkControl(val onFork: ((String) -> Unit)?, val busy: Boolean, val onBlocked: (Int) -> Unit = {})
+data class ForkControl(val onFork: ((String?) -> Unit)?, val busy: Boolean, val onBlocked: (Int) -> Unit = {})
 
 val LocalForkControl = staticCompositionLocalOf { ForkControl(onFork = null, busy = false) }
 
@@ -121,7 +124,7 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
         is NodeContent.ToolGroup -> ToolGroupCard(c.items, modifier, streaming = c.streaming, disclosureKey = node.id)
         is NodeContent.Image -> InlineImage(c.image, c.caption, modifier)
         is NodeContent.Compaction -> ContextCompactionDivider(c.part, modifier)
-        is NodeContent.Footer -> TurnFooter(c, modifier)
+        is NodeContent.Footer -> TurnFooter(c, node.agent, modifier)
         is NodeContent.Plan -> LivePlanView(c.entries, modifier)
         is NodeContent.ProposedPlan -> ProposedPlanCard(c.markdown, c.streaming, modifier)
         // Blocked on a card above the composer, the agent isn't thinking: say who it waits on.
@@ -189,7 +192,7 @@ private fun SystemNodeBody(turn: MessageTurn, modifier: Modifier) {
 
 /** Per-reply action + metadata row: Copy · jump-to-question · model · time/tokens. */
 @Composable
-private fun TurnFooter(footer: NodeContent.Footer, modifier: Modifier) {
+private fun TurnFooter(footer: NodeContent.Footer, agent: AgentType, modifier: Modifier) {
     val turn = footer.turn
     val questionId = footer.questionId
     val colors = CodegTheme.colors
@@ -214,7 +217,7 @@ private fun TurnFooter(footer: NodeContent.Footer, modifier: Modifier) {
     ) {
         if (copyText.isNotEmpty()) CopyButton(copyText)
         if (questionId != null) JumpToQuestionButton(questionId)
-        footer.forkTurnId?.let { ForkButton(it, footer.forkPointNamed) }
+        footer.forkOffer(agent)?.let { ForkButton(it) }
         Spacer(Modifier.weight(1f))
         turn.model?.takeIf { it.isNotBlank() }?.let {
             Text(it, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -257,14 +260,14 @@ private fun CopyButton(text: String, modifier: Modifier = Modifier) {
  * Dimmed while it can't go out, and a tap then says why.
  */
 @Composable
-private fun ForkButton(turnId: String, named: Boolean) {
+private fun ForkButton(offer: ReplyFork.Offer) {
     val control = LocalForkControl.current
     val onFork = control.onFork ?: return
     val colors = CodegTheme.colors
     var confirm by remember { mutableStateOf(false) }
     val blocked = when {
         control.busy -> R.string.fork_busy
-        !named -> R.string.fork_not_ready
+        !offer.ready -> R.string.fork_not_ready
         else -> null
     }
     Row(
@@ -286,7 +289,7 @@ private fun ForkButton(turnId: String, named: Boolean) {
             title = { Text(stringResource(R.string.fork_confirm_title), color = colors.textPrimary) },
             text = { Text(stringResource(R.string.fork_confirm_message), color = colors.textSecondary) },
             confirmButton = {
-                TextButton(onClick = { confirm = false; onFork(turnId) }) { Text(stringResource(R.string.fork_confirm), color = colors.accent) }
+                TextButton(onClick = { confirm = false; onFork(offer.forkFromTurnId) }) { Text(stringResource(R.string.fork_confirm), color = colors.accent) }
             },
             dismissButton = {
                 TextButton(onClick = { confirm = false }) { Text(stringResource(R.string.common_cancel), color = colors.textSecondary) }

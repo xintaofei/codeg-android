@@ -774,6 +774,7 @@
     <string name="fork_done_untitled">已分叉。完整历史保留在列表里的一个新会话中。</string>
     <string name="fork_session_busy">分叉失败：当前有回合正在进行</string>
     <string name="fork_failed">会话分叉失败：%1$s</string>
+    <string name="fork_history_pending">已分叉，但分叉后的历史还没准备好，请稍后重新打开会话查看。</string>
     <string name="tags_title">标签</string>
     <string name="tags_menu">标签…</string>
     <string name="tags_manage">管理标签…</string>

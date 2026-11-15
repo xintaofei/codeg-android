@@ -22,6 +22,7 @@ import app.codeg.android.feature.sessiondetail.rendering.BackgroundTaskPolls
 import app.codeg.android.feature.sessiondetail.rendering.GoalRuns
 import app.codeg.android.feature.sessiondetail.rendering.ContextCompaction
 import app.codeg.android.feature.sessiondetail.rendering.Delegations
+import app.codeg.android.feature.sessiondetail.ReplyFork
 import app.codeg.android.feature.sessiondetail.rendering.MessageRender
 import app.codeg.android.feature.sessiondetail.rendering.ProposedPlan
 import app.codeg.android.feature.sessiondetail.rendering.RenderPart
@@ -60,15 +61,11 @@ sealed interface NodeContent {
         val forkTurnId: String? = null,
         /** Nothing follows this reply, so a fork at the tail forks from it too. */
         val forkAtTail: Boolean = false,
+        /** The fork point has text of its own, which the backend names a point by. */
+        val forkHasText: Boolean = true,
     ) : NodeContent {
-        /**
-         * Whether the server can find the fork point: a reply this client folded in itself
-         * (`live-…`) or read off the agent's transcript out of turn (`bg-…`) has no transcript
-         * id yet, and the server would fork at the tail instead — right only for the last reply
-         * (web `isForkPointUnnamed`).
-         */
-        val forkPointNamed: Boolean
-            get() = forkTurnId != null && (forkAtTail || !(forkTurnId.startsWith("live-") || forkTurnId.startsWith("bg-")))
+        /** What "Fork from here" offers on this reply for [agent], if anything ([ReplyFork.offer]). */
+        fun forkOffer(agent: AgentType): ReplyFork.Offer? = ReplyFork.offer(forkTurnId, forkAtTail, forkHasText, agent)
     }
     data class Plan(val entries: List<PlanEntry>) : NodeContent
 
@@ -410,7 +407,8 @@ object TranscriptTimeline {
                     // A round's closing records and empty placeholders don't make it not last.
                     val atTail = pending.isEmpty() && source.subList(end, source.size).none { it.role == TurnRole.USER || it.role == TurnRole.ASSISTANT }
                     val fork = group.last().let { it.sourceTurnId ?: it.id }.takeIf { completed }
-                    entries.add(ThreadEntry.Reply(persistedReply(merged, lastUserId, agent, runningToolIds, completed, fork, atTail)))
+                    val forkHasText = ReplyFork.hasForkableText(group.last())
+                    entries.add(ThreadEntry.Reply(persistedReply(merged, lastUserId, agent, runningToolIds, completed, fork, atTail, forkHasText)))
                     i = end
                 }
             }
@@ -507,9 +505,10 @@ object TranscriptTimeline {
         completed: Boolean,
         forkTurnId: String?,
         forkAtTail: Boolean,
+        forkHasText: Boolean,
     ): ReplyRows {
         val calls = MessageRender.adaptParts(merged, runningToolIds)
-        val footer = TimelineNode("${merged.id}#footer", NodeContent.Footer(merged, questionId, forkTurnId, forkAtTail), agent)
+        val footer = TimelineNode("${merged.id}#footer", NodeContent.Footer(merged, questionId, forkTurnId, forkAtTail, forkHasText), agent)
         return replyRows(merged.id, agent, calls, cached = true, completed, merged.durationMs, trailer = listOf(footer))
     }
 

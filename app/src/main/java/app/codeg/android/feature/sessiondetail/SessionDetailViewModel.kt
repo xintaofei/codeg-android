@@ -365,6 +365,45 @@ class SessionDetailViewModel @Inject constructor(
         load()
     }
 
+    /**
+     * Take a fresh tail of this conversation's transcript, and the row with it, in place of what
+     * the screen holds: the first read, and the one that shows a fork ([reloadAfterFork]).
+     */
+    private fun adoptDetail(detail: ConversationDetail) {
+        clearBatch()
+        agent = detail.summary.agentType
+        externalId = detail.summary.externalId
+        folder = allFolders.firstOrNull { it.id == detail.summary.folderId }
+        currentBranch = detail.summary.gitBranch ?: folder?.gitBranch
+        _ui.update {
+            it.copy(
+                loading = false,
+                outlineSupported = detail.userTurnsBeforeOffset != null,
+                backgroundTurns = BackgroundOverlays.retire(it.backgroundTurns, detail.transcriptWatermark, detail.uncoveredPrefixMaxTs),
+                summary = detail.summary,
+                turns = detail.turns,
+                localTurns = emptyList(),
+                window = detail.window,
+                inFlightUserTurnId = detail.inFlightUserTurnId,
+                sessionStats = detail.sessionStats,
+                agent = detail.summary.agentType,
+                folderName = folder?.let { f -> FolderVisibility.displayName(f, allFolders) },
+                folderPath = folder?.path,
+                selectedFolderId = folder?.id,
+                currentBranch = currentBranch,
+                isDraftEditable = false,
+                error = null,
+            )
+        }
+        // Reattach when the server reports the turn live — via an explicit
+        // in-flight user turn id or the conversation status (iOS parity).
+        if (detail.inFlightUserTurnId != null || detail.summary.status.isLive) {
+            reattachIfLive()
+        } else {
+            observeIfConnected()
+        }
+    }
+
     fun load(): Job {
         _ui.update { it.copy(loading = true, error = null) }
         return viewModelScope.launch {
@@ -381,39 +420,7 @@ class SessionDetailViewModel @Inject constructor(
                     // Only the tail is transferred; older rounds are paged in as the user
                     // scrolls up. A pre-0.24.0 server ignores the selector and answers in
                     // full, which `detail.window == null` then reports.
-                    val detail = c.conversationDetail(id, TurnWindow.Tail(INITIAL_TAIL_TURNS))
-                    clearBatch()
-                    agent = detail.summary.agentType
-                    externalId = detail.summary.externalId
-                    folder = allFolders.firstOrNull { it.id == detail.summary.folderId }
-                    currentBranch = detail.summary.gitBranch ?: folder?.gitBranch
-                    _ui.update {
-                        it.copy(
-                            loading = false,
-                            outlineSupported = detail.userTurnsBeforeOffset != null,
-                            backgroundTurns = BackgroundOverlays.retire(it.backgroundTurns, detail.transcriptWatermark, detail.uncoveredPrefixMaxTs),
-                            summary = detail.summary,
-                            turns = detail.turns,
-                            localTurns = emptyList(),
-                            window = detail.window,
-                            inFlightUserTurnId = detail.inFlightUserTurnId,
-                            sessionStats = detail.sessionStats,
-                            agent = detail.summary.agentType,
-                            folderName = folder?.let { f -> FolderVisibility.displayName(f, allFolders) },
-                            folderPath = folder?.path,
-                            selectedFolderId = folder?.id,
-                            currentBranch = currentBranch,
-                            isDraftEditable = false,
-                            error = null,
-                        )
-                    }
-                    // Reattach when the server reports the turn live — via an explicit
-                    // in-flight user turn id or the conversation status (iOS parity).
-                    if (detail.inFlightUserTurnId != null || detail.summary.status.isLive) {
-                        reattachIfLive()
-                    } else {
-                        observeIfConnected()
-                    }
+                    adoptDetail(c.conversationDetail(id, TurnWindow.Tail(INITIAL_TAIL_TURNS)))
                 } else {
                     // New task: load the draft pickers' sources (top-level open folders +
                     // installed/enabled agents) and pick sensible defaults — honoring a
@@ -2654,12 +2661,13 @@ class SessionDetailViewModel @Inject constructor(
     private var forking = false
 
     /**
-     * Fork the session at [turnId], a reply's last transcript turn. This conversation goes on
-     * in the fork — on the same connection, retitled `[Fork] …`, its transcript cut back to that
-     * reply — and a new row keeps the whole history (web `handleForkFromTurn`). What this screen
-     * holds of the old session goes, and the transcript is read anew.
+     * Fork the session at [turnId], a reply's last transcript turn, or at the tail when null
+     * ([ReplyFork.offer]). This conversation goes on in the fork — on the same connection,
+     * retitled `[Fork] …`, its transcript cut back to that reply — and a new row keeps the whole
+     * history (web `handleForkFromTurn`). What this screen holds of the old session goes, and
+     * the forked transcript is read anew ([reloadAfterFork]).
      */
-    fun forkFrom(turnId: String) {
+    fun forkFrom(turnId: String?) {
         val c = client ?: return
         val conn = connectionId ?: return
         val id = conversationId ?: return
@@ -2676,30 +2684,80 @@ class SessionDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val result = c.fork(conn, id, folder?.id, turnId)
-                // Its `session_started` says so too; this is in case it lands after the reload.
-                result.forkedSessionId.takeIf { it.isNotEmpty() }?.let { externalId = it }
+                val forkedSessionId = result.forkedSessionId.takeIf { it.isNotEmpty() }
+                // The row points at the fork now: take that on at once, whether its transcript
+                // lands or not — a reconnect resumes [externalId], and the old one is the
+                // sibling's session. (Its `session_started` says so too.)
+                forkedSessionId?.let { externalId = it }
                 // Finished work of the old session: none of it is this one's any more.
                 if (liveBuilder?.isStreaming != true) liveBuilder = null
                 _ui.update {
                     it.copy(
                         live = if (liveBuilder == null) null else it.live,
                         backgroundTurns = emptyList(),
+                        summary = forkedSessionId?.let { sid -> it.summary?.copy(externalId = sid) } ?: it.summary,
                         notice = if (title != null) appContext.getString(R.string.fork_done, title) else appContext.getString(R.string.fork_done_untitled),
                     )
                 }
                 repository.notifyConversationsChanged()
-                load().join()
+                if (forkedSessionId == null) {
+                    // A server that names no forked session can't be checked against: read once.
+                    load().join()
+                } else if (!reloadAfterFork(c, id, forkedSessionId)) {
+                    _ui.update { it.copy(notice = appContext.getString(R.string.fork_history_pending)) }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiError.TurnInProgress) {
                 _ui.update { it.copy(notice = appContext.getString(R.string.fork_session_busy)) }
             } catch (e: Exception) {
-                _ui.update { it.copy(notice = appContext.getString(R.string.fork_failed, e.displayMessage())) }
+                // Fixed for the agent: the affordance goes.
+                val unsupported = ReplyFork.isUnsupported(e)
+                _ui.update {
+                    it.copy(
+                        forkSupported = if (unsupported) false else it.forkSupported,
+                        notice = appContext.getString(R.string.fork_failed, e.displayMessage()),
+                    )
+                }
             } finally {
                 forking = false
                 releaseConnectionOp()
             }
         }
+    }
+
+    /**
+     * Read the forked transcript and take it wholesale — a fresh tail, not a refresh of the held
+     * window: the fork cut the history back, so the window's coordinates describe a transcript
+     * this row no longer has.
+     *
+     * Only a read that shows the fork is taken ([ReplyFork.isApplied]): the agent writes the
+     * forked transcript itself, so a read can beat the file and come back empty, and taking that
+     * would replace the history with nothing. Tried again for a few seconds; false when none
+     * showed it in time — the screen then keeps what it has (the fork's title and session are
+     * taken on already), and reopening reads it afresh.
+     */
+    private suspend fun reloadAfterFork(c: CodegClient, id: Int, forkedSessionId: String): Boolean {
+        repeat(ReplyFork.RELOAD_ATTEMPTS) { attempt ->
+            val detail = try {
+                c.conversationDetail(id, TurnWindow.Tail(INITIAL_TAIL_TURNS))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            if (conversationId != id) return false
+            if (detail != null) {
+                if (ReplyFork.isApplied(detail, forkedSessionId)) {
+                    adoptDetail(detail)
+                    return true
+                }
+                // The row is right even before its transcript is there.
+                if (detail.summary.externalId == forkedSessionId) _ui.update { it.copy(summary = detail.summary) }
+            }
+            if (attempt < ReplyFork.RELOAD_ATTEMPTS - 1) delay(ReplyFork.reloadDelayMs(attempt))
+        }
+        return false
     }
 
     /** A one-line notice from a string resource (a fork the footer can't send yet says why). */
