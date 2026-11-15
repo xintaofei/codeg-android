@@ -2133,6 +2133,9 @@ class SessionDetailViewModel @Inject constructor(
             promoteLocally()
             syncTurnMetadata()
         }
+        // The Chats list keeps its own copy of each row's status, read when it last loaded:
+        // without a word from here, a turn ended while the user watched stays "running" there.
+        repository.notifyConversationsChanged()
         // The keep-planning turn just ended — deliver the revision notes as the follow-up
         // prompt Grok expects (it discards them on the reply itself). After an unseen end
         // `send` supersedes the reconcile just started and folds the finished reply in
@@ -2160,6 +2163,7 @@ class SessionDetailViewModel @Inject constructor(
         // released below, which would otherwise flush it.
         _ui.update { it.pausedAfterFailure(requeue = null) }
         clearInteractivePrompts()
+        repository.notifyConversationsChanged()
     }
 
     /**
