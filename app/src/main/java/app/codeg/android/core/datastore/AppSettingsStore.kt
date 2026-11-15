@@ -2,6 +2,7 @@ package app.codeg.android.core.datastore
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
@@ -24,6 +25,11 @@ enum class ThemeMode(val id: String) {
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val accentId: String = DEFAULT_ACCENT,
+    /**
+     * "Render HTML in chat": closed ```html fences in replies render as previews (the web's
+     * per-device `workspace:chat-html-rendering`). Off by default.
+     */
+    val chatHtmlRendering: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_ACCENT = "orange"
@@ -42,6 +48,7 @@ class AppSettingsStore @Inject constructor(
         AppSettings(
             themeMode = ThemeMode.from(prefs[MODE]),
             accentId = prefs[ACCENT] ?: AppSettings.DEFAULT_ACCENT,
+            chatHtmlRendering = prefs[CHAT_HTML] ?: false,
         )
     }
 
@@ -53,8 +60,13 @@ class AppSettingsStore @Inject constructor(
         dataStore.edit { it[ACCENT] = accentId }
     }
 
+    suspend fun setChatHtmlRendering(enabled: Boolean) {
+        dataStore.edit { it[CHAT_HTML] = enabled }
+    }
+
     private companion object {
         val MODE = stringPreferencesKey("theme_mode")
         val ACCENT = stringPreferencesKey("accent_id")
+        val CHAT_HTML = booleanPreferencesKey("chat_html_rendering")
     }
 }

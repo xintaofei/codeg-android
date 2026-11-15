@@ -98,6 +98,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.codeg.android.R
+import app.codeg.android.core.designsystem.markdown.LocalRichBlockGrew
 import app.codeg.android.core.designsystem.component.EmptyState
 import app.codeg.android.core.designsystem.component.InlineError
 import app.codeg.android.core.designsystem.component.LoadingView
@@ -279,6 +280,13 @@ fun SessionDetailScreen(
     // Follow new / streamed content while pinned.
     LaunchedEffect(nodes.size, ui.live, stick) {
         if (stick && nodes.isNotEmpty()) listState.scrollToItem(nodes.size + headerCount)
+    }
+    // A diagram or HTML preview that lands after the first layout grows its row: a reader who
+    // was at the bottom stays there (iOS 0893d53) — the same follow, asked for by the block.
+    val latestNodeCount by rememberUpdatedState(nodes.size + headerCount)
+    val latestStick by rememberUpdatedState(stick)
+    val richBlockGrew: () -> Unit = remember(listState, scope) {
+        { if (latestStick) scope.launch { listState.scrollToItem(latestNodeCount) } }
     }
     // Set by a deliberate jump (a transcript link, "jump to latest") so a scroll
     // restore queued before it does not undo it. `stick` alone does not cover
@@ -661,6 +669,7 @@ fun SessionDetailScreen(
                     LocalOpenConversation provides onOpenConversation,
                     LocalGoalControl provides goalControl,
                     LocalForkControl provides forkControl,
+                    LocalRichBlockGrew provides richBlockGrew,
                 ) {
                     LazyColumn(
                         state = listState,

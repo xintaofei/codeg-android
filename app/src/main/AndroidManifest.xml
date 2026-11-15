@@ -39,6 +39,17 @@
                 <data android:scheme="codeg" />
             </intent-filter>
         </activity>
+
+        <!-- Hands a shared diagram (PNG / SVG / .mmd) to the app the user picks; read-only, per share. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.renderfiles"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/render_file_paths" />
+        </provider>
     </application>
 
 </manifest>

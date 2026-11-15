@@ -24,6 +24,17 @@ grant permission to use third-party trade names, trademarks, service marks, or
 product names except as required for reasonable and customary description of
 the origin of the work and reproduction of notices.
 
+## Bundled Mermaid 11.17.2
+
+The app ships the published `dist/mermaid.min.js` of
+[Mermaid](https://github.com/mermaid-js/mermaid) 11.17.2, unmodified, as
+`app/src/main/assets/mermaid/mermaid.min.js`. It draws ```` ```mermaid ```` blocks
+in chat, off-screen and offline. Mermaid is licensed under the MIT License; its
+license text is `config/licenses/mermaid-LICENSE.txt` and is included in the
+generated notice bundle. The bundle also carries the notices of the libraries it
+is built from in its own comments. See `config/licenses/EMBEDDED_COMPONENTS.md`
+for the component record.
+
 ## Embedded Public Suffix List data
 
 OkHttp 4.12.0 contains `publicsuffixes.gz`, compiled from the

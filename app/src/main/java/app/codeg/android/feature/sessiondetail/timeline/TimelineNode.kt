@@ -2,6 +2,7 @@ package app.codeg.android.feature.sessiondetail.timeline
 
 import app.codeg.android.core.designsystem.markdown.LiveBlockParser
 import app.codeg.android.core.designsystem.markdown.MarkdownBlock
+import app.codeg.android.core.designsystem.markdown.MarkdownFence
 import app.codeg.android.core.designsystem.markdown.MarkdownCache
 import app.codeg.android.core.model.AgentType
 import app.codeg.android.core.model.ContentBlock
@@ -172,7 +173,8 @@ data class TimelineNode(
                 is MarkdownBlock.BulletList -> "ab.bullet"
                 is MarkdownBlock.NumberedList -> "ab.numbered"
                 is MarkdownBlock.Quote -> "ab.quote"
-                is MarkdownBlock.Code -> "ab.code"
+                // A diagram's slot holds a picture, not a code view.
+                is MarkdownBlock.Code -> if (MarkdownFence.isMermaid(c.block.language)) "ab.mermaid" else "ab.code"
                 MarkdownBlock.Rule -> "ab.rule"
                 is MarkdownBlock.Table -> "ab.table"
             }

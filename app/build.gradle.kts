@@ -155,6 +155,7 @@ tasks.named("generateLicenseReport") {
             supplementalLicensesDir.file("LICENSE_REVIEW.md").asFile to
                 "supplemental/LICENSE_REVIEW.md",
             supplementalLicensesDir.file("MPL-2.0.txt").asFile to "supplemental/MPL-2.0.txt",
+            supplementalLicensesDir.file("mermaid-LICENSE.txt").asFile to "supplemental/mermaid-LICENSE.txt",
         )
         copiedSources.forEach { (source, relativeTarget) ->
             val target = reportDir.file(relativeTarget).asFile

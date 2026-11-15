@@ -136,7 +136,7 @@ fun ReasoningBlock(
             exit = shrinkVertically(tween(180)) + fadeOut(tween(120)),
         ) {
             Column(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 10.dp)) {
-                MarkdownContent(body)
+                MarkdownContent(body, streaming = streaming)
             }
         }
     }

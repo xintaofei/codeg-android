@@ -11,7 +11,19 @@ sealed interface MarkdownBlock {
     data class BulletList(val items: List<String>) : MarkdownBlock
     data class NumberedList(val items: List<Pair<String, String>>) : MarkdownBlock
     data class Quote(val text: String) : MarkdownBlock
-    data class Code(val language: String?, val code: String) : MarkdownBlock
+    /**
+     * A fenced block. [closed]: its closing fence was found — a fence the text ends inside
+     * (still streaming in, or cut off) is not. [closingLineEnded]: that closing line is
+     * itself finished, by a newline after it; while the text streams, a closing ``` that
+     * is still the last thing received may yet turn into ```` or ```js (see
+     * [MarkdownFence.isSettled]).
+     */
+    data class Code(
+        val language: String?,
+        val code: String,
+        val closed: Boolean = true,
+        val closingLineEnded: Boolean = true,
+    ) : MarkdownBlock
     data object Rule : MarkdownBlock
     data class Table(val header: List<String>, val rows: List<List<String>>) : MarkdownBlock
 }
@@ -35,10 +47,12 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         if (fence != null) {
             val lang = trimmed.drop(fence.length).trim()
             val bodyLines = mutableListOf<String>()
+            var closed = false
             i += 1
             while (i < lines.size) {
                 val t = lines[i].trim()
                 if (t.startsWith(fence) && t.all { it == fence[0] }) {
+                    closed = true
                     i += 1; break
                 }
                 bodyLines.add(lines[i]); i += 1
@@ -47,6 +61,10 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
                 MarkdownBlock.Code(
                     language = lang.ifEmpty { null },
                     code = bodyLines.joinToString("\n"),
+                    closed = closed,
+                    // A line after the closing one (even an empty one: the text ended in a
+                    // newline) means the closing line is complete.
+                    closingLineEnded = closed && i < lines.size,
                 ),
             )
             continue

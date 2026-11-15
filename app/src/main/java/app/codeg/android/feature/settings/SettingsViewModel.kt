@@ -44,6 +44,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { appSettingsStore.setThemeMode(mode) }
     fun setAccent(accentId: String) = viewModelScope.launch { appSettingsStore.setAccent(accentId) }
+    fun setChatHtmlRendering(enabled: Boolean) = viewModelScope.launch { appSettingsStore.setChatHtmlRendering(enabled) }
 }
 
 data class AboutInfo(

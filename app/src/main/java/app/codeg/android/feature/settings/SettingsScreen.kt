@@ -42,6 +42,8 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -207,6 +209,26 @@ private fun AppearanceSettings(viewModel: SettingsViewModel) {
                     )
                 }
             }
+        }
+        // "Render HTML in chat": per device, off by default (the web's workspace:chat-html-rendering).
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(colors.bgElevated.copy(alpha = 0.6f))) {
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.settings_chat_html)) },
+                supportingContent = { Text(stringResource(R.string.settings_chat_html_caption)) },
+                trailingContent = {
+                    Switch(
+                        checked = settings.chatHtmlRendering,
+                        onCheckedChange = { viewModel.setChatHtmlRendering(it) },
+                        colors = SwitchDefaults.colors(checkedTrackColor = colors.accent, checkedThumbColor = colors.onAccent),
+                    )
+                },
+                colors = ListItemDefaults.colors(
+                    containerColor = Color.Transparent,
+                    headlineColor = colors.textPrimary,
+                    supportingColor = colors.textTertiary,
+                ),
+                modifier = Modifier.clickable { viewModel.setChatHtmlRendering(!settings.chatHtmlRendering) },
+            )
         }
         // Live preview.
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(colors.bgElevated.copy(alpha = 0.6f)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

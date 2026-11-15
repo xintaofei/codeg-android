@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -13,6 +14,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import app.codeg.android.core.designsystem.CodegBackground
+import app.codeg.android.core.designsystem.markdown.LocalChatHtmlRendering
 import app.codeg.android.core.designsystem.theme.CodegTheme
 import app.codeg.android.feature.main.MainShell
 import app.codeg.android.feature.onboarding.OnboardingScreen
@@ -31,11 +33,13 @@ fun CodegApp(appViewModel: AppViewModel = hiltViewModel()) {
     val settings by appViewModel.settings.collectAsStateWithLifecycle()
 
     CodegTheme(themeMode = settings.themeMode, accentId = settings.accentId) {
-        CodegBackground {
-            val servers by appViewModel.servers.collectAsStateWithLifecycle()
-            when (val list = servers) {
-                null -> Splash()
-                else -> if (list.isEmpty()) OnboardingRoot() else MainShell(appViewModel, list)
+        CompositionLocalProvider(LocalChatHtmlRendering provides settings.chatHtmlRendering) {
+            CodegBackground {
+                val servers by appViewModel.servers.collectAsStateWithLifecycle()
+                when (val list = servers) {
+                    null -> Splash()
+                    else -> if (list.isEmpty()) OnboardingRoot() else MainShell(appViewModel, list)
+                }
             }
         }
     }

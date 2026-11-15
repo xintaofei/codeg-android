@@ -110,11 +110,11 @@ fun NodeBody(node: TimelineNode, modifier: Modifier = Modifier) {
         is NodeContent.AssistantBlock ->
             if (c.streaming) {
                 Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    SingleBlockView(c.block)
+                    SingleBlockView(c.block, streaming = true, assistantReply = true)
                     BlinkingCaret()
                 }
             } else {
-                SingleBlockView(c.block, modifier)
+                SingleBlockView(c.block, modifier, assistantReply = true)
             }
         is NodeContent.Reasoning -> ReasoningBlock(c.text, modifier, streaming = c.streaming, disclosureKey = node.id)
         is NodeContent.Tool -> if (Goals.isGoalCall(c.vm.rawName)) GoalCard(c.vm, modifier) else ToolCallCard(c.vm, modifier)

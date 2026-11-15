@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.codeg.android.core.designsystem.component.CodeBlock
 import app.codeg.android.core.designsystem.theme.CodegTheme
+import app.codeg.android.core.designsystem.webrender.HtmlPreviewBlock
+import app.codeg.android.core.designsystem.webrender.MermaidBlock
 
 /**
  * Block-level Markdown for assistant text — the Compose port of iOS
@@ -33,7 +35,7 @@ import app.codeg.android.core.designsystem.theme.CodegTheme
  * chat client. Inline spans within each block go through [rememberInlineMarkdown].
  */
 @Composable
-fun MarkdownContent(raw: String, modifier: Modifier = Modifier) {
+fun MarkdownContent(raw: String, modifier: Modifier = Modifier, streaming: Boolean = false) {
     // Slot-scoped parse only. The shared [MarkdownCache] is reserved for the persisted
     // node-build path; routing streaming callers (e.g. an auto-expanded ReasoningBlock)
     // through it would churn/evict persisted entries with dead growing-tail prefixes.
@@ -42,7 +44,8 @@ fun MarkdownContent(raw: String, modifier: Modifier = Modifier) {
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        for (block in blocks) SingleBlockView(block)
+        // Only the last block of text still arriving can still change.
+        blocks.forEachIndexed { index, block -> SingleBlockView(block, streaming = streaming && index == blocks.lastIndex) }
     }
 }
 
@@ -52,7 +55,14 @@ fun MarkdownContent(raw: String, modifier: Modifier = Modifier) {
  * message is no longer a single non-lazy [Column]); [MarkdownContent] loops over it.
  */
 @Composable
-internal fun SingleBlockView(block: MarkdownBlock, modifier: Modifier = Modifier) {
+internal fun SingleBlockView(
+    block: MarkdownBlock,
+    modifier: Modifier = Modifier,
+    /** This is the last block of text still arriving: a fence in it may not be final yet. */
+    streaming: Boolean = false,
+    /** Part of an assistant reply — the one place an HTML fence may render as a preview. */
+    assistantReply: Boolean = false,
+) {
     val colors = CodegTheme.colors
     when (block) {
         is MarkdownBlock.Paragraph -> Text(
@@ -97,7 +107,11 @@ internal fun SingleBlockView(block: MarkdownBlock, modifier: Modifier = Modifier
             )
         }
 
-        is MarkdownBlock.Code -> CodeBlock(code = block.code, modifier = modifier, language = block.language)
+        is MarkdownBlock.Code -> when (val kind = MarkdownFence.kind(block, streaming, assistantReply, LocalChatHtmlRendering.current)) {
+            is FenceKind.Mermaid -> MermaidBlock(block.code, kind.ready, modifier)
+            FenceKind.HtmlPreview -> HtmlPreviewBlock(block.code, modifier)
+            FenceKind.Code -> CodeBlock(code = block.code, modifier = modifier, language = block.language)
+        }
 
         MarkdownBlock.Rule -> Box(
             modifier.fillMaxWidth().height(0.5.dp).padding(vertical = 2.dp).background(colors.hairline),
