@@ -730,6 +730,9 @@ class SessionDetailViewModel @Inject constructor(
         val id = c.createConversation(f.id, agent, title = ComposerReferenceCodec.foldLinks(firstPrompt).take(60))
         conversationId = id
         _ui.update { it.copy(isNew = false) }
+        // The Chats list holds its own copy of the rows: tell it there's a new one (iOS
+        // `ensureConversationCreated` does the same), or it only shows up on a manual refresh.
+        repository.notifyConversationsChanged()
     }
 
     private suspend fun resolveConnection(c: CodegClient): String {
