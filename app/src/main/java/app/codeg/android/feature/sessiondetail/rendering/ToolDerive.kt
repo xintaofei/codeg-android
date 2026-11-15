@@ -62,7 +62,8 @@ object ToolDerive {
         return parsed
     }
 
-    fun title(name: String, parsed: JsonObject?): String {
+    /** [input]: the call's raw input, for a shell whose input is the bare command line (codex's saved `exec_command`). */
+    fun title(name: String, parsed: JsonObject?, input: String? = null): String {
         val n = canonical(name)
         val args = effectiveArgs(parsed)
         fun str(keys: List<String>): String? {
@@ -100,7 +101,8 @@ object ToolDerive {
             "write", "write_file", "writefile", "create_file", "notebookedit", "notebook_edit" ->
                 str(listOf("file_path", "path", "filename", "file", "target_file"))?.let { "Write ${PathFormat.short(it)}" } ?: "Write"
             "bash", "shell", "exec", "exec_command", "execute", "run_command", "command", "run_terminal_cmd", "terminal" ->
-                str(listOf("description")) ?: str(listOf("command", "cmd", "script"))?.let { simplifyCommand(it) } ?: "Bash"
+                str(listOf("description")) ?: (str(listOf("command", "cmd", "script")) ?: bareCommand(input, parsed))
+                    ?.let { simplifyCommand(it) } ?: "Bash"
             "grep", "ripgrep", "grep_search", "search_files", "search" ->
                 str(listOf("pattern", "query", "regex", "q"))?.let { "Grep ${truncate(it, 50)}" } ?: "Grep"
             "glob", "find", "file_search" ->
@@ -117,7 +119,17 @@ object ToolDerive {
                 str(listOf("subagent_type", "agent_type", "description", "subject"))?.let { "${display(name)}: ${truncate(it, 50)}" }
                     ?: display(name)
             "skill" -> str(listOf("name", "skill", "command"))?.let { "Skill: $it" } ?: "Skill"
-            else -> firstStringValue(args)?.let { "${display(name)}: ${truncate(it, 50)}" } ?: display(name)
+            else -> {
+                val value = firstStringValue(args)
+                when {
+                    value == null -> display(name)
+                    // A live call titled by its own argument — codex-acp titles a shell command
+                    // with the command — would read "ls -la: ls -la". Its saved copy is titled
+                    // by the command alone; so is this.
+                    value.trim() == name.trim() -> simplifyCommand(name)
+                    else -> "${display(name)}: ${truncate(value, 50)}"
+                }
+            }
         }
     }
 
@@ -276,6 +288,13 @@ object ToolDerive {
             args.string(k)?.takeIf { it.isNotEmpty() }?.let { return it }
         }
         return null
+    }
+
+    /** [input] when it is itself a command line rather than JSON (that didn't parse). */
+    private fun bareCommand(input: String?, parsed: JsonObject?): String? {
+        if (parsed != null) return null
+        val raw = input?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return raw.takeUnless { it.startsWith("{") || it.startsWith("[") }
     }
 
     private val shellPrefix = Regex("""^(?:/usr/bin/)?(?:ba)?sh\s+-l?c\s+""")

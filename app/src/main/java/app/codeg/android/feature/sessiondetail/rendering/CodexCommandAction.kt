@@ -29,7 +29,7 @@ import kotlinx.serialization.json.put
  *   Search
  *   List files in '<path>'
  *   List files
- *   Read file '<path>'            ← already resolved by the read-name rules
+ *   Read file '<path>'            ← the file only: the card needs it as its input
  *
  * Port of the web `codex-command-action.ts`.
  */
@@ -50,6 +50,12 @@ object CodexCommandAction {
      * so a real `grep` tool's arguments can never be replaced by this.
      */
     fun resolve(title: String): Resolved? {
+        // A read names its file in the title only (the web takes it from `locations`, which
+        // this client doesn't keep): a `file_path` gives the card "Read <file>" and the file
+        // view, as a read's saved copy has ([CodexShellAction]).
+        parseReadFileTitle(title)?.let { path ->
+            return Resolved(name = "read", input = buildJsonObject { put("file_path", path) })
+        }
         parseSearchTitle(title)?.let { search ->
             return Resolved(
                 name = "grep",
@@ -77,6 +83,7 @@ object CodexCommandAction {
     private const val QUERY_PATH_SEPARATOR = "' in "
     private val SEARCH_IN = Regex("""^Search in '([\s\S]*)'$""")
     private val LIST_FILES_IN = Regex("""^List files in '([\s\S]*)'$""")
+    private val READ_FILE = Regex("""^Read file '([^']*)'$""")
 
     /**
      * Parse a search title into its query / path, or null when the title isn't
@@ -106,6 +113,13 @@ object CodexCommandAction {
         if (!pathOnly.isNullOrEmpty()) return Search(null, pathOnly)
         return null
     }
+
+    /**
+     * The file a `Read file '<path>'` title names, or null. One quoted path only: codex-acp
+     * joins the titles of a multi-command line with ", ", which this leaves alone.
+     */
+    fun parseReadFileTitle(title: String?): String? =
+        READ_FILE.find(title?.trim().orEmpty())?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
 
     /**
      * Parse a list-files title into its path, or null when it isn't one. As

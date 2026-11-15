@@ -62,7 +62,16 @@ class CodexCommandActionTest {
         assertNull(CodexCommandAction.parseSearchTitle("Research 'x' in y"))
         assertNull(CodexCommandAction.parseSearchTitle(null))
         assertNull(CodexCommandAction.parseListFilesTitle("Search for 'x'"))
-        assertNull(CodexCommandAction.resolve("Read file 'src/main.kt'"))
+        assertNull(CodexCommandAction.parseReadFileTitle("Read file 'a', Read file 'b'"))
+        assertNull(CodexCommandAction.parseReadFileTitle("Read file ''"))
+        assertNull(CodexCommandAction.parseReadFileTitle("Read SKILL.md"))
+    }
+
+    @Test
+    fun `a read title yields the file it read, as the card's input`() {
+        val read = requireNotNull(CodexCommandAction.resolve("Read file '/root/app/src/main.kt'"))
+        assertEquals("read", read.name)
+        assertEquals("""{"file_path":"/root/app/src/main.kt"}""", read.input.toString())
     }
 
     @Test

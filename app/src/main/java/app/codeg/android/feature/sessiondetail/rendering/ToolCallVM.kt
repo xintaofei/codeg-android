@@ -72,13 +72,24 @@ data class ToolCallVM(
             // A codex-acp command action announces no tool name and no input at all,
             // only a human title, so both have to be read back out of it.
             val action = if (planName == null) CodexCommandAction.resolve(rawName) else null
-            val resolvedName = planName ?: action?.name ?: rawName
+            // The saved copy of such a command keeps only `exec_command` and the command line:
+            // read the line as codex did, so the reply reads back with the steps it streamed.
+            val shellAction = if (planName == null && action == null && liveName == null && isCodexShellName(rawName)) {
+                CodexShellAction.commandOf(input, ToolDerive.parseJson(input))?.let(CodexShellAction::resolve)
+            } else {
+                null
+            }
+            val recovered = action ?: shellAction
+            val resolvedName = planName ?: recovered?.name ?: rawName
             // The NAME is recovered from the title whichever way this falls — as the
             // web's `normalizeToolName` does — because a tool genuinely called
             // "Search for 'x'" does not exist, and without the rename the card loses
             // its search icon and its tool-group tally. Only the INPUT is conditional:
             // arguments the call actually sent are never replaced by a recovered guess.
             val effectiveInput = when {
+                // The command line is all the saved call sent; the target it names is the input
+                // the live action's card was drawn from.
+                shellAction != null -> shellAction.input.takeIf { it.isNotEmpty() }?.toString()
                 sentArguments(input) -> input
                 // A bare "Search" / "List files" recovers an identity but no
                 // fields. Keeping the `{}` the host sent in its place would give
@@ -91,11 +102,11 @@ data class ToolCallVM(
             // sends as "read" for a directory listing — kind-first bucketing would
             // file it as a file read and route the envelope through the Read-file
             // body. Every other call keeps the hint's precedence.
-            val titled = ToolDerive.bucket(resolvedName, if (action != null) "" else kind)
+            val titled = ToolDerive.bucket(resolvedName, if (recovered != null) "" else kind)
             // A title that names no tool ("Explore the codebase", an MCP sentence) leaves the
             // category to what the wire stated instead — an Agent launch is then a sub-agent
             // while it runs, as its persisted copy is. A title that does classify keeps it.
-            val bucket = if (titled == ToolKindBucket.OTHER && planName == null && action == null && liveName != null) {
+            val bucket = if (titled == ToolKindBucket.OTHER && planName == null && recovered == null && liveName != null) {
                 ToolDerive.bucket(liveName, kind)
             } else {
                 titled
@@ -120,7 +131,7 @@ data class ToolCallVM(
                 output = output,
                 content = content,
                 isError = isError,
-                displayTitle = ToolDerive.title(resolvedName, parsed),
+                displayTitle = ToolDerive.title(resolvedName, parsed, effectiveInput),
                 bucket = bucket,
                 diffFiles = ToolDerive.diff(bucket, effectiveInput, output, content, parsed),
                 meta = meta,
@@ -129,6 +140,10 @@ data class ToolCallVM(
         }
     }
 }
+
+/** codex's shell tool, by the name its transcript keeps. */
+private fun isCodexShellName(name: String): Boolean =
+    name.trim().lowercase().let { it == "exec_command" || it == "functions.exec_command" }
 
 /**
  * Whether a call carried arguments of its own. Not just "is [input] non-blank":
